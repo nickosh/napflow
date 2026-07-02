@@ -135,6 +135,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] NFR-08 Engine overhead assumptions hold: pipe round-trip and scheduling negligible vs HTTP; parallel loops bounded by `max_concurrency`. (EN §5a)
 - [ ] NFR-09 HTTP client isolated behind one internal adapter module in `core/` — no direct niquests imports elsewhere; swapping the client stays a contained change. (review 2026-07-02)
 - [ ] NFR-10 Dependency-compat CI job: install napflow into a venv alongside `requests` + `botocore` and run the test suite — guards the niquests/urllib3-future conflict class in users' pytest envs. (review 2026-07-02)
+- [ ] NFR-11 Changelog: conventional commits + git-cliff (`cliff.toml` committed); `CHANGELOG.md` in Keep a Changelog format, regenerated per release starting v0.1.0. (PLAN M0)
 
 ## Test requirements (priority order — highest bug-risk first)
 

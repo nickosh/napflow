@@ -32,9 +32,14 @@ Core promises (never compromise these):
 - `docs/EDGE_CASES.md`              — resolution ledger; append new cases here
 - `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; FR/NFR checklist
   (tick requirements in the PR that lands them, with a test)
+- `docs/PLAN.md` / `docs/JOURNAL.md`    — milestone sequencing + working journal
 
 Specs are hypotheses: when implementation proves one wrong, UPDATE THE SPEC
 in the same PR as the code change.
+
+After each milestone or PR-sized commit, append a dated entry to
+`docs/JOURNAL.md` (done / decided / next) — it is the cross-session
+progress log; keep entries to 2–5 lines.
 
 ## Architecture (dependency direction: down only)
 
