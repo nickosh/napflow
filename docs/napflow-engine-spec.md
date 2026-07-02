@@ -3,7 +3,10 @@
 Status: **adopted 2026-07-02** (2026-06-14 edge-case review applied; see
 `EDGE_CASES.md` for the ledger and `DECISIONS.md` D18–D23 for rationale).
 Amended 2026-07-02: execution-timeout model — `max_seconds` default-scope
-and routing, run deadline (EC25–EC27, **D24**).
+and routing, run deadline (EC25–EC27, **D24**). Amended 2026-07-02 (b),
+senior review: worker stdout protocol integrity, loader write path +
+diagnostics, native-value templating (**D25**), budget default, run
+capture valve, Windows loop policy, trust model (EC28–EC37).
 
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
@@ -37,6 +40,13 @@ napflow/
 
 Hard rule: `core` is importable standalone (`from napflow.core import run_flow`)
 — this is the pytest/CI/codegen surface.
+
+Loader architecture (EC29): the loaded ruamel document (`CommentedMap`)
+is the **single write source** — edits mutate it surgically and it alone
+is emitted back to disk; the Pydantic models are validated *read-only
+views* for checker/engine and are never serialized back (dumping a model
+would silently delete comments). ruamel's line/column marks are retained
+through validation so every diagnostic can point at file:line (§8).
 
 ## 1. Core objects
 
@@ -165,8 +175,9 @@ Properties:
 - **Parallelism is free**: two messages to two nodes = two concurrent
   tasks. Long awaits (HTTP, delay) don't block siblings.
 - **Budget**: every emitted message ticks the per-run budget
-  (`defaults.run.message_budget`, default 10000); exhaustion →
-  run `error` with the hot edge identified in the event.
+  (`defaults.run.message_budget`, default 100000 — runaway protection,
+  not resource accounting; counts run-wide including child frames);
+  exhaustion → run `error` with the hot edge identified in the event.
 - **Deadline (D24)**: optional run-level wall clock
   (`defaults.run.run_timeout_s`, default null = off; CLI `--timeout`
   overrides). Expiry cancels in-flight work like an abort but finalizes
@@ -210,6 +221,12 @@ User-facing consequences of rules 2–3 (EC03/EC04):
 - `merge: all` re-entered inside a cycle with only a partial input set
   **stalls** (slots were cleared on emit). Use `any` to rejoin retry
   paths; `all` is a one-shot rendezvous.
+- Firings of the **same node may overlap in time** when the node is
+  async (`request`, `delay`, `python`, `flow`, `loop`) and a new message
+  arrives while a firing is in flight (e.g. fan-in through `merge: any`)
+  — `nodes.*` then follows last-writer-wins (EC18). Sync nodes are
+  serialized naturally by the event loop; python firings serialize at
+  the worker (§5a). (EC36)
 
 ## 5. Node runners
 
@@ -235,7 +252,8 @@ User-facing consequences of rules 2–3 (EC03/EC04):
   evaluated against that delivery. Opens a child frame per item; binds
   `item`, `index` to body Start; `sequential` = await each; `parallel` =
   `asyncio.Semaphore(max_concurrency)`; collects body End dicts to
-  `results`, failures to `errors`. An iteration "error" is a body frame
+  `results` — ordered by item index, not completion order (EC36) —
+  failures to `errors`. An iteration "error" is a body frame
   ending `failed`/`error` (D20). `on_error: stop` halts scheduling of
   remaining iterations; failed iterations are routed to `errors` and
   counted toward the run regardless of mode (EC06). Node-level loop
@@ -268,9 +286,16 @@ at FINALIZE.
 engine ──spawn──▶ worker (configured interpreter)
         stdin :  {"task_id", "function", "inputs"}        one JSON per line
         stdout:  {"task_id", "outputs"} | {"task_id", "error", "traceback"}
-        stderr:  user print()/logging → forwarded as log events
+                 (fd reserved for the protocol — see EC28 below)
+        user stdout/stderr: captured → forwarded as log events
 ```
 
+- **Protocol integrity (EC28)**: `print()` writes to stdout — the
+  protocol channel. So at startup the worker `dup()`s the real stdout fd
+  and keeps the duplicate exclusively for protocol lines, then rebinds
+  `sys.stdout` (and `sys.stderr`) to capture streams forwarded as log
+  events. A stray `print()` in `nodes.py` therefore cannot corrupt the
+  protocol.
 - Worker imports the flow's `nodes.py` once at startup; per-firing cost is
   a pipe round-trip (negligible vs any HTTP call).
 - Multi-flow runs (subflows with their own `nodes.py`): one worker per
@@ -308,7 +333,12 @@ engine ──spawn──▶ worker (configured interpreter)
   interpreter provides".
 - Values crossing the pipe must be JSON-serializable — same constraint as
   the wire format, so nothing new for users.
-- Windows note: spawn semantics, `CREATE_NO_WINDOW`, terminate() reliable.
+- Windows notes: spawn semantics, `CREATE_NO_WINDOW`, `terminate()`
+  reliable. asyncio subprocess pipes require the **Proactor** event
+  loop: `napf run` uses Python's default (Proactor since 3.8), but the
+  `napf ui` server stack must not switch the policy to Selector (some
+  ASGI/WebSocket setups do) — a Windows integration test runs a
+  python-node flow *through the server* to lock this in (EC33, TR-9).
 
 ## 6. Templating context
 
@@ -337,6 +367,19 @@ surface evaluation errors as *unhandled node errors*: recorded in the
 report, run marked `failed` — same outcome as a message into an
 unconnected error port (EC24).
 
+**Native-value rule (D25).** A config value that is exactly one
+`{{ expression }}` (ignoring surrounding whitespace) evaluates to the
+expression's **native value** — dicts, lists, numbers, booleans, null
+keep their type (`body: "{{ nodes.login.response.body }}"` passes the
+dict itself, not a repr string). Any mixed content renders to a string.
+After evaluation, the config field's schema type applies: string-typed
+fields stringify the result, object-typed fields reject scalars. Bare
+`expr:` fields are always native.
+
+Start-port `default:` templates are evaluated once at BIND with only
+`env.*`/`run.*` in scope — the frame does not exist yet; same
+restriction as `defaults.request` (EC36).
+
 ## 7. Event vocabulary (JSONL file ≡ WebSocket stream)
 
 One JSON object per line/frame. Common fields:
@@ -356,6 +399,7 @@ python_error     {function, error_type, message, traceback}
 log              {label, level, value(masked)}
 guard_tripped    {kind: counter|timeout, port: exhausted|expired}
 budget_warning   {remaining}            # at 10% left
+capture_warning  {remaining_mb}         # run capture budget at 10% left
 run_finished     {state, duration_ms, asserts: {passed, failed},
                   unhandled_errors, end_outputs(masked),
                   nodes_never_fired: [node_ids],   # "skipped" for UI/report
@@ -376,7 +420,12 @@ Rules:
   `request_started`/`request_finished` store **complete request and
   response bodies** in JSONL — full wire detail always. A disk-protection
   ceiling (`defaults.run.body_capture_mb`, default 10) caps pathological
-  payloads only, marking `truncated: true` when hit.
+  payloads only, marking `truncated: true` when hit. A run-level ceiling
+  (`defaults.run.run_capture_mb`, default 500) additionally caps total
+  captured body bytes per run — a big loop against a fat endpoint must
+  not write gigabytes of JSONL; once exceeded, further bodies are
+  truncated with the same marker (`capture_warning` fires at 10%
+  remaining) (EC32).
 - Timing fields included where niquests exposes them, else omitted.
 - On abort, an in-flight request leaves a `request_started` with no
   matching `request_finished`; replay tolerates a dangling start (EC20).
@@ -410,6 +459,11 @@ W107 unquoted scalar in a string-typed field matching YAML's
 
 Errors block `napf run`; warnings print and proceed (UI shows both on
 canvas).
+
+Diagnostic quality is product surface (EC29): every E/W message carries
+the file path, line/column (ruamel source marks threaded through
+validation — a day-one loader requirement, painful to retrofit), the
+offending node id, and a one-line fix hint.
 
 - **W101 scope (EC16)**: the guarantee is strict — *every simple cycle
   contains a guard*. Checked in linear time: delete guard nodes from the
@@ -448,3 +502,23 @@ canvas).
 - Inline loop bodies.
 - Per-module python worker pool (lifts the serial-worker limitation, §5a).
 - Runtime secret redaction (see manifest roadmap, D22).
+
+## 11. Security & trust model (EC35)
+
+- **Flows are code.** A workspace's `nodes.py` is arbitrary Python
+  executed by the worker; **running a workspace = executing it**. Review
+  `flow.yaml` + `nodes.py` in PRs exactly like code; never run an
+  untrusted workspace. napflow does not attempt to sandbox `nodes.py`.
+- **The Jinja2 sandbox is accident protection, not a security boundary.**
+  Templates live in the same trust domain as `nodes.py`; the
+  `SandboxedEnvironment` guards against foot-guns (attribute escapes,
+  accidental mutation), not against a hostile flow author. Accepted
+  risk: template rendering is synchronous on the engine loop, so a
+  pathological expression can stall the run — same trust domain as user
+  code; the run deadline (D24) is the backstop.
+- **The server binds localhost only.** `napf ui` serves on `127.0.0.1`
+  with no authentication in v1 — do not bind it to public interfaces;
+  remote/multi-user operation is out of scope.
+- **Secrets**: declared-secret masking at emission per D22;
+  runtime-acquired tokens are stored in full until runtime redaction
+  lands (manifest roadmap).

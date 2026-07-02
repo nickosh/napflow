@@ -103,8 +103,9 @@ CI** with assert-driven exit codes and full wire-level history.
 
 ## Success criteria (v1)
 
-- `uv tool install napflow && napf init && napf run flows/example` is
-  green in under five minutes on macOS and Windows.
+- `uv tool install napflow && napf init && napf run flows/smoke` is
+  green in under five minutes on macOS and Windows — fully offline, no
+  external services (httpbin demo is separate, EC34).
 - The flagship retry-until-ready pattern is buildable on the canvas
   without reading the engine spec.
 - A flow PR (add a node + edge) is reviewable at a glance — no layout
@@ -118,12 +119,19 @@ CI** with assert-driven exit codes and full wire-level history.
 
 - **v1.0** — the four build stages (see `REQUIREMENTS.md`):
   loader + `napf check` → engine core + `napf run` → full node set +
-  python worker → server + UI canvas.
+  python worker → server + UI canvas. Stages S1–S3 form a shippable
+  CLI-only product; releasing/announcing before the canvas lands is an
+  explicit option (the UI is roughly half the total work).
 - **v1.1 candidates** (decided-deferred, kept compatible): `poll` node,
   `duplicate` node, inline loop bodies, marker-based `collect`, runtime
   secret redaction, `napf check --write-env-example`, python worker pool.
-- **v2 direction**: codegen (flows → niquests clients + Pydantic models);
-  revisit conflict handling beyond last-write-wins.
+- **v2 direction**: codegen (flows → niquests clients + Pydantic
+  models) — scoped to the *reducible subset*: linear chains and
+  recognized patterns (retry cycles → `while` loops). Arbitrary cyclic,
+  merge-heavy graphs would require emitting a mini-runtime, which
+  defeats "reads like requests code"; no v1 decision may assume
+  full-graph codegen. Also: revisit conflict handling beyond
+  last-write-wins.
 
 ## Distribution & licensing
 

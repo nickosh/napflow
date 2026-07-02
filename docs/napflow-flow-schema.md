@@ -3,7 +3,10 @@
 Status: **adopted 2026-07-02** (2026-06-14 edge-case review applied; see
 `EDGE_CASES.md` for the ledger and `DECISIONS.md` D18–D23 for rationale).
 Amended 2026-07-02: execution-timeout model — universal `max_seconds`,
-default-ceiling scope, run deadline (EC25–EC27, **D24**).
+default-ceiling scope, run deadline (EC25–EC27, **D24**). Amended
+2026-07-02 (b), senior review: native-value templating (**D25**),
+flagship example corrected (create step added), loop `results` ordering,
+Start-default scope, python optional-input rule (EC28–EC37).
 
 Changes from v0.3: End ports gain `required:` (default `true` — an
 unreached required port fails the run, **D18**); guard `exhausted`/`expired`
@@ -117,6 +120,14 @@ nodes:
           type: string
           default: "{{ env.BASE_URL }}"
 
+  - id: create
+    type: request
+    config:
+      method: POST
+      url: "{{ inputs.base_url }}/api/v1/job"
+      headers: { Authorization: "Bearer {{ env.API_TOKEN }}" }
+      body: { kind: sync_users }    # YAML mapping → sent as JSON
+
   - id: kick
     type: merge                     # joins "first run" and "retry" paths
     config: { mode: any }
@@ -125,7 +136,9 @@ nodes:
     type: request
     config:
       method: GET
-      url: "{{ inputs.base_url }}/api/v1/job/{{ run.id }}"
+      # ghost-wire: reads create's output (create fires once, so this
+      # is stable even inside the retry cycle)
+      url: "{{ inputs.base_url }}/api/v1/job/{{ nodes.create.response.body.id }}"
       headers: { Authorization: "Bearer {{ env.API_TOKEN }}" }
       # implicit input port: trigger
 
@@ -154,7 +167,8 @@ nodes:
           required: false
 
 edges:
-  - { from: start.out,            to: kick.in1 }
+  - { from: start.out,            to: create.trigger }
+  - { from: create.response,      to: kick.in1 }
   - { from: kick.out,             to: check_job.trigger }
   - { from: check_job.response,   to: is_ready.in }
   - { from: check_job.response,   to: show.in }
@@ -166,13 +180,14 @@ edges:
 
 layout:
   start:       [40, 200]
-  kick:        [200, 200]
-  check_job:   [360, 200]
-  is_ready:    [560, 200]
-  attempts:    [560, 360]
-  wait:        [360, 360]
-  show:        [560, 80]
-  end:         [760, 200]
+  create:      [180, 200]
+  kick:        [320, 200]
+  check_job:   [470, 200]
+  is_ready:    [640, 200]
+  attempts:    [640, 360]
+  wait:        [470, 360]
+  show:        [640, 80]
+  end:         [820, 200]
 ```
 
 If the job never reaches `done`, `end.job` is never written and the run is
@@ -232,7 +247,7 @@ Catalog notes:
 - **Unguarded cycles**: not rejected — `napf check` and the canvas flag
   them ("possible infinite loop — no counter/timeout in this cycle").
   Runtime backstop: a per-run message budget (manifest
-  `defaults.run.message_budget`, default 10000) aborts runaway runs.
+  `defaults.run.message_budget`, default 100000) aborts runaway runs.
 
 ### Execution timeouts (`max_seconds`) — D24
 
@@ -281,6 +296,9 @@ Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
   `error` port carries transport-level failures only (connection refused,
   DNS, TLS, or timeout after the configured retries). Assert on
   `status` when a non-2xx must fail the run.
+- `body:` may be a YAML mapping/list (templated recursively — string
+  leaves render, single-expression leaves stay native per D25) or a
+  single `{{ expr }}` yielding a whole structured value.
 
 ### Python node (v1 constraints)
 - Functions see **only their declared inputs** — no implicit access to env,
@@ -299,6 +317,9 @@ Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
   exception also routes to `error` with traceback in `meta`.
 - Declared `outputs` may not use the name `error` — it is reserved for
   the implicit error port (E012).
+- Signature parameters with **literal** defaults are optional inputs; a
+  non-literal default is invisible to AST-based `napf check` (EC14) and
+  is treated as required (EC36).
 
 ### Assert node checks (aligned to Jinja2 — no JMESPath)
 ```yaml
@@ -370,6 +391,8 @@ In a message-driven engine a node with no inputs would never fire, so:
   ```
 - The End port name `error` is **reserved** for the flow node's implicit
   error port (D21) — E012 rejects it.
+- Start port `default:` templates are evaluated once at BIND and see
+  only `env.*` / `run.*` — the frame does not exist yet (EC36).
 - No triggers — a flow runs when invoked (UI, parent flow node, `napf run`,
   later generated code), all binding values to Start ports identically.
 - CLI in: `napf run <flow> -i key=value`, `--input-json`; validated and
@@ -397,7 +420,8 @@ the body's Start must declare an `item` port; it may declare `index`.**
 `mode: sequential | parallel` (+ `max_concurrency`); `on_error: stop |
 continue`; `fresh_session: true` gives each iteration its own HTTP
 session (default: shared per-run session); body End outputs collected on
-`results`, failures on `errors`.
+`results` — ordered by item index regardless of completion order
+(EC36) — failures on `errors`.
 
 An iteration "error" is **a body frame ending `failed` or `error`** (D20):
 any failed assert, unhandled error-port message, worker crash/timeout, or
@@ -432,6 +456,15 @@ Envelope asymmetry (EC12): `trigger` is the full `{value, meta}` envelope
 value that fired the current node; `{{ nodes.* }}` holds each node's
 *latest* output and is last-writer-wins under cycles and concurrent
 branches (EC18).
+
+**Native-value rule (D25).** A config value that is exactly one
+`{{ expression }}` (ignoring surrounding whitespace) keeps the
+expression's native type — `body: "{{ nodes.login.response.body }}"`
+passes the dict itself, not a repr string. Anything mixed
+(`"Bearer {{ env.API_TOKEN }}"`) renders to a string. The config
+field's schema type applies after evaluation (string-typed fields
+stringify; object-typed fields reject scalars). Bare `expr:` fields are
+always native.
 
 ## Wire format
 JSON-compatible `{value, meta}` envelope; errors travel as data via

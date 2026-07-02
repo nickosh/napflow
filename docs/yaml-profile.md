@@ -71,6 +71,17 @@ Alternative (eemeli `yaml`): `stringify(flow, { defaultStringType:
 'QUOTE_DOUBLE', defaultKeyType: 'PLAIN', lineWidth: 0,
 aliasDuplicateObjects: false })`.
 
+## Write path — the document is the single write source (EC29)
+
+Round-trip preservation is an *architecture* rule, not a serializer
+flag: the loaded ruamel document (`CommentedMap`) is the only thing
+ever written back to disk. Edits — canvas or CLI — mutate the loaded
+document surgically; the Pydantic models are validated **read-only
+views** for the checker/engine and are never serialized back (dumping a
+model would silently delete every comment). The loader also retains
+ruamel's line/column marks through validation so every `napf check`
+diagnostic points at file:line (engine spec §8).
+
 ## Key order & determinism
 
 Determinism comes from the *emitter*, applied identically on both sides:

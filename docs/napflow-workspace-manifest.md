@@ -8,7 +8,10 @@ secret redaction added to the roadmap; on-disk YAML follows the canonical
 safe profile (D23, `yaml-profile.md`); `napf init` also writes
 `.gitattributes` and `envs/example.env`. Amended 2026-07-02:
 `defaults.run.run_timeout_s` + `napf run --timeout` (run deadline);
-`node_timeout_s` default scope pinned to request/python (D24).
+`node_timeout_s` default scope pinned to request/python (D24). Amended
+2026-07-02 (b), senior review: `message_budget` default 100000,
+`run_capture_mb` valve, `.env` dialect pinned, offline `flows/smoke` as
+the first-touch check (EC28–EC37).
 
 ## Full example
 
@@ -40,7 +43,10 @@ defaults:
   run:
     history: 20             # runs kept per flow in .napflow/runs/
     report: junit           # none | junit | json
-    message_budget: 10000   # per-run runaway protection
+    message_budget: 100000  # runaway protection, NOT resource accounting —
+                            #   counts every emitted message run-wide incl.
+                            #   child frames; sized so data-driven loops
+                            #   don't trip it (EC31)
     node_timeout_s: 300     # default max_seconds per firing — auto-applies
                             #   to request/python only; delay/loop/flow are
                             #   exempt from the DEFAULT but honor an
@@ -49,6 +55,9 @@ defaults:
                             #   timeout is the outer backstop). Expiry →
                             #   run `error` (exit 2), report still written
     body_capture_mb: 10     # per-body JSONL disk valve (full detail under cap)
+    run_capture_mb: 500     # per-RUN total body-capture valve — a big loop
+                            #   must not write gigabytes of JSONL; excess
+                            #   bodies truncated with marker (EC32)
 
 python:
   interpreter: null         # path to python executable for the nodes.py
@@ -70,6 +79,10 @@ codegen:                    # RESERVED: parsed, unused in prototype
 2. **Env discovery** — every `envs/*.env` file is a profile; profile name =
    filename stem. All env files are gitignored by `napf init`. No file
    registry in the manifest — drop a file in `envs/`, it appears in the UI.
+   Dialect (EC36): `KEY=VALUE` per line; `#` comments and blank lines
+   ignored; optional single/double quotes stripped from values; no
+   `export` prefix, no variable interpolation — values are literal
+   strings (types recovered by whoever consumes them).
 3. **Env layering** — lookup order, last wins:
    profile file → process environment. Process env winning makes CI
    overrides trivial: `API_TOKEN=$CI_SECRET napf run flows/login`.
@@ -108,6 +121,8 @@ napf init my-workspace
   created  flows/main/nodes.py
   created  flows/example/flow.yaml     # request→assert demo against httpbin
   created  flows/example/nodes.py
+  created  flows/smoke/flow.yaml       # fixture→python→assert — fully offline
+  created  flows/smoke/nodes.py
   created  envs/dev.env                # BASE_URL=https://httpbin.org
   created  envs/example.env            # committed onboarding template
   created  .gitignore                  # envs/*.env (except example.env), .napflow/
@@ -115,7 +130,11 @@ napf init my-workspace
   created  .napflow/
 ```
 
-First-touch check: `napf run flows/example` must pass out of the box.
+First-touch check (EC34): `napf run flows/smoke` must pass **offline**
+out of the box — no network, no external services. `flows/example` is
+the HTTP demo against httpbin (network required); it is deliberately NOT
+the smoke check, so a proxy, a firewall, or httpbin having a bad day
+cannot break a user's first five minutes (nor napflow's own CI).
 
 ## CLI surface (v1)
 

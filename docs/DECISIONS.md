@@ -2,7 +2,7 @@
 
 Why things are the way they are. Date format: 2026-06. D01–D17 decided
 during initial design (June 2026); D18–D22 in the 2026-06-14 edge-case
-review, confirmed 2026-07-02; D23–D24 adopted 2026-07-02. Reversing any
+review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02. Reversing any
 of these requires understanding the rationale first.
 
 ## D01 — Build new instead of adopting existing tools
@@ -298,6 +298,22 @@ still written — unlike a CI SIGKILL, which loses the report. Rejected:
 state `aborted` (reserved for user cancellation, exit 130); a non-null
 default (would surprise legitimately long suites).
 
+## D25 — Native-value templating: a single-expression config value keeps its type
+(2026-07-02, senior review, EC37.) `{{ }}` rendering produces strings, so
+`body: "{{ nodes.login.response.body }}"` would emit a Python-repr'd dict
+(`{'a': 1}` — not JSON) — yet passing structured data between nodes is
+the core operation of an API tool. Chosen (the Ansible/GitHub-Actions
+rule): a config value that consists of **exactly one `{{ expression }}`**
+(ignoring surrounding whitespace) is evaluated *natively* — dicts, lists,
+numbers, booleans, null keep their type; any mixed template renders to a
+string. Bare `expr:` fields were always native. After evaluation the
+config field's JSON-Schema type still applies (D23: the schema is the
+type authority) — a string-typed field stringifies the native result, an
+object-typed field rejects a scalar. Rejected: always-string (breaks
+structured passing); a second syntax for native mode (`!expr` tags —
+violates D10's one-language rule); auto-JSON-parsing of rendered strings
+(heuristic, silently wrong on JSON-looking text).
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.
@@ -305,6 +321,11 @@ default (would surprise legitimately long suites).
   on dense canvases; let real usage decide.
 - niquests timing granularity (dns/connect/tls) — fields optional in
   events for a reason; verify what it actually exposes.
+- niquests pulls urllib3-future — watch for dependency conflicts in
+  users' shared venvs (`core` gets installed into pytest envs next to
+  requests/botocore). Mitigations specced: internal HTTP adapter seam
+  (NFR-09) + alongside-install compat CI job (NFR-10). Tech stack itself
+  confirmed as-is by owner, 2026-07-02.
 - PyPI name "napflow" availability — check before attachment.
 - Default-required End ports (D18) may annoy flows with conditional
   outputs — watch whether `required: false` becomes boilerplate; if so,

@@ -14,11 +14,11 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 - [ ] FR-101 (S1) Parse & validate `napflow.yaml` into Pydantic models; `napf` locates it by walking upward from cwd. (WM)
 - [ ] FR-102 (S1) Flow discovery: any directory under `flows.root` containing `flow.yaml` is a flow; identity = workspace-relative path; recursive nesting allowed. (WM §1)
-- [ ] FR-103 (S1) Env profile discovery: every `envs/*.env` is a profile named by filename stem; no registry. (WM §2)
+- [ ] FR-103 (S1) Env profile discovery: every `envs/*.env` is a profile named by filename stem; no registry. Dialect: `KEY=VALUE`, `#` comments, optional quotes stripped, no `export`/interpolation. (WM §2, EC36)
 - [ ] FR-104 (S2) Env layering: profile file → process environment, last wins. (WM §3)
 - [ ] FR-105 (S2) `defaults.request` merges shallowly into request nodes; templates there may reference only `env.*`/`run.*`. (WM §4, EC23)
 - [ ] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7)
-- [ ] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/example` passes out of the box. (WM)
+- [ ] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box. (WM, EC34)
 - [ ] FR-108 (S3) `python.interpreter` manifest key selects the worker interpreter; `null` = napflow's own. (WM, EN §5a)
 - [ ] FR-109 (S1) `codegen:` manifest key is parsed and ignored (reserved). (WM)
 
@@ -31,6 +31,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-205 (S1) Round-trip: load → save preserves comments and key order (ruamel round-trip mode); golden test asserts `emit(parse(emit(x)))` byte-identical and `parse(emit(x))` deep-equals `x`. (YP)
 - [ ] FR-206 (S1) Structures validated against JSON Schema Draft 2020-12 after parse (schema is the type authority). (YP)
 - [ ] FR-207 (S2) Binary payload envelope: `{"__binary__": true, "content_type", "base64"}`; capture cap applies to encoded form. (FS)
+- [ ] FR-208 (S1) Write path: the loaded CommentedMap is the single write source — edits mutate the document; Pydantic models are read-only views never serialized back; ruamel line/column marks retained through validation. (YP, EC29)
 
 ## FR-3xx — Validation (`napf check`)
 
@@ -42,6 +43,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-306 (S1) W107 YAML implicit-coercion lint on unquoted scalars in string-typed fields (hand-edited files). (YP)
 - [ ] FR-307 (S1) Python input ports derived by AST-parsing `nodes.py` — `check` never imports user code. (EC14)
 - [ ] FR-308 (S1) `check` runs on the closure of referenced flows; errors block `napf run`, warnings print and proceed. (EN §2, §8)
+- [ ] FR-309 (S1) Every E/W diagnostic carries file path, line/column (from ruamel marks), node id, and a one-line fix hint. (EN §8, EC29)
 
 ## FR-4xx — Engine core
 
@@ -51,7 +53,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-404 (S2) Frames: per-frame variables, inputs, firing counts, guard state; hierarchical frame ids; data crosses only via Start/End. (EN §1)
 - [ ] FR-405 (S2) Outcome aggregation: asserts, python-asserts, unhandled error-port messages roll up run-wide; run state = worst outcome in the frame tree. (D20)
 - [ ] FR-406 (S2) Run states `passed|failed|error|aborted` per EN §2 definitions, incl. required-End-port failure (D18); exit codes 0/1/2/130.
-- [ ] FR-407 (S2) Message budget (`defaults.run.message_budget`, default 10000): tick per emission, `budget_warning` at 10%, exhaustion → run `error` naming the hot edge. (EN §3)
+- [ ] FR-407 (S2) Message budget (`defaults.run.message_budget`, default 100000): tick per emission run-wide incl. child frames, `budget_warning` at 10%, exhaustion → run `error` naming the hot edge. (EN §3, EC31)
 - [ ] FR-408 (S2) Abort: cancel tasks, close session, state `aborted`; events already written stay valid (dangling `request_started` tolerated). (EN §3, EC20)
 - [ ] FR-409 (S2) Unhandled error-port message ⇒ run `failed`; nodes without an error port surface evaluation errors as unhandled node errors. (EN §2/§6, EC24)
 - [ ] FR-410 (S2) Per-firing `max_seconds` settable on any node; the manifest default (`node_timeout_s` 300) auto-applies to `request`/`python` only — `delay`/`loop`/`flow` exempt from the default, explicit value honored. Tripped ceiling → `{error_kind: "timeout"}` on the node's error port; `flow` → child frame `aborted` + implicit error port payload; `loop`/port-less nodes → unhandled node error ⇒ `failed`. (D24)
@@ -59,12 +61,12 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-5xx — Node types
 
-- [ ] FR-501 (S2) `start` — seeded once per frame; `out` carries the full `inputs` dict; ports define the flow's input interface. (FS, EN §4)
+- [ ] FR-501 (S2) `start` — seeded once per frame; `out` carries the full `inputs` dict; ports define the flow's input interface; port `default:` templates evaluated at BIND with env/run scope only. (FS, EN §4, EC36)
 - [ ] FR-502 (S2) `end` — real input ports; accumulates latest value per port; `required: bool` default `true`; required-unwritten ⇒ run failed; `required: false` ⇒ `null`, noted in report; port name `error` rejected (E012). (D18, FS)
 - [ ] FR-503 (S2) `request` — niquests shared per-run AsyncSession; `trigger` input; config templating; engine-level retry per node config; non-2xx on `response`, transport failures on `error`; full-detail events. (FS, EN §5, EC13)
 - [ ] FR-504 (S2) `condition` — sandboxed Jinja2 expr; forwards incoming message on `true`/`false`. (FS)
 - [ ] FR-505 (S2) `assert` — check kinds `status`/`expr`/`response_time`, ops `present|equals|not_equals|contains|matches|gt|lt`, `mode: report_all|fail_fast`; emits `assert_result` events; forwards on `passed`/`failed`. (FS)
-- [ ] FR-506 (S3) `python` — declared inputs only; JSON-serializable I/O; `AssertionError` → error port + report as python-assert; other exceptions → error port with traceback; declared outputs may not be named `error`. (FS, E012)
+- [ ] FR-506 (S3) `python` — declared inputs only; JSON-serializable I/O; `AssertionError` → error port + report as python-assert; other exceptions → error port with traceback; declared outputs may not be named `error`; params with literal defaults = optional inputs, others required. (FS, E012, EC36)
 - [ ] FR-507 (S3) `switch` — expr + cases, `default` port, pass-through. (FS)
 - [ ] FR-508 (S3) `merge` — `any` (immediate forward), `all` (rendezvous, clear on emit), `collect` (count-based list). (FS, EN §4)
 - [ ] FR-509 (S3) `counter` — check-then-decrement: exactly `count` passes on `continue`, then every message → `exhausted`; per-frame reset; optional `reset` input restores count silently. (FS, EC16)
@@ -73,7 +75,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-512 (S3) `log` — emits masked `log` event, persisted to JSONL, pass-through. (FS, D13)
 - [ ] FR-513 (S3) `set`/`get` — frame variable map; `set` forwards written value; `get` fires only on `trigger`. (FS, D17)
 - [ ] FR-514 (S3) `fixture` — json/csv from `fixtures/` (csv → list of dicts, header required); read once, cached per run; unconnected `trigger` auto-fires once at frame start. (FS, D17)
-- [ ] FR-515 (S3) `loop` — fires on `trigger`; `over` evaluated against that delivery; child frame per item binding `item`/`index`; `sequential`/`parallel` with `max_concurrency`; iteration error = body frame `failed`/`error`; `on_error` gates scheduling only; `fresh_session` opt-out; `results`/`errors` outputs. (FS, EN §5, D20)
+- [ ] FR-515 (S3) `loop` — fires on `trigger`; `over` evaluated against that delivery; child frame per item binding `item`/`index`; `sequential`/`parallel` with `max_concurrency`; iteration error = body frame `failed`/`error`; `on_error` gates scheduling only; `fresh_session` opt-out; `results` (index-ordered)/`errors` outputs. (FS, EN §5, D20, EC36)
 - [ ] FR-516 (S3) `flow` — child frame; ports derived from target Start/End; implicit `error` port with `{state, failed_asserts, unhandled_errors}`; reference-only semantics (E007 DAG). (D21, FS)
 - [ ] FR-517 (S3) `note` — markdown, no ports, no runtime behavior. (FS)
 
@@ -82,6 +84,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-601 (S2) Jinja2 `SandboxedEnvironment` + `StrictUndefined` is the only expression/template language, for `{{ }}` config strings and bare `expr:` alike. (D10)
 - [ ] FR-602 (S2) Context: `env`, `inputs`, `run` (`id`/`timestamp`/`env_name`), `nodes` (frame-local latest, unwrapped), `trigger` (full envelope), `item`/`index` in loop bodies. (EN §6)
 - [ ] FR-603 (S2) Undefined variable → node error to the error port; port-less nodes → unhandled node error, run failed. (EN §6, EC24)
+- [ ] FR-604 (S2) Native-value rule: a config value that is exactly one `{{ expr }}` evaluates to the native value; mixed content renders to string; field schema type applies post-evaluation. (D25)
 
 ## FR-7xx — Observability
 
@@ -90,6 +93,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-703 (S2) Full request/response bodies always stored; `defaults.run.body_capture_mb` (10) valve with `truncated: true` marker; `value_preview` truncation in stream-only fields. (D13, EN §7)
 - [ ] FR-704 (S2) Events are born masked (FR-106); `run_finished` carries state, durations, assert tallies, unhandled errors, masked end outputs, `nodes_never_fired`. (EN §7)
 - [ ] FR-705 (S2) Timing breakdown captured where niquests exposes it; fields omitted otherwise. (EN §7)
+- [ ] FR-706 (S2) Run-level capture valve `defaults.run.run_capture_mb` (500): total body bytes per run capped, excess truncated with marker, `capture_warning` at 10% remaining. (EN §7, EC32)
 
 ## FR-8xx — CLI
 
@@ -106,7 +110,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-902 (S3) Serial task processing (documented limitation: no CPU parallelism through python nodes; stuck firing blocks the module until kill). (EC09)
 - [ ] FR-903 (S3) Timeout: await with node `max_seconds` → `terminate()` → 2s grace → `kill()` → error to node's error port (`error_kind: timeout`) → lazy respawn. (EN §5a)
 - [ ] FR-904 (S3) Crash isolation: worker death = node error (`worker_crash`), never an engine failure. (EN §5a)
-- [ ] FR-905 (S3) Worker stderr (user print/logging) forwarded as log events. (EN §5a)
+- [ ] FR-905 (S3) Protocol integrity: worker `dup()`s the real stdout fd for protocol lines at startup and rebinds `sys.stdout`/`sys.stderr` to capture streams forwarded as log events — user `print()` cannot corrupt the protocol. (EN §5a, EC28)
 - [ ] FR-906 (S3) Windows: spawn semantics, `CREATE_NO_WINDOW`, reliable terminate. Grandchild processes documented as not reaped (EC22).
 
 ## FR-10xx — Server & UI (S4)
@@ -129,6 +133,8 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] NFR-06 Determinism: identical logical flow ⇒ byte-identical emitted file, cross-platform (golden round-trip test in CI). (YP)
 - [ ] NFR-07 Apache-2.0 + NOTICE; no CLA; DCO when external contributors appear. (D16)
 - [ ] NFR-08 Engine overhead assumptions hold: pipe round-trip and scheduling negligible vs HTTP; parallel loops bounded by `max_concurrency`. (EN §5a)
+- [ ] NFR-09 HTTP client isolated behind one internal adapter module in `core/` — no direct niquests imports elsewhere; swapping the client stays a contained change. (review 2026-07-02)
+- [ ] NFR-10 Dependency-compat CI job: install napflow into a venv alongside `requests` + `botocore` and run the test suite — guards the niquests/urllib3-future conflict class in users' pytest envs. (review 2026-07-02)
 
 ## Test requirements (priority order — highest bug-risk first)
 
@@ -140,3 +146,4 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] TR-6 Worker lifecycle: timeout-kill-respawn, crash isolation, Windows semantics. (EN §5a)
 - [ ] TR-7 Loader round-trip: comments & key order preserved; golden byte-identity corpus. (YP)
 - [ ] TR-8 Timeout routing: request/python timeout → error port (wired = run passes, unwired = failed); flow timeout → aborted child + implicit error payload, recorded child asserts still aggregate; loop timeout → run failed via EC24; run deadline → `error`/exit 2 with report written; container nodes NOT killed by the default ceiling. (D24)
+- [ ] TR-9 Windows integration: a python-node flow runs through the `napf ui` server (Proactor event loop + subprocess pipes must coexist with the ASGI/WebSocket stack); worker `print()` flood does not corrupt the protocol. (EC28, EC33)

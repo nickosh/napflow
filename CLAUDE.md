@@ -75,6 +75,10 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 - **Everything is data**: every non-terminal output carries a payload;
   pass-through semantics per node; any output can feed any input incl.
   `trigger`; trigger payload available as `{{ trigger }}`.
+- **Native-value templating (D25)**: a config value that is exactly one
+  `{{ expr }}` evaluates to the native value (dicts stay dicts, never
+  repr strings); mixed content renders to string; bare `expr:` always
+  native; field schema type applies post-evaluation.
 - **Frames** isolate each flow invocation (variables, guard state,
   node outputs); data crosses only via Start/End ports. Outcomes are NOT
   isolated: asserts/errors aggregate run-wide, worst state wins (D20).
@@ -91,12 +95,13 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 - Python nodes: persistent worker subprocess (JSON-lines over pipes),
   per-node `max_seconds` (default 300) enforced by worker kill;
   functions see ONLY declared inputs; JSON-serializable I/O.
-- Safety rails: message budget (10000); per-firing `max_seconds` — the
+- Safety rails: message budget (100000); per-firing `max_seconds` — the
   default (300) auto-applies to request/python ONLY, delay/loop/flow are
   exempt from the default (D24); timeouts route to ERROR ports, never
   data ports; optional run deadline (`run_timeout_s`/`--timeout` ⇒ run
-  `error`, report still written); body capture valve (10MB, truncated
-  marker); secrets masked AT EMISSION (events born masked).
+  `error`, report still written); body capture valves (10MB/body +
+  500MB/run, truncated markers); secrets masked AT EMISSION (events
+  born masked).
 
 ## File format invariants
 
@@ -118,10 +123,10 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 
 1. `core/loader.py` + Pydantic models + `napf check`
    (E001–E009, E011–E012 — E010 reserved; W101–W107)
-2. `core/engine.py` scheduler + request/python/condition/assert/start/end
+2. `core/engine.py` scheduler + request/condition/assert/start/end
    + `napf run` (JSONL events from day one)
-3. Remaining nodes (merge, guards, loop, flow, set/get, switch, delay,
-   log, fixture, note) + worker subprocess
+3. Remaining nodes (python + worker subprocess, merge, guards, loop,
+   flow, set/get, switch, delay, log, fixture, note)
 4. server/ + UI canvas (last)
 
 ## Testing priorities (in order of bug-risk)
