@@ -132,6 +132,16 @@ CI** with assert-driven exit codes and full wire-level history.
   defeats "reads like requests code"; no v1 decision may assume
   full-graph codegen. Also: revisit conflict handling beyond
   last-write-wins.
+- **v2 direction, imports** (parked 2026-07-02): endpoint collections —
+  a workspace-level catalog of reusable endpoint definitions that
+  request nodes reference (`endpoint: users.create` + per-node
+  overrides) — and one-directional **Postman collection / OpenAPI
+  import** generating that catalog + request-node scaffolds. Import is
+  generation, never sync (same philosophy as D02/codegen). v1
+  compatibility: `endpoint:` lands later as an additive optional
+  request-config key and `napf import` as a new subcommand — nothing to
+  reserve today; `defaults.request` + env profiles cover the small-scale
+  need meanwhile.
 
 ## Distribution & licensing
 

@@ -150,3 +150,6 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 - poll node, duplicate node, inline loop bodies, marker-based collect
 - timer/webhook triggers (would require daemon — out of core scope)
 - Conflict resolution beyond last-write-wins + reload prompt
+- Endpoint collections + Postman/OpenAPI import (one-directional,
+  generation not sync; `endpoint:` = future additive request-config
+  key — nothing to reserve in v1; see PRODUCT.md roadmap)
