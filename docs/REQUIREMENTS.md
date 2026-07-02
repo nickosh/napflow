@@ -18,7 +18,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-104 (S2) Env layering: profile file → process environment, last wins. (WM §3)
 - [ ] FR-105 (S2) `defaults.request` merges shallowly into request nodes; templates there may reference only `env.*`/`run.*`. (WM §4, EC23)
 - [ ] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7)
-- [ ] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box. (WM, EC34)
+- [ ] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box (S1 only scaffolds it; the run becomes executable once the S3 node set lands). (WM, EC34)
 - [ ] FR-108 (S3) `python.interpreter` manifest key selects the worker interpreter; `null` = napflow's own. (WM, EN §5a)
 - [ ] FR-109 (S1) `codegen:` manifest key is parsed and ignored (reserved). (WM)
 
@@ -147,3 +147,4 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] TR-7 Loader round-trip: comments & key order preserved; golden byte-identity corpus. (YP)
 - [ ] TR-8 Timeout routing: request/python timeout → error port (wired = run passes, unwired = failed); flow timeout → aborted child + implicit error payload, recorded child asserts still aggregate; loop timeout → run failed via EC24; run deadline → `error`/exit 2 with report written; container nodes NOT killed by the default ceiling. (D24)
 - [ ] TR-9 Windows integration: a python-node flow runs through the `napf ui` server (Proactor event loop + subprocess pipes must coexist with the ASGI/WebSocket stack); worker `print()` flood does not corrupt the protocol. (EC28, EC33)
+- [ ] TR-10 Native-value rule (D25): exact single-expression detection (surrounding whitespace tolerated; any mixed content ⇒ string render); dict/list/number/bool/null preserved through a request-body round-trip; post-evaluation schema-type coercion (string-typed field stringifies, object-typed field rejects a scalar); bare `expr:` unaffected.

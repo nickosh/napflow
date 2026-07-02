@@ -362,10 +362,10 @@ last-writer-wins under cycles and concurrent branches (EC12/EC18).
 
 Undefined variable → node error (StrictUndefined), routed to the node's
 error port — never silently empty strings into URLs. **Nodes without an
-error port** (condition, switch, merge, guards, set/get, delay, log)
-surface evaluation errors as *unhandled node errors*: recorded in the
-report, run marked `failed` — same outcome as a message into an
-unconnected error port (EC24).
+error port** (condition, switch, merge, guards, set/get, delay, log,
+fixture — e.g. a runtime CSV parse error) surface evaluation errors as
+*unhandled node errors*: recorded in the report, run marked `failed` —
+same outcome as a message into an unconnected error port (EC24).
 
 **Native-value rule (D25).** A config value that is exactly one
 `{{ expression }}` (ignoring surrounding whitespace) evaluates to the
@@ -491,6 +491,8 @@ offending node id, and a one-line fix hint.
   (D19), flow error port (D21), masking scope (D22), empty-seed guard
   (EC08), strict W101, AST-parse posture (EC14), counter = N passes
   (EC16), EC24 no-error-port rule.
+- **2026-07-02 amendments (same day)**: timeout model (D24, EC25–EC27);
+  senior-review fixes incl. native-value templating (D25, EC28–EC37).
 
 ## 10. Roadmap notes (v1.1 candidates)
 

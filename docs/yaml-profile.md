@@ -21,6 +21,9 @@ loading) cannot bite. Five rules, all load-bearing:
 5. One non-failing `napf check` lint (**W107**) for the residual footgun
    that only survives in hand-edited files (below).
 
+Note: YAML examples inside the docs are hand-written for readability and
+do not show the force-quoted style; files *emitted by napflow* always do.
+
 ## Reading — both ecosystems
 
 - **Python (engine/CLI):** `YAML(typ='safe')` for pure loads; ruamel

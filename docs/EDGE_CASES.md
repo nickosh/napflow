@@ -1,10 +1,11 @@
 # napflow — Edge Cases: Resolution Ledger
 
-All edge cases from the 2026-06-14 spec review are **resolved as of
-2026-07-02**. This ledger records what each case was and where its
-resolution now lives; the full original problem analyses are preserved in
-`archive/EDGE_CASES.md`. New edge cases found during implementation
-should be appended here with the same format.
+All 37 cases logged to date are **resolved**: EC01–EC23 from the
+2026-06-14 spec review, EC24–EC37 from the 2026-07-02 finalization and
+senior-review rounds. This ledger records what each case was and where
+its resolution now lives; the full original problem analyses for
+EC01–EC23 are preserved in `archive/EDGE_CASES.md`. New edge cases found
+during implementation should be appended here with the same format.
 
 Resolution kinds: **ADR** (a `DECISIONS.md` entry), **fix** (spec text
 corrected), **doc** (behavior was acceptable but needed an explicit
@@ -35,7 +36,7 @@ statement).
 | EC21 | Node-id charset constraints unspecified                      | decided: ids match `[A-Za-z_][A-Za-z0-9_]*`; E011 enforces charset + uniqueness. Schema *Node ids*. |
 | EC22 | Grandchild processes from python nodes not killed            | doc: known v1 limitation; process-group kill a later candidate. Engine §5a. |
 | EC23 | `defaults.request` may only reference `env`/`run`            | doc: `inputs`/`nodes` are frame-scoped and would StrictUndefined-error every inheriting request. Manifest rule 4. |
-| EC24 | Nodes without an error port: where do evaluation errors go? (found 2026-07-02) | decided: evaluation/template failures on port-less-error nodes (condition, switch, merge, guards, set/get, delay, log) are unhandled node errors — recorded in the report, run `failed`. Engine §6. |
+| EC24 | Nodes without an error port: where do evaluation errors go? (found 2026-07-02) | decided: evaluation/template failures on port-less-error nodes (condition, switch, merge, guards, set/get, delay, log, fixture) are unhandled node errors — recorded in the report, run `failed`. Engine §6. |
 | EC25 | `max_seconds` referenced by engine §5a but never documented in the flow schema (found 2026-07-02) | ADR **D24**: universal optional node key; documented in schema *Execution timeouts* with per-node routing (`{error_kind: "timeout"}` on the error port, never a data port). |
 | EC26 | Default 300s ceiling applied to container/self-bounded nodes — healthy long loops/subflows killed at 5 min (found 2026-07-02) | ADR **D24**: the default auto-applies to `request`/`python` only; `delay`/`loop`/`flow` exempt from the default (bounded by config/children), explicit `max_seconds` honored; container timeout routing defined (flow → implicit error port; loop → EC24, wrap-in-subflow to branch). |
 | EC27 | No wall-clock run deadline — runs bounded only at budget × ceiling; a CI SIGKILL loses the report (found 2026-07-02) | ADR **D24**: `defaults.run.run_timeout_s` (null = off) + `napf run --timeout`; expiry ⇒ run `error` (exit 2), `error_reason: run_timeout`, report/JSONL written. Engine §3. |

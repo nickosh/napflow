@@ -28,7 +28,7 @@ Core promises (never compromise these):
 - `docs/napflow-workspace-manifest.md` — napflow.yaml, CLI surface, env model
 - `docs/napflow-engine-spec.md`     — scheduler, frames, firing rules, events
 - `docs/yaml-profile.md`            — canonical YAML read/emit profile (D23)
-- `docs/DECISIONS.md`               — why each major decision was made (D01–D23)
+- `docs/DECISIONS.md`               — why each major decision was made (D01–D25)
 - `docs/EDGE_CASES.md`              — resolution ledger; append new cases here
 - `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; FR/NFR checklist
   (tick requirements in the PR that lands them, with a test)
@@ -141,6 +141,8 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 5. Guard reset/per-frame isolation in loops & subflows
 6. Worker lifecycle: timeout-kill-respawn, crash isolation, Windows
 7. Loader round-trip: load → save preserves comments & key order (ruamel)
+8. Timeout routing across node shapes (D24, TR-8) + native-value
+   templating detection & post-eval coercion (D25, TR-10)
 
 ## Deferred by decision (do NOT implement, DO keep compatible)
 

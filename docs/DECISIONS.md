@@ -103,8 +103,8 @@ own interpreter).
 ## D13 — Full observability, always
 JSONL per run (.napflow/runs/), append-only, events identical to the live
 WebSocket stream (replay = re-read file). COMPLETE request/response
-bodies always stored (10MB/body valve, truncated marker) — explicit user
-requirement; partial capture rejected. Secrets masked at emission so
+bodies always stored (valves: 10MB/body, 500MB/run per EC32; truncated
+markers) — explicit user requirement; partial capture rejected. Secrets masked at emission so
 history is shareable by construction (scope precisely defined in D22).
 Logs persisted too.
 
