@@ -12,9 +12,9 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-1xx — Workspace & manifest
 
-- [ ] FR-101 (S1) Parse & validate `napflow.yaml` into Pydantic models; `napf` locates it by walking upward from cwd. (WM)
-- [ ] FR-102 (S1) Flow discovery: any directory under `flows.root` containing `flow.yaml` is a flow; identity = workspace-relative path; recursive nesting allowed. (WM §1)
-- [ ] FR-103 (S1) Env profile discovery: every `envs/*.env` is a profile named by filename stem; no registry. Dialect: `KEY=VALUE`, `#` comments, optional quotes stripped, no `export`/interpolation. (WM §2, EC36)
+- [x] FR-101 (S1) Parse & validate `napflow.yaml` into Pydantic models; `napf` locates it by walking upward from cwd. (WM) — models M1, walk-up `core/workspace.py` `find_manifest`/`load_workspace`, `tests/test_workspace.py`, 2026-07-04
+- [x] FR-102 (S1) Flow discovery: any directory under `flows.root` containing `flow.yaml` is a flow; identity = workspace-relative path; recursive nesting allowed. (WM §1) — `Workspace.discover_flows` (posix identities, sorted), 2026-07-04
+- [x] FR-103 (S1) Env profile discovery: every `envs/*.env` is a profile named by filename stem; no registry. Dialect: `KEY=VALUE`, `#` comments, optional quotes stripped, no `export`/interpolation. (WM §2, EC36) — `Workspace.env_profiles` + `parse_env_file` (dialect pins in WM §2), 2026-07-04
 - [ ] FR-104 (S2) Env layering: profile file → process environment, last wins. (WM §3)
 - [ ] FR-105 (S2) `defaults.request` merges shallowly into request nodes; templates there may reference only `env.*`/`run.*`. (WM §4, EC23)
 - [ ] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7)

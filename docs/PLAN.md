@@ -34,8 +34,9 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
       file:line); canonical emitter in `core/loader.py`; CommentedMap as
       single write source; golden round-trip corpus + checked-in
       canonical golden file. (FR-204/205/206/208, TR-7)
-- [ ] **M3 — Discovery**: manifest walk-up; flow discovery; env
-      profiles + dialect. (FR-102/103)
+- [x] **M3 — Discovery** (landed 2026-07-04): manifest walk-up; flow
+      discovery (identity = workspace-relative posix path); env profiles
+      + dialect — `core/workspace.py`. (FR-101/102/103)
 - [ ] **M4 — Checker**: E001–E012; W101 (guard-removal acyclicity)
       through W107; AST-derived python ports; closure checking;
       file:line diagnostics. (FR-301–309)

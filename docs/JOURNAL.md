@@ -4,6 +4,19 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-04 — S1/M3 discovery (+ CI fix)
+
+- Done: `core/workspace.py` — manifest walk-up, flow discovery (identity
+  = workspace-relative posix path, sorted), env profile discovery +
+  strict `.env` dialect parser. FR-101/102/103 ticked; 61 tests green.
+  Fixed red CI from M1/M2: `setup-uv@v8` doesn't exist as a moving tag —
+  pinned `v8.2.0` (checkout@v7 was fine).
+- Decided (WM §2 amended): full-line comments only; malformed lines /
+  invalid keys (incl. `export`) fail fast with file:line; duplicate keys
+  last-wins; one matching quote pair stripped.
+- Next: S1/M4 — checker (E001–E012, W101–W107, AST-derived python
+  ports, closure checking, file:line diagnostics).
+
 ## 2026-07-04 — S1/M2 loader + write path
 
 - Done: `core/loader.py` — round-trip read with positioned diagnostics

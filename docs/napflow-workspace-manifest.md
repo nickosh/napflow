@@ -83,6 +83,12 @@ codegen:                    # RESERVED: parsed, unused in prototype
    ignored; optional single/double quotes stripped from values; no
    `export` prefix, no variable interpolation — values are literal
    strings (types recovered by whoever consumes them).
+   Pinned at M3 (2026-07-04, `core/workspace.py`): comments are
+   full-line only (values are literal, so `V=x # y` keeps the `# y`);
+   a line without `=`, or a key outside `[A-Za-z_][A-Za-z0-9_]*`
+   (catches stray `export`), is an error with file:line — profiles are
+   CI-gate inputs and fail fast; exactly one matching quote pair is
+   stripped; duplicate keys — last wins.
 3. **Env layering** — lookup order, last wins:
    profile file → process environment. Process env winning makes CI
    overrides trivial: `API_TOKEN=$CI_SECRET napf run flows/login`.
