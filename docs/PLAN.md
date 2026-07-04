@@ -9,8 +9,8 @@ milestones land; append course corrections, don't rewrite history.
 
 Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
 
-- [ ] **M0 — Repo scaffolding** (scaffolding landed 2026-07-04; box
-      closes on first green 3-OS CI run after push)
+- [x] **M0 — Repo scaffolding** (landed 2026-07-04; CI run #1 green on
+      ubuntu/macos/windows)
   - [x] `pyproject.toml` (uv-managed), `napflow/{core,cli}` package layout
   - [x] pytest + ruff; GitHub Actions matrix macOS/Windows/Linux from
         day one (NFR-02)

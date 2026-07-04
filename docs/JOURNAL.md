@@ -12,8 +12,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   + NOTICE (NFR-07), uv.lock committed; wheel builds clean.
 - Decided: hatchling as build backend (S4 will need to force-include the
   pre-built UI in the wheel); dev on 3.12 via `.python-version`.
-- Next: push → confirm CI green on all three OS → tick M0 box; then
-  S1/M1 (Pydantic models).
+- Next: S1/M1 (Pydantic models). [Update, same day: CI run #1 green on
+  all three OS in 33s — M0 closed.]
 
 ## 2026-07-04 — Session tooling
 
