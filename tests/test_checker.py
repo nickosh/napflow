@@ -286,7 +286,8 @@ def test_closure_checks_referenced_flows_outside_root(tmp_path: Path) -> None:
         {"flows/p/flow.yaml": parent, "lib/helper/flow.yaml": helper},
     )
     e006 = [d for d in check_workspace(ws) if d.code == "E006"]
-    assert any("lib/helper" in str(d.path) for d in e006)  # closure reached it
+    # as_posix(): str(path) uses backslashes on Windows
+    assert any("lib/helper" in d.path.as_posix() for d in e006)  # closure reached it
 
 
 # --------------------------------------------------------------------------
