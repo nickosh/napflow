@@ -19,7 +19,11 @@ dependencies = [
     "jinja2>=3.1",
     "pydantic>=2.7",
     "ruamel.yaml>=0.18",
+    "typer>=0.12",
 ]
+
+[project.scripts]
+napf = "napflow.cli.main:app"
 
 [dependency-groups]
 dev = [

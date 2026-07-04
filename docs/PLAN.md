@@ -5,7 +5,7 @@ Status: adopted 2026-07-02. This file sequences the stage backlog —
 of attack* and definition-of-done per milestone. Tick boxes as
 milestones land; append course corrections, don't rewrite history.
 
-## S1 — loader, models, `napf check`  ← current
+## S1 — loader, models, `napf check`  ✅ done 2026-07-05
 
 Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
 
@@ -42,14 +42,16 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
       closure checking; file:line diagnostics + hints —
       `core/checker.py` (+ `core/templating.py` syntax half).
       Rule-scope pins recorded in engine spec §8. (FR-301–309)
-- [ ] **M5 — CLI**: `napf init` (incl. `flows/smoke` scaffold),
-      `napf list`, `napf check`, exit codes. (FR-801/802/805, FR-107)
+- [x] **M5 — CLI** (landed 2026-07-05): `napf init` (incl. `flows/smoke`
+      + `fixtures/smoke.json` scaffold, written through the canonical
+      serializer, checks clean out of the box), `napf list`,
+      `napf check` with exit codes 0/1/2. (FR-801/802/805, FR-107)
 
 S1 DoD: every S1 checkbox in REQUIREMENTS ticked with a test; `check`
 catches all E/W codes on a fixture corpus; round-trip byte-identical
 across OS in CI.
 
-## S2 — engine core + `napf run`
+## S2 — engine core + `napf run`  ← current
 
 Scheduler, frames, budget, deadline (FR-4xx); templating incl. the
 native-value rule (D25); request/condition/assert/start/end; events +

@@ -18,7 +18,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-104 (S2) Env layering: profile file → process environment, last wins. (WM §3)
 - [ ] FR-105 (S2) `defaults.request` merges shallowly into request nodes; templates there may reference only `env.*`/`run.*`. (WM §4, EC23)
 - [ ] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7)
-- [ ] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box (S1 only scaffolds it; the run becomes executable once the S3 node set lands). (WM, EC34)
+- [x] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box (S1 only scaffolds it; the run becomes executable once the S3 node set lands). (WM, EC34) — `cli/scaffold.py` (fixtures/smoke.json added to the WM listing); scaffold checks clean, `tests/test_cli.py`, 2026-07-05
 - [ ] FR-108 (S3) `python.interpreter` manifest key selects the worker interpreter; `null` = napflow's own. (WM, EN §5a)
 - [x] FR-109 (S1) `codegen:` manifest key is parsed and ignored (reserved). (WM) — `Manifest.codegen: Any`, test in `tests/test_models_manifest.py`, 2026-07-04
 
@@ -26,7 +26,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 - [x] FR-201 (S1) `schema: napflow/v1` flow files parse into Pydantic models covering the full v1 node catalog. (FS) — `core/models/`, tests parse the spec example + full-catalog kitchen sink (`tests/test_models_flow.py`), 2026-07-04
 - [x] FR-202 (S1) Node ids: `[A-Za-z_][A-Za-z0-9_]*`, unique per flow, human-readable (never UUIDs). (FS, E011) — charset via model pattern (M1), uniqueness via checker E011 (M4), `tests/test_checker.py::test_e011_bad_charset_and_duplicate`, 2026-07-04
-- [ ] FR-203 (S1) `layout:` is quarantined at the bottom of the file and never affects engine behavior. (FS, YP)
+- [x] FR-203 (S1) `layout:` is quarantined at the bottom of the file and never affects engine behavior. (FS, YP) — models treat layout as inert metadata; scaffold/canonical emit keep it at file bottom (canvas enforcement lands S4), 2026-07-05
 - [x] FR-204 (S1) YAML read via safe loader only; written through the one shared canonical serializer (block style; strings force-quoted; ints/bools/null bare; no anchors; no line-wrapping; LF+UTF-8; edges as one-line inline maps; fixed schema key order). (YP, D23) — `core/loader.py` `emit_document`/`save_document`, shape tests in `tests/test_roundtrip.py`, 2026-07-04
 - [x] FR-205 (S1) Round-trip: load → save preserves comments and key order (ruamel round-trip mode); golden test asserts `emit(parse(emit(x)))` byte-identical and `parse(emit(x))` deep-equals `x`. (YP) — 3-file corpus + checked-in golden, `tests/test_roundtrip.py`, 2026-07-04
 - [x] FR-206 (S1) Structures validated against JSON Schema Draft 2020-12 after parse (schema is the type authority). (YP) — via Pydantic, the source of the exported 2020-12 schema (yaml-profile amended at M2), 2026-07-04
@@ -97,11 +97,11 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-8xx — CLI
 
-- [ ] FR-801 (S1) `napf check` — full rule set over all discovered flows; non-zero exit on E-codes. (WM)
-- [ ] FR-802 (S1) `napf list` — discovered flows with their Start/End ports. (WM)
+- [x] FR-801 (S1) `napf check` — full rule set over all discovered flows; non-zero exit on E-codes. (WM) — `cli/main.py check` — exit 1 on E-codes, 0 warnings-only, 2 no-workspace, 2026-07-05
+- [x] FR-802 (S1) `napf list` — discovered flows with their Start/End ports. (WM) — `cli/main.py list_flows` — identity + Start/End ports, invalid-flow marker, 2026-07-05
 - [ ] FR-803 (S2) `napf run <flow> [--env NAME] [-i k=v ...] [--input-json] [--timeout N]` — inputs validated & type-coerced against Start ports, fail-fast on unknown/missing; End outputs → stdout as one JSON object; logs → stderr; exit codes 0/1/2/130. (FS, EN §2, D24)
 - [ ] FR-804 (S2) Report formats `none|junit|json` per `defaults.run.report`. (WM)
-- [ ] FR-805 (S1) `napf init [dir]` per FR-107. (WM)
+- [x] FR-805 (S1) `napf init [dir]` per FR-107. (WM) — `cli/main.py init`, refuses existing napflow.yaml, 2026-07-05
 - [ ] FR-806 (S4) `napf ui [--port]` — serve UI + API + WebSocket on one localhost port, open browser. (WM, D03)
 
 ## FR-9xx — Python worker
@@ -130,7 +130,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] NFR-03 Distribution: one pip wheel containing the pre-built UI; no Docker, no Node at runtime; installable via `uv tool install napflow`. (D03)
 - [ ] NFR-04 Python 3.12+; Pydantic v2; ruamel.yaml; Jinja2 sandbox; niquests; BlackSheep + uvicorn; Typer. (CLAUDE.md stack)
 - [ ] NFR-05 Security posture: sandboxed Jinja2 only (no eval), safe YAML loading only, secrets masked at emission, worker subprocess isolation with kill ceiling. (D10/D12/D22/D23)
-- [ ] NFR-06 Determinism: identical logical flow ⇒ byte-identical emitted file, cross-platform (golden round-trip test in CI). (YP)
+- [x] NFR-06 Determinism: identical logical flow ⇒ byte-identical emitted file, cross-platform (golden round-trip test in CI). (YP) — checked-in golden + `.gitattributes`, green on 3-OS CI since M2, 2026-07-05
 - [x] NFR-07 Apache-2.0 + NOTICE; no CLA; DCO when external contributors appear. (D16) — LICENSE + NOTICE landed 2026-07-04; DCO deferred until external contributors
 - [ ] NFR-08 Engine overhead assumptions hold: pipe round-trip and scheduling negligible vs HTTP; parallel loops bounded by `max_concurrency`. (EN §5a)
 - [ ] NFR-09 HTTP client isolated behind one internal adapter module in `core/` — no direct niquests imports elsewhere; swapping the client stays a contained change. (review 2026-07-02)

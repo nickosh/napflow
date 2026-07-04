@@ -129,6 +129,8 @@ napf init my-workspace
   created  flows/example/nodes.py
   created  flows/smoke/flow.yaml       # fixture→python→assert — fully offline
   created  flows/smoke/nodes.py
+  created  fixtures/smoke.json         # data for the smoke fixture node
+                                       #   (added at M5 — E008 requires it)
   created  envs/dev.env                # BASE_URL=https://httpbin.org
   created  envs/example.env            # committed onboarding template
   created  .gitignore                  # envs/*.env (except example.env), .napflow/
@@ -159,6 +161,10 @@ napf check                    validate all flows (schema, edges, env.required,
 ```
 
 Exit codes for `napf run`: 0 passed · 1 failed · 2 error · 130 aborted.
+`napf check` (pinned at M5): 0 clean or warnings-only · 1 any E-code ·
+2 operational error (no workspace found). `napf init` refuses a
+directory that already has a `napflow.yaml` (exit 2) and never
+overwrites individual files.
 
 Dropped for now: `napf sync` — with no registry, copied folders just appear
 and broken references surface in `napf check` / on canvas. Possible later

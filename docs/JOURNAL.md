@@ -4,6 +4,19 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-05 — S1/M5 CLI — stage S1 complete
+
+- Done: `cli/main.py` + `cli/scaffold.py` — `napf init/list/check`
+  (`napf` script entry, typer dep). Scaffold written through the
+  canonical serializer and checks clean out of the box; the checker
+  caught a scaffold bug (smoke flow missing its start node, E006) —
+  the tool works. 98 tests green. FR-107/203/801/802/805 + NFR-06
+  ticked; every S1 requirement now closed.
+- Decided (WM amended): `fixtures/smoke.json` added to the init listing
+  (E008 requires it); check exit codes 0/1/2; init never overwrites.
+- Next: S2 — engine core + `napf run` (scheduler, frames, templating
+  render + native-value rule, request/condition/assert nodes, events).
+
 ## 2026-07-04 — S1/M4 checker
 
 - Done: `core/checker.py` — all of E001–E012 + W101–W107 with per-code
