@@ -1,0 +1,63 @@
+[project]
+name = "napflow"
+version = "0.1.0.dev0"
+description = "Local-first, git-friendly, node-based flow editor and engine for API request/response processing"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "nickosh" }]
+requires-python = ">=3.12"
+keywords = ["api", "testing", "qa", "flow", "http"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.12",
+    "import-linter>=2.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/napflow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "C4",  # comprehensions
+    "SIM", # simplify
+    "PTH", # pathlib everywhere (NFR-02)
+]
+
+[tool.importlinter]
+root_package = "napflow"
+
+# NFR-01: core is the pytest/CI/codegen surface and must stay importable
+# standalone. Add "napflow.server" to forbidden_modules when it exists (S4).
+[[tool.importlinter.contracts]]
+name = "core imports nothing from cli/server/UI"
+type = "forbidden"
+source_modules = ["napflow.core"]
+forbidden_modules = ["napflow.cli"]

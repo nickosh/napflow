@@ -2,4 +2,12 @@
 .claude/sessions.log
 .claude/settings.local.json
 
-# (M0 adds Python build/venv/test artifacts here)
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/

@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-04 — S1/M0 repo scaffolding
+
+- Done: pyproject (hatchling, src layout, `napflow/{core,cli}`), pytest +
+  ruff + import-linter contract test (NFR-01 green), 3-OS GitHub Actions
+  workflow, cliff.toml + generated CHANGELOG.md (NFR-11), README, LICENSE
+  + NOTICE (NFR-07), uv.lock committed; wheel builds clean.
+- Decided: hatchling as build backend (S4 will need to force-include the
+  pre-built UI in the wheel); dev on 3.12 via `.python-version`.
+- Next: push → confirm CI green on all three OS → tick M0 box; then
+  S1/M1 (Pydantic models).
+
 ## 2026-07-04 — Session tooling
 
 - Done: SessionEnd breadcrumb hook (`.claude/hooks/session-end-log.sh` →

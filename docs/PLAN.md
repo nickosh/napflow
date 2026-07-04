@@ -9,12 +9,13 @@ milestones land; append course corrections, don't rewrite history.
 
 Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
 
-- [ ] **M0 — Repo scaffolding**
-  - [ ] `pyproject.toml` (uv-managed), `napflow/{core,cli}` package layout
-  - [ ] pytest + ruff; GitHub Actions matrix macOS/Windows/Linux from
+- [ ] **M0 — Repo scaffolding** (scaffolding landed 2026-07-04; box
+      closes on first green 3-OS CI run after push)
+  - [x] `pyproject.toml` (uv-managed), `napflow/{core,cli}` package layout
+  - [x] pytest + ruff; GitHub Actions matrix macOS/Windows/Linux from
         day one (NFR-02)
-  - [ ] import-linter: `core` imports nothing from cli/server (NFR-01)
-  - [ ] Changelog toolchain: `cliff.toml` committed + `CHANGELOG.md`
+  - [x] import-linter: `core` imports nothing from cli/server (NFR-01)
+  - [x] Changelog toolchain: `cliff.toml` committed + `CHANGELOG.md`
         (Keep a Changelog format via git-cliff; conventional commits
         already in use since the first commit) (NFR-11)
   - [x] Working journal live: `docs/JOURNAL.md` + the CLAUDE.md rule

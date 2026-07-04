@@ -125,17 +125,17 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## NFR — Non-functional requirements
 
-- [ ] NFR-01 `napflow.core` importable standalone — zero cli/server/UI imports; enforced by an import-linter test. (EN §0)
+- [x] NFR-01 `napflow.core` importable standalone — zero cli/server/UI imports; enforced by an import-linter test. (EN §0) — `tests/test_architecture.py` + contract in `pyproject.toml`, 2026-07-04
 - [ ] NFR-02 macOS + Windows from day one, Linux via CI: pathlib everywhere, no shell-isms, spawn-safe subprocesses. (CLAUDE.md)
 - [ ] NFR-03 Distribution: one pip wheel containing the pre-built UI; no Docker, no Node at runtime; installable via `uv tool install napflow`. (D03)
 - [ ] NFR-04 Python 3.12+; Pydantic v2; ruamel.yaml; Jinja2 sandbox; niquests; BlackSheep + uvicorn; Typer. (CLAUDE.md stack)
 - [ ] NFR-05 Security posture: sandboxed Jinja2 only (no eval), safe YAML loading only, secrets masked at emission, worker subprocess isolation with kill ceiling. (D10/D12/D22/D23)
 - [ ] NFR-06 Determinism: identical logical flow ⇒ byte-identical emitted file, cross-platform (golden round-trip test in CI). (YP)
-- [ ] NFR-07 Apache-2.0 + NOTICE; no CLA; DCO when external contributors appear. (D16)
+- [x] NFR-07 Apache-2.0 + NOTICE; no CLA; DCO when external contributors appear. (D16) — LICENSE + NOTICE landed 2026-07-04; DCO deferred until external contributors
 - [ ] NFR-08 Engine overhead assumptions hold: pipe round-trip and scheduling negligible vs HTTP; parallel loops bounded by `max_concurrency`. (EN §5a)
 - [ ] NFR-09 HTTP client isolated behind one internal adapter module in `core/` — no direct niquests imports elsewhere; swapping the client stays a contained change. (review 2026-07-02)
 - [ ] NFR-10 Dependency-compat CI job: install napflow into a venv alongside `requests` + `botocore` and run the test suite — guards the niquests/urllib3-future conflict class in users' pytest envs. (review 2026-07-02)
-- [ ] NFR-11 Changelog: conventional commits + git-cliff (`cliff.toml` committed); `CHANGELOG.md` in Keep a Changelog format, regenerated per release starting v0.1.0. (PLAN M0)
+- [x] NFR-11 Changelog: conventional commits + git-cliff (`cliff.toml` committed); `CHANGELOG.md` in Keep a Changelog format, regenerated per release starting v0.1.0. (PLAN M0) — landed 2026-07-04, regenerate with `uvx git-cliff -o CHANGELOG.md`
 
 ## Test requirements (priority order — highest bug-risk first)
 
