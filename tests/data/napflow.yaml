@@ -1,0 +1,41 @@
+# The workspace-manifest spec's full example (docs/napflow-workspace-manifest.md),
+# kept verbatim so "the spec example parses" stays a tested invariant.
+schema: napflow/v1
+
+workspace:
+  name: qa-api-flows
+  description: API flows for the payments and user services.
+
+flows:
+  root: flows
+  main: flows/main
+
+environments:
+  default: dev
+  secrets:
+    - API_TOKEN
+    - "*_PASSWORD"
+
+defaults:
+  request:
+    timeout_s: 30
+    verify_tls: true
+    retry:
+      max_attempts: 1
+    headers:
+      User-Agent: "napflow/0.1 ({{ env.TEAM_TAG }})"
+  run:
+    history: 20
+    report: junit
+    message_budget: 100000
+    node_timeout_s: 300
+    run_timeout_s: null
+    body_capture_mb: 10
+    run_capture_mb: 500
+
+python:
+  interpreter: null
+
+codegen:
+  output: generated/
+  client_style: niquests

@@ -4,6 +4,18 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-04 — S1/M1 Pydantic models
+
+- Done: `core/models/` (common/flow/manifest) — full 18-type node catalog,
+  discriminated unions, frozen read-only views, manifest defaults = the
+  documented built-ins; JSON Schema 2020-12 export; 27 tests incl. both
+  spec examples parsed verbatim. FR-201/FR-109 ticked.
+- Decided: config details the catalog left loose pinned in the schema doc
+  ("Config surface pinned at implementation") — node-level `max_seconds`,
+  switch `{name, equals}` cases, loop defaults, `report` default `none`.
+- Next: S1/M2 — loader + write path (safe ruamel read with position
+  marks, canonical emitter, golden round-trip corpus).
+
 ## 2026-07-04 — S1/M0 repo scaffolding
 
 - Done: pyproject (hatchling, src layout, `napflow/{core,cli}`), pytest +

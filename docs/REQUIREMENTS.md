@@ -20,11 +20,11 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [ ] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7)
 - [ ] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box (S1 only scaffolds it; the run becomes executable once the S3 node set lands). (WM, EC34)
 - [ ] FR-108 (S3) `python.interpreter` manifest key selects the worker interpreter; `null` = napflow's own. (WM, EN §5a)
-- [ ] FR-109 (S1) `codegen:` manifest key is parsed and ignored (reserved). (WM)
+- [x] FR-109 (S1) `codegen:` manifest key is parsed and ignored (reserved). (WM) — `Manifest.codegen: Any`, test in `tests/test_models_manifest.py`, 2026-07-04
 
 ## FR-2xx — Flow file format
 
-- [ ] FR-201 (S1) `schema: napflow/v1` flow files parse into Pydantic models covering the full v1 node catalog. (FS)
+- [x] FR-201 (S1) `schema: napflow/v1` flow files parse into Pydantic models covering the full v1 node catalog. (FS) — `core/models/`, tests parse the spec example + full-catalog kitchen sink (`tests/test_models_flow.py`), 2026-07-04
 - [ ] FR-202 (S1) Node ids: `[A-Za-z_][A-Za-z0-9_]*`, unique per flow, human-readable (never UUIDs). (FS, E011)
 - [ ] FR-203 (S1) `layout:` is quarantined at the bottom of the file and never affects engine behavior. (FS, YP)
 - [ ] FR-204 (S1) YAML read via safe loader only; written through the one shared canonical serializer (block style; strings force-quoted; ints/bools/null bare; no anchors; no line-wrapping; LF+UTF-8; edges as one-line inline maps; fixed schema key order). (YP, D23)

@@ -25,8 +25,10 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
         gitignored `.claude/sessions.log` (the agent-written journal
         stays the load-bearing part).
   - DoD: empty package, green CI on all three OS.
-- [ ] **M1 — Models**: Pydantic v2 manifest + flow models covering the
-      full node catalog; JSON Schema export. (FR-101/201/206)
+- [x] **M1 — Models** (landed 2026-07-04): Pydantic v2 manifest + flow
+      models covering the full node catalog (`core/models/`); JSON Schema
+      export. Loose catalog details pinned in the schema doc ("Config
+      surface pinned at implementation"). (FR-101/201/206)
 - [ ] **M2 — Loader + write path**: safe ruamel read with position
       marks; canonical emitter; CommentedMap as single write source;
       golden round-trip corpus lands *here*, before anything builds on

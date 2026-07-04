@@ -224,6 +224,36 @@ Catalog notes:
   expression evaluated against that delivery (e.g. `over: trigger.value`
   or `over: nodes.fetch.list`).
 
+### Config surface pinned at implementation (M1, 2026-07-04)
+
+Details the catalog table left loose, pinned when the Pydantic models
+landed (`core/models/`; the models are the schema source of truth):
+
+- **`max_seconds` is a node-level key** — a sibling of `id`/`type`/
+  `config`, uniform across all node types (it is engine policy, not
+  per-type config). Emit order: `id, type, config, max_seconds`.
+- **`request` config keys** (named to match `defaults.request` for the
+  shallow merge): `method` (default `GET`), `url` (required), `headers`,
+  `query`, `body`, `timeout_s`, `verify_tls`,
+  `retry: {max_attempts: ≥1}`, `http_version` (`"1.1" | "2" | "3"`,
+  absent = negotiate).
+- **`switch.cases`**: list of `{name: <port>, equals: <value>}`;
+  output ports = case names + `default`; cases are evaluated
+  top-to-bottom, first equality match wins.
+- **`merge`**: `count` (≥1) is required with `mode: collect` and
+  rejected with `any`/`all`.
+- **`loop` defaults**: `mode: sequential`, `on_error: stop`,
+  `fresh_session: false`, `max_concurrency: 4` (applies in `parallel`).
+- **`log`**: `level: debug | info | warn | error` (default `info`);
+  `label` optional.
+- **`fixture.format`**: `json | csv`, optional — inferred from the file
+  extension when omitted.
+- **assert `expr` checks**: `op` defaults to `present`; every other op
+  requires `value` (an explicit `value: null` is legal, e.g. for
+  `equals`); `present` takes no `value`.
+- **Start port `default:`**: an absent key means "input required at
+  BIND"; an explicit `default: null` is a null default.
+
 ### Guard node semantics
 - **counter** — allows exactly `count` passes (check-then-decrement): a
   message arriving while remaining > 0 decrements and routes to

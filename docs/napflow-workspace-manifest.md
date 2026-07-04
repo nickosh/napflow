@@ -42,7 +42,7 @@ defaults:
       User-Agent: "napflow/0.1 ({{ env.TEAM_TAG }})"
   run:
     history: 20             # runs kept per flow in .napflow/runs/
-    report: junit           # none | junit | json
+    report: junit           # none | junit | json (built-in default: none)
     message_budget: 100000  # runaway protection, NOT resource accounting —
                             #   counts every emitted message run-wide incl.
                             #   child frames; sized so data-driven loops
