@@ -66,7 +66,7 @@ python:
                             # Point at a project venv to enable its
                             # third-party packages in python nodes.
 
-codegen:                    # RESERVED: parsed, unused in prototype
+codegen:                    # RESERVED: parsed, unused in v1
   output: generated/
   client_style: niquests
 ```

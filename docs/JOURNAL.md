@@ -4,6 +4,20 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-05 — S1 closeout: README, versioning, release flow, rename
+
+- Done: real README (status table, install-from-git, flow example);
+  repo renamed `napflow-prototype` → `napflow` on GitHub (remote
+  updated; old URLs redirect); version bumped `0.1.0.dev1` +
+  `[project.urls]`; docs consistency pass (RELEASING.md wired into
+  CLAUDE.md/PLAN; "prototype" wording → "v1" in WM).
+- Decided (`docs/RELEASING.md`, adopted): `0.1.0.devN` bumps in the
+  stage-closing commit; releases are tag-driven via `release.yml`
+  (gate → build → git-cliff notes → GitHub Release; inert until first
+  tag); PyPI via trusted publishing deferred with a written checklist.
+- Next: S2/M-first — engine scheduler + frames (FR-401..), templating
+  render + native-value rule (D25).
+
 ## 2026-07-05 — S1/M5 CLI — stage S1 complete
 
 - Done: `cli/main.py` + `cli/scaffold.py` — `napf init/list/check`

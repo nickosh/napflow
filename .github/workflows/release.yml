@@ -1,0 +1,38 @@
+name: Release
+
+# Tag-driven (docs/RELEASING.md). Inert until the first `v*` tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # git-cliff needs full history for notes
+      # setup-uv publishes no moving major tag — pin the exact release
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Gate
+        run: |
+          uv sync --locked
+          uv run ruff check
+          uv run lint-imports
+          uv run pytest
+      - name: Build sdist + wheel
+        run: uv build
+      - name: Release notes for this tag
+        run: uvx git-cliff --latest --strip header -o RELEASE_NOTES.md
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file RELEASE_NOTES.md
+      # PyPI publishing is deferred — see docs/RELEASING.md §PyPI for the
+      # trusted-publishing checklist to enable when going public.

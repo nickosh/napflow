@@ -82,3 +82,5 @@ block a first release.
   (done / decided / next).
 - New edge cases → `EDGE_CASES.md` (EC38+); new decisions →
   `DECISIONS.md` (D26+).
+- Version bumps `0.1.0.devN` in the commit that completes a stage;
+  releases are tag-driven (`RELEASING.md`, adopted 2026-07-05).

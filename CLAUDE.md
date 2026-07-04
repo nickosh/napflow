@@ -33,6 +33,8 @@ Core promises (never compromise these):
 - `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; FR/NFR checklist
   (tick requirements in the PR that lands them, with a test)
 - `docs/PLAN.md` / `docs/JOURNAL.md`    — milestone sequencing + working journal
+- `docs/RELEASING.md`               — versioning (0.1.0.devN per completed
+  stage) + tag-driven release flow (release.yml)
 
 Specs are hypotheses: when implementation proves one wrong, UPDATE THE SPEC
 in the same PR as the code change.
