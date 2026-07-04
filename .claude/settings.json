@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-end-log.sh",
+            "timeout": 10,
+            "statusMessage": "Logging session breadcrumb"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -17,11 +17,12 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
   - [ ] Changelog toolchain: `cliff.toml` committed + `CHANGELOG.md`
         (Keep a Changelog format via git-cliff; conventional commits
         already in use since the first commit) (NFR-11)
-  - [ ] Working journal live: `docs/JOURNAL.md` + the CLAUDE.md rule
-        (dated entry per milestone / PR-sized commit). Optional later:
-        a SessionEnd hook in `.claude/settings.json` for mechanical
-        breadcrumbs — the journal itself is agent-written, so the
-        CLAUDE.md rule is the load-bearing part.
+  - [x] Working journal live: `docs/JOURNAL.md` + the CLAUDE.md rule
+        (dated entry per milestone / PR-sized commit). SessionEnd
+        breadcrumb hook implemented 2026-07-04:
+        `.claude/hooks/session-end-log.sh` appends per-session lines to
+        gitignored `.claude/sessions.log` (the agent-written journal
+        stays the load-bearing part).
   - DoD: empty package, green CI on all three OS.
 - [ ] **M1 — Models**: Pydantic v2 manifest + flow models covering the
       full node catalog; JSON Schema export. (FR-101/201/206)

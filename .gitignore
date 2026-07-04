@@ -1,0 +1,5 @@
+# Claude Code local artifacts
+.claude/sessions.log
+.claude/settings.local.json
+
+# (M0 adds Python build/venv/test artifacts here)
