@@ -4,6 +4,20 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-04 — S1/M2 loader + write path
+
+- Done: `core/loader.py` — round-trip read with positioned diagnostics
+  (`LoadError`/`locate()` map pydantic error locs to file:line), canonical
+  emitter per D23, golden round-trip corpus (3 files + checked-in
+  canonical golden); `.gitattributes` pins YAML to LF for cross-OS byte
+  identity. FR-204/205/206/208 ticked; 45 tests green.
+- Decided (yaml-profile amended): layout coordinate pairs join edges as
+  the second flow-style island; literal/folded blocks preserved (no
+  coercion risk); Python-side JSON Schema validation = Pydantic itself
+  (the exported schema is generated from the same models).
+- Next: S1/M3 — discovery (manifest walk-up, flow discovery, env
+  profiles + dialect).
+
 ## 2026-07-04 — S1/M1 Pydantic models
 
 - Done: `core/models/` (common/flow/manifest) — full 18-type node catalog,

@@ -1,0 +1,96 @@
+# The flow-schema spec's example flow (docs/napflow-flow-schema.md §Example),
+# kept verbatim so "the spec example parses" stays a tested invariant.
+schema: "napflow/v1"
+
+flow:
+  name: "create_until_ready"
+  description: "Create a job, then re-check with retries until it's ready."
+
+env:
+  required:
+    - "API_TOKEN"
+    - "BASE_URL"
+
+nodes:
+  - id: "start"
+    type: "start"
+    config:
+      ports:
+        - name: "base_url"
+          type: "string"
+          default: "{{ env.BASE_URL }}"
+
+  - id: "create"
+    type: "request"
+    config:
+      method: "POST"
+      url: "{{ inputs.base_url }}/api/v1/job"
+      headers:
+        Authorization: "Bearer {{ env.API_TOKEN }}"
+      body:
+        kind: "sync_users"
+
+  - id: "kick"
+    type: "merge"
+    config:
+      mode: "any"
+
+  - id: "check_job"
+    type: "request"
+    config:
+      method: "GET"
+      url: "{{ inputs.base_url }}/api/v1/job/{{ nodes.create.response.body.id }}"
+      headers:
+        Authorization: "Bearer {{ env.API_TOKEN }}"
+
+  - id: "is_ready"
+    type: "condition"
+    config:
+      expr: "trigger.value.body.state == 'done'"
+
+  - id: "attempts"
+    type: "counter"
+    config:
+      count: 10
+
+  - id: "wait"
+    type: "delay"
+    config:
+      seconds: 2
+
+  - id: "show"
+    type: "log"
+    config:
+      label: "job state"
+      level: "info"
+
+  - id: "end"
+    type: "end"
+    config:
+      ports:
+        - name: "job"
+        - name: "gave_up"
+          required: false
+
+edges:
+  - {from: "start.out", to: "create.trigger"}
+  - {from: "create.response", to: "kick.in1"}
+  - {from: "kick.out", to: "check_job.trigger"}
+  - {from: "check_job.response", to: "is_ready.in"}
+  - {from: "check_job.response", to: "show.in"}
+  - {from: "is_ready.false", to: "attempts.in"}
+  - {from: "attempts.continue", to: "wait.in"}
+  - {from: "wait.out", to: "kick.in2"}
+  - {from: "is_ready.true", to: "end.job"}
+  - {from: "attempts.exhausted", to: "end.gave_up"}
+
+layout:
+  start: [40, 200]
+  create: [180, 200]
+  kick: [320, 200]
+  check_job: [470, 200]
+  is_ready: [640, 200]
+  attempts: [640, 360]
+  wait: [470, 360]
+  show: [640, 80]
+  end: [820, 200]

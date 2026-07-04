@@ -27,11 +27,11 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [x] FR-201 (S1) `schema: napflow/v1` flow files parse into Pydantic models covering the full v1 node catalog. (FS) — `core/models/`, tests parse the spec example + full-catalog kitchen sink (`tests/test_models_flow.py`), 2026-07-04
 - [ ] FR-202 (S1) Node ids: `[A-Za-z_][A-Za-z0-9_]*`, unique per flow, human-readable (never UUIDs). (FS, E011)
 - [ ] FR-203 (S1) `layout:` is quarantined at the bottom of the file and never affects engine behavior. (FS, YP)
-- [ ] FR-204 (S1) YAML read via safe loader only; written through the one shared canonical serializer (block style; strings force-quoted; ints/bools/null bare; no anchors; no line-wrapping; LF+UTF-8; edges as one-line inline maps; fixed schema key order). (YP, D23)
-- [ ] FR-205 (S1) Round-trip: load → save preserves comments and key order (ruamel round-trip mode); golden test asserts `emit(parse(emit(x)))` byte-identical and `parse(emit(x))` deep-equals `x`. (YP)
-- [ ] FR-206 (S1) Structures validated against JSON Schema Draft 2020-12 after parse (schema is the type authority). (YP)
+- [x] FR-204 (S1) YAML read via safe loader only; written through the one shared canonical serializer (block style; strings force-quoted; ints/bools/null bare; no anchors; no line-wrapping; LF+UTF-8; edges as one-line inline maps; fixed schema key order). (YP, D23) — `core/loader.py` `emit_document`/`save_document`, shape tests in `tests/test_roundtrip.py`, 2026-07-04
+- [x] FR-205 (S1) Round-trip: load → save preserves comments and key order (ruamel round-trip mode); golden test asserts `emit(parse(emit(x)))` byte-identical and `parse(emit(x))` deep-equals `x`. (YP) — 3-file corpus + checked-in golden, `tests/test_roundtrip.py`, 2026-07-04
+- [x] FR-206 (S1) Structures validated against JSON Schema Draft 2020-12 after parse (schema is the type authority). (YP) — via Pydantic, the source of the exported 2020-12 schema (yaml-profile amended at M2), 2026-07-04
 - [ ] FR-207 (S2) Binary payload envelope: `{"__binary__": true, "content_type", "base64"}`; capture cap applies to encoded form. (FS)
-- [ ] FR-208 (S1) Write path: the loaded CommentedMap is the single write source — edits mutate the document; Pydantic models are read-only views never serialized back; ruamel line/column marks retained through validation. (YP, EC29)
+- [x] FR-208 (S1) Write path: the loaded CommentedMap is the single write source — edits mutate the document; Pydantic models are read-only views never serialized back; ruamel line/column marks retained through validation. (YP, EC29) — `LoadedFlow{doc,model}` + `locate()`, positioned-diagnostic tests in `tests/test_loader.py`, 2026-07-04
 
 ## FR-3xx — Validation (`napf check`)
 

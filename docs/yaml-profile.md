@@ -50,10 +50,15 @@ def _quote_str(rep, data):
 yaml.representer.add_representer(str, _quote_str)
 ```
 
-Exception to block-only style: **edges are one-line inline maps**
-(`- { from: a.out, to: b.in }`) — a deliberate, schema-scoped flow-style
-island for diff readability; the serializer special-cases the `edges`
-list only.
+Exceptions to block-only style (pinned at M2, 2026-07-04 — both for
+diff readability): **edges are one-line inline maps**
+(`- {from: "a.out", to: "b.in"}`) and **layout coordinate pairs are
+one-line inline sequences** (`start: [40, 200]`); the serializer
+special-cases exactly those two spots. Additionally, literal/folded
+block scalars (`|`/`>`) are preserved as-is rather than force-quoted —
+multiline text carries none of the implicit-coercion risk the quoting
+rule exists to prevent. Python implementation: `core/loader.py`
+(`emit_document` / `save_document` — the one shared serializer).
 
 ## Canonical emit — canvas, js-yaml
 
@@ -100,8 +105,11 @@ quarantined at the bottom of the file.
 ## Validation
 
 Parse, then validate the resulting structure against JSON Schema
-(Draft 2020-12): `jsonschema` in Python, `ajv` in JS. The schema carries
-the port/config types — the half that makes the force-quote rule safe.
+(Draft 2020-12): Pydantic in Python (amended at M2: the models ARE the
+schema — the exported document is generated from them, so a separate
+`jsonschema` pass could never catch more), `ajv` against the exported
+schema in JS. The schema carries the port/config types — the half that
+makes the force-quote rule safe.
 
 ## Lint — W107 (hand-edited files only)
 

@@ -1,0 +1,36 @@
+# top-of-file comment — must survive round-trip
+schema: napflow/v1
+
+flow:
+  name: commented # trailing comment survives
+  description: Hand-edited corpus file for the golden round-trip test.
+
+nodes:
+  # the entry node
+  - id: start
+    type: start
+    config: {ports: [{name: who, type: string, default: world}]}
+  - id: docs
+    type: note
+    config:
+      text: |
+        Multi-line note.
+        Stays a literal block.
+  - id: greet
+    type: log
+    config:
+      label: 'single quoted becomes double'
+      level: info
+  - id: end
+    type: end
+    config:
+      ports: [{name: out, required: false}]
+
+edges:
+  - {from: start.out, to: greet.in}
+  - {from: greet.out, to: end.out}
+
+layout:
+  start: [0, 0]
+  greet: [100, 0]
+  end: [200, 0]

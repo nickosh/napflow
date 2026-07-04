@@ -1,0 +1,4 @@
+# Round-trip golden tests compare canonical bytes — YAML must stay LF
+# on every OS (yaml-profile.md).
+*.yaml text eol=lf
+*.yml text eol=lf

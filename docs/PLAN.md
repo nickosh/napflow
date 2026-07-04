@@ -29,10 +29,11 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
       models covering the full node catalog (`core/models/`); JSON Schema
       export. Loose catalog details pinned in the schema doc ("Config
       surface pinned at implementation"). (FR-101/201/206)
-- [ ] **M2 — Loader + write path**: safe ruamel read with position
-      marks; canonical emitter; CommentedMap as single write source;
-      golden round-trip corpus lands *here*, before anything builds on
-      it. (FR-204/205/208, TR-7)
+- [x] **M2 — Loader + write path** (landed 2026-07-04): safe ruamel read
+      with position marks (`locate()` threads pydantic error locs to
+      file:line); canonical emitter in `core/loader.py`; CommentedMap as
+      single write source; golden round-trip corpus + checked-in
+      canonical golden file. (FR-204/205/206/208, TR-7)
 - [ ] **M3 — Discovery**: manifest walk-up; flow discovery; env
       profiles + dialect. (FR-102/103)
 - [ ] **M4 — Checker**: E001–E012; W101 (guard-removal acyclicity)
