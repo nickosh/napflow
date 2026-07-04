@@ -476,6 +476,24 @@ offending node id, and a one-line fix hint.
   literal `def` signatures for node functions.
 - W105 vs the ENV lifecycle step: see §2 (EC17).
 
+Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
+- **E005 includes required End ports**: a `required: true` End port with
+  no inbound edge is a statically guaranteed run failure (D18) — check
+  error, not a runtime surprise.
+- **E008 scope**: missing/unparseable `nodes.py` or function not found
+  (EC14); loop body whose Start declares no `item` port; templated
+  (non-static) flow/loop references — the reference DAG must be static.
+- **Implicit input port names**: single-input nodes (`condition`,
+  `switch`, `assert`, `set`, `delay`, `log`, guards) use `in`;
+  `request`/`loop`/`get`/`fixture` use `trigger`; merge inputs match
+  `in[1-9][0-9]*` (1-based, no upper bound).
+- **W105 also reports an unparseable env profile** (its keys cannot be
+  checked; still warning-class — profiles are local files).
+- **W107 under YAML 1.2 reality**: number-like and date-like plain
+  scalars parse as ints/dates, never strings — date-typed values are
+  warned as parsed-date objects; the string-form lint fires on the
+  bool/null word set and sexagesimals.
+
 ## 9. Resolved (was: open questions)
 
 - **Body capture: always full.** Complete request/response bodies in every

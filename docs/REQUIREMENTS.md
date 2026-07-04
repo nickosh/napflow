@@ -25,7 +25,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 ## FR-2xx — Flow file format
 
 - [x] FR-201 (S1) `schema: napflow/v1` flow files parse into Pydantic models covering the full v1 node catalog. (FS) — `core/models/`, tests parse the spec example + full-catalog kitchen sink (`tests/test_models_flow.py`), 2026-07-04
-- [ ] FR-202 (S1) Node ids: `[A-Za-z_][A-Za-z0-9_]*`, unique per flow, human-readable (never UUIDs). (FS, E011)
+- [x] FR-202 (S1) Node ids: `[A-Za-z_][A-Za-z0-9_]*`, unique per flow, human-readable (never UUIDs). (FS, E011) — charset via model pattern (M1), uniqueness via checker E011 (M4), `tests/test_checker.py::test_e011_bad_charset_and_duplicate`, 2026-07-04
 - [ ] FR-203 (S1) `layout:` is quarantined at the bottom of the file and never affects engine behavior. (FS, YP)
 - [x] FR-204 (S1) YAML read via safe loader only; written through the one shared canonical serializer (block style; strings force-quoted; ints/bools/null bare; no anchors; no line-wrapping; LF+UTF-8; edges as one-line inline maps; fixed schema key order). (YP, D23) — `core/loader.py` `emit_document`/`save_document`, shape tests in `tests/test_roundtrip.py`, 2026-07-04
 - [x] FR-205 (S1) Round-trip: load → save preserves comments and key order (ruamel round-trip mode); golden test asserts `emit(parse(emit(x)))` byte-identical and `parse(emit(x))` deep-equals `x`. (YP) — 3-file corpus + checked-in golden, `tests/test_roundtrip.py`, 2026-07-04
@@ -35,15 +35,15 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-3xx — Validation (`napf check`)
 
-- [ ] FR-301 (S1) E001–E009 as specified (parse/schema, unknown type/keys, bad edge refs, multi-edge input, missing required input, start/end cardinality, flow-reference cycle with path, broken file refs, Jinja2 syntax). (EN §8)
-- [ ] FR-302 (S1) E011 duplicate/invalid node id; E012 reserved port name `error` on End ports and python `outputs`; E010 permanently reserved, never reused. (EN §8, D21)
-- [ ] FR-303 (S1) W101 guard analysis with the strict guarantee: delete guard nodes, test acyclicity; report any remaining cycle with its path. (EN §8, EC16)
-- [ ] FR-304 (S1) W102 port-type mismatch, W103 unconnected error/failed output, W104 unreachable node, W105 env.required key in no discovered profile. (EN §8)
-- [ ] FR-305 (S1) W106 unconnected guard exhaustion/timeout port. (D19)
-- [ ] FR-306 (S1) W107 YAML implicit-coercion lint on unquoted scalars in string-typed fields (hand-edited files). (YP)
-- [ ] FR-307 (S1) Python input ports derived by AST-parsing `nodes.py` — `check` never imports user code. (EC14)
-- [ ] FR-308 (S1) `check` runs on the closure of referenced flows; errors block `napf run`, warnings print and proceed. (EN §2, §8)
-- [ ] FR-309 (S1) Every E/W diagnostic carries file path, line/column (from ruamel marks), node id, and a one-line fix hint. (EN §8, EC29)
+- [x] FR-301 (S1) E001–E009 as specified (parse/schema, unknown type/keys, bad edge refs, multi-edge input, missing required input, start/end cardinality, flow-reference cycle with path, broken file refs, Jinja2 syntax). (EN §8) — `core/checker.py` + `diagnostics_from_load_error` mapping, per-code tests in `tests/test_checker.py`, 2026-07-04
+- [x] FR-302 (S1) E011 duplicate/invalid node id; E012 reserved port name `error` on End ports and python `outputs`; E010 permanently reserved, never reused. (EN §8, D21) — duplicate/charset via checker+model mapping; E012 in `check_reserved_names`, 2026-07-04
+- [x] FR-303 (S1) W101 guard analysis with the strict guarantee: delete guard nodes, test acyclicity; report any remaining cycle with its path. (EN §8, EC16) — `check_guarded_cycles` (guard-removal acyclicity, path reported), 2026-07-04
+- [x] FR-304 (S1) W102 port-type mismatch, W103 unconnected error/failed output, W104 unreachable node, W105 env.required key in no discovered profile. (EN §8) — `check_port_types`/`check_unconnected_outputs`/`check_reachability`/`_env_coverage`, 2026-07-04
+- [x] FR-305 (S1) W106 unconnected guard exhaustion/timeout port. (D19) — `check_unconnected_outputs` (W106), 2026-07-04
+- [x] FR-306 (S1) W107 YAML implicit-coercion lint on unquoted scalars in string-typed fields (hand-edited files). (YP) — `check_templates` W107 branch (scope pinned in EN §8), 2026-07-04
+- [x] FR-307 (S1) Python input ports derived by AST-parsing `nodes.py` — `check` never imports user code. (EC14) — `_SurfaceResolver.module_functions` — ast.parse only, literal-default optionality (EC36), 2026-07-04
+- [x] FR-308 (S1) `check` runs on the closure of referenced flows; errors block `napf run`, warnings print and proceed. (EN §2, §8) — `check_workspace` closure queue (refs outside flows.root included), 2026-07-04
+- [x] FR-309 (S1) Every E/W diagnostic carries file path, line/column (from ruamel marks), node id, and a one-line fix hint. (EN §8, EC29) — `CheckDiagnostic{path,line,column,node_id,hint}` + render(), asserted for every code, 2026-07-04
 
 ## FR-4xx — Engine core
 

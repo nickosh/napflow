@@ -37,9 +37,11 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
 - [x] **M3 — Discovery** (landed 2026-07-04): manifest walk-up; flow
       discovery (identity = workspace-relative posix path); env profiles
       + dialect — `core/workspace.py`. (FR-101/102/103)
-- [ ] **M4 — Checker**: E001–E012; W101 (guard-removal acyclicity)
-      through W107; AST-derived python ports; closure checking;
-      file:line diagnostics. (FR-301–309)
+- [x] **M4 — Checker** (landed 2026-07-04): E001–E012; W101
+      (guard-removal acyclicity) through W107; AST-derived python ports;
+      closure checking; file:line diagnostics + hints —
+      `core/checker.py` (+ `core/templating.py` syntax half).
+      Rule-scope pins recorded in engine spec §8. (FR-301–309)
 - [ ] **M5 — CLI**: `napf init` (incl. `flows/smoke` scaffold),
       `napf list`, `napf check`, exit codes. (FR-801/802/805, FR-107)
 

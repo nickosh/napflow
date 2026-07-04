@@ -4,6 +4,18 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-04 — S1/M4 checker
+
+- Done: `core/checker.py` — all of E001–E012 + W101–W107 with per-code
+  tests (86 total green); positioned diagnostics with node id + fix hint
+  (FR-309); AST-only python ports (EC14); closure checking incl. refs
+  outside flows.root; `core/templating.py` (sandboxed env + syntax half).
+- Decided (EN §8 amended): E005 covers unwired required End ports; E008
+  covers missing nodes.py/function, loop body without `item`, templated
+  refs; implicit input ports named `in`/`trigger`, merge `in[1-9][0-9]*`;
+  W105 also flags unparseable profiles; W107 scoped to YAML-1.2 reality.
+- Next: S1/M5 — CLI (`napf init/list/check`, exit codes) → S1 done.
+
 ## 2026-07-04 — S1/M3 discovery (+ CI fix)
 
 - Done: `core/workspace.py` — manifest walk-up, flow discovery (identity

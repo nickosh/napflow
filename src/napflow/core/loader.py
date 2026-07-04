@@ -53,6 +53,9 @@ class LoadDiagnostic:
     loc: tuple[int | str, ...] = ()
     line: int | None = None
     column: int | None = None
+    # pydantic error type ("extra_forbidden", "union_tag_invalid", ...) or
+    # "parse" for YAML-level failures — lets the checker map to E-codes
+    kind: str | None = None
 
     def render(self, path: Path) -> str:
         pos = f":{self.line}" if self.line is not None else ""
@@ -144,7 +147,7 @@ def load_document(path: Path) -> Any:
                 line, col = mark.line + 1, mark.column + 1
         message = " ".join(str(e).split())  # ruamel messages are multi-line
         raise LoadError(
-            path, [LoadDiagnostic(message=message, line=line, column=col)]
+            path, [LoadDiagnostic(message=message, line=line, column=col, kind="parse")]
         ) from e
 
 
@@ -162,6 +165,7 @@ def _validate[M: BaseModel](doc: Any, model_cls: type[M], path: Path) -> M:
                     loc=loc,
                     line=pos[0] if pos else None,
                     column=pos[1] if pos else None,
+                    kind=err["type"],
                 )
             )
         raise LoadError(path, diagnostics) from e
