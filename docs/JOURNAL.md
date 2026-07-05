@@ -4,6 +4,21 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-05 — S2/M1 templating render (+ S2 milestone breakdown)
+
+- Done: render half of `core/templating.py` — `Renderer` (sandboxed
+  string + native envs, StrictUndefined), native-value rule (D25) with
+  structural single-expression detection, bare-expr evaluation,
+  recursive config rendering, post-eval coercion (`coerce_value` /
+  `stringify_native`), `TemplateEvaluationError`; `layer_env` (FR-104).
+  FR-104/601/604 ticked; 132 tests green (34 new).
+- Decided: S2 milestones M1–M5 adopted in PLAN.md (templating → events
+  → scheduler → request → run). Pins (EN §6 / WM §3): tag-bearing
+  templates always string-render; string-typed fields stringify natives
+  as JSON, never repr; number/boolean coercion accepts env-file string
+  forms; full process env visible in `env.*`.
+- Next: S2/M2 — events + JSONL sink + masking (`core/events.py`).
+
 ## 2026-07-05 — S1 closeout: README, versioning, release flow, rename
 
 - Done: real README (status table, install-from-git, flow example);

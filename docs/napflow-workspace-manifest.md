@@ -92,6 +92,10 @@ codegen:                    # RESERVED: parsed, unused in v1
 3. **Env layering** — lookup order, last wins:
    profile file → process environment. Process env winning makes CI
    overrides trivial: `API_TOKEN=$CI_SECRET napf run flows/login`.
+   Pinned at S2/M1 (2026-07-05, `layer_env`): the whole process
+   environment participates in the lookup — a key absent from the
+   profile but present in process env is still visible as
+   `{{ env.KEY }}`; masking (rule 5) already scans both sources.
 4. **Request defaults merge shallowly** — node-level `retry:` replaces the
    whole block; no deep-merge surprises. Only `{{ env.* }}` and
    `{{ run.* }}` are in scope in `defaults.request` — `inputs`/`nodes`

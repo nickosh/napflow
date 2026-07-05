@@ -15,7 +15,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [x] FR-101 (S1) Parse & validate `napflow.yaml` into Pydantic models; `napf` locates it by walking upward from cwd. (WM) — models M1, walk-up `core/workspace.py` `find_manifest`/`load_workspace`, `tests/test_workspace.py`, 2026-07-04
 - [x] FR-102 (S1) Flow discovery: any directory under `flows.root` containing `flow.yaml` is a flow; identity = workspace-relative path; recursive nesting allowed. (WM §1) — `Workspace.discover_flows` (posix identities, sorted), 2026-07-04
 - [x] FR-103 (S1) Env profile discovery: every `envs/*.env` is a profile named by filename stem; no registry. Dialect: `KEY=VALUE`, `#` comments, optional quotes stripped, no `export`/interpolation. (WM §2, EC36) — `Workspace.env_profiles` + `parse_env_file` (dialect pins in WM §2), 2026-07-04
-- [ ] FR-104 (S2) Env layering: profile file → process environment, last wins. (WM §3)
+- [x] FR-104 (S2) Env layering: profile file → process environment, last wins. (WM §3) — `layer_env` in `core/workspace.py`; whole process env visible (pinned in WM §3), `tests/test_templating.py`, 2026-07-05
 - [ ] FR-105 (S2) `defaults.request` merges shallowly into request nodes; templates there may reference only `env.*`/`run.*`. (WM §4, EC23)
 - [ ] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7)
 - [x] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box (S1 only scaffolds it; the run becomes executable once the S3 node set lands). (WM, EC34) — `cli/scaffold.py` (fixtures/smoke.json added to the WM listing); scaffold checks clean, `tests/test_cli.py`, 2026-07-05
@@ -81,10 +81,10 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-6xx — Templating
 
-- [ ] FR-601 (S2) Jinja2 `SandboxedEnvironment` + `StrictUndefined` is the only expression/template language, for `{{ }}` config strings and bare `expr:` alike. (D10)
+- [x] FR-601 (S2) Jinja2 `SandboxedEnvironment` + `StrictUndefined` is the only expression/template language, for `{{ }}` config strings and bare `expr:` alike. (D10) — `Renderer` in `core/templating.py` (sandboxed string + native envs; `render`/`evaluate`/`render_config`), `tests/test_templating.py`, 2026-07-05
 - [ ] FR-602 (S2) Context: `env`, `inputs`, `run` (`id`/`timestamp`/`env_name`), `nodes` (frame-local latest, unwrapped), `trigger` (full envelope), `item`/`index` in loop bodies. (EN §6)
 - [ ] FR-603 (S2) Undefined variable → node error to the error port; port-less nodes → unhandled node error, run failed. (EN §6, EC24)
-- [ ] FR-604 (S2) Native-value rule: a config value that is exactly one `{{ expr }}` evaluates to the native value; mixed content renders to string; field schema type applies post-evaluation. (D25)
+- [x] FR-604 (S2) Native-value rule: a config value that is exactly one `{{ expr }}` evaluates to the native value; mixed content renders to string; field schema type applies post-evaluation. (D25) — structural detection + `coerce_value`/`stringify_native` (pins in EN §6); node runners apply field types at M3/M4, `tests/test_templating.py`, 2026-07-05
 
 ## FR-7xx — Observability
 

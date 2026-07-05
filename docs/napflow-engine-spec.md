@@ -380,6 +380,25 @@ Start-port `default:` templates are evaluated once at BIND with only
 `env.*`/`run.*` in scope — the frame does not exist yet; same
 restriction as `defaults.request` (EC36).
 
+Pins made at S2/M1 (2026-07-05, `core/templating.py`):
+- **"Exactly one `{{ expression }}`" is structural**: the parsed
+  template must be a single `{{ }}` output holding one expression.
+  Tag-bearing templates (`{% if %}`, `{% for %}`) always string-render,
+  even when they yield a single value; nothing is ever literal_eval'd
+  (auto-parsing rendered strings was rejected in D25).
+- **Mixed content stringifies with Jinja's own semantics** — a dict in
+  mixed content renders as its Python repr; pass structured data as a
+  single expression instead.
+- **Post-eval coercion** (`coerce_value`): string-typed fields
+  stringify non-string natives as JSON (`json.dumps`, never repr);
+  number/boolean-typed fields accept the string forms env-file values
+  arrive in (`"3"`, `"3.5"`, `"true"`/`"false"` case-insensitive —
+  WM §2: profile values are literal strings); object/list-typed fields
+  reject everything else, including scalars.
+- **Undefined never leaks**: native rendering would return the Jinja
+  `Undefined` object untouched for a bare `{{ missing }}`; the renderer
+  traps it and raises the strict error.
+
 ## 7. Event vocabulary (JSONL file ≡ WebSocket stream)
 
 One JSON object per line/frame. Common fields:

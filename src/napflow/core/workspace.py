@@ -7,11 +7,12 @@ Authoritative spec: docs/napflow-workspace-manifest.md (FR-101/102/103).
   identity = workspace-relative POSIX path (stable across OS); nesting
   is free, including flows inside flow directories.
 - Every `envs/*.env` file is a profile named by its filename stem — no
-  registry. Layering (profile → process env) is engine territory (S2);
-  this module only discovers and parses.
+  registry. `layer_env` layers profile → process environment (FR-104).
 """
 
+import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -131,3 +132,16 @@ def parse_env_file(path: Path) -> dict[str, str]:
                 value = value[1:-1]
             values[key] = value
     return values
+
+
+def layer_env(
+    profile: Mapping[str, str], process_env: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """WM §3 layering — lookup order, last wins: profile file → process
+    environment. The WHOLE process environment participates: a key the
+    profile never mentions is still visible as `{{ env.KEY }}`, which is
+    what makes CI overrides trivial (`API_TOKEN=$CI_SECRET napf run …`).
+    (FR-104)"""
+    if process_env is None:
+        process_env = os.environ
+    return {**profile, **process_env}

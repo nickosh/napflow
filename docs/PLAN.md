@@ -59,6 +59,37 @@ JSONL + masking; `napf run` with reports and exit codes.
 DoD: a linear request→assert flow runs headless with correct exit
 codes; TR-2 (quiescence) and TR-3 (required-End) green.
 
+Milestone breakdown (adopted 2026-07-05) — bottom-up by dependency:
+templating feeds everything, the engine consumes events, request
+consumes the engine, `napf run` wires it all.
+
+- [x] **M1 — Templating render** (landed 2026-07-05): native-value rule
+      (D25) with structural single-expression detection, native vs
+      string render paths, bare-expr evaluation, recursive config
+      rendering, post-eval type coercion (`coerce_value` /
+      `stringify_native`), `TemplateEvaluationError` (routing lands M3);
+      env layering `layer_env` — `core/templating.py`,
+      `core/workspace.py`. (FR-104/601/604; TR-10 core)
+- [ ] **M2 — Events + masking**: `core/events.py` — EN §7 vocabulary
+      with common fields + `seq`, JSONL sink at
+      `.napflow/runs/<flow>/<run-id>.jsonl`, retention per
+      `defaults.run.history`, secret masking at emission (D22).
+      (FR-106/701/702/704)
+- [ ] **M3 — Scheduler + frames**: pump + QUIESCENT sentinel +
+      empty-seed guard (EC08), firing rules, frames, outcome
+      aggregation (D18/D20), message budget, abort, run deadline,
+      `max_seconds` cancellation; start/end/condition/assert runners.
+      (FR-401–411, FR-501/502/504/505, FR-602/603; TR-2, TR-3)
+- [ ] **M4 — request node**: niquests behind the internal adapter
+      module (NFR-09), engine-level retry, non-2xx-is-data (EC13),
+      `defaults.request` merge (EC23), capture valves, timing fields,
+      timeout routing, binary envelope. (FR-105/207/503/703/705/706;
+      NFR-10; TR-8 request paths, TR-10 round-trip)
+- [ ] **M5 — `napf run`**: BIND/ENV lifecycle steps, `--env` / `-i` /
+      `--input-json` / `--timeout`, End outputs → stdout JSON, logs →
+      stderr, junit/json reports, exit codes 0/1/2/130. (FR-803/804;
+      stage DoD check)
+
 ## S3 — full node set + python worker
 
 python + worker subprocess (protocol integrity per EC28), merge,
