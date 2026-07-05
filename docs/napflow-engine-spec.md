@@ -346,6 +346,33 @@ Pins made at S3/M1 (2026-07-06, engine pump dispatch):
 - **fixture** — file read at first fire, cached per run; json/csv
   (csv → list of dicts, header row required).
 - **log** — emits `LogEvent` (masked); forwards unchanged.
+- Pins made at S3/M3 (2026-07-06, engine `_run_node` / `_load_fixture`
+  / `_seed`):
+  - **switch**: the evaluated value is compared to each case `equals`
+    by native equality; the FIRST matching case wins; no match →
+    `default`. Eval errors are unhandled node errors (EC24).
+  - **set/get**: `set.value` renders recursively (D25 native rule) and
+    the WRITTEN value forwards on `out`. `get` of a never-set variable
+    is a node error (`variable_unset`), never a silent null — the EC19
+    corollary: a Get racing its Set is a missing wire, not an empty
+    value.
+  - **fixture**: `file`/`format` are literal in v1 (not templatable);
+    format infers only from `.json`/`.csv` — any other extension needs
+    `format:`. The cache is per RUN, keyed by resolved path (a mid-run
+    file change or deletion cannot split the data). CSV values stay
+    strings (no type inference); short rows fill missing fields with
+    null; a row longer than the header is an error. All failures =
+    `fixture_error` via the EC24 path. Paths resolve against the
+    workspace root (fallback: the flow dir).
+  - **fixture auto-seed (rule 6, D17)**: goes through the normal
+    firing path with a synthetic trigger (`value: null`,
+    `produced_by: "__seed__"`) — `max_seconds` and error handling
+    apply as usual, and the seed keeps `in_flight` non-zero so EC08
+    cannot finalize a fixture-driven flow early.
+  - **log in the CLI**: `napf run` echoes `log` events live to stderr
+    (`[level] label: value`, already masked) — log nodes and worker
+    stdout/stderr are visible as the run executes, not just in the
+    JSONL.
 
 ## 5a. Python worker subprocess (v1)
 

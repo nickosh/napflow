@@ -126,6 +126,22 @@ def _fail(message: str) -> None:
     raise typer.Exit(2)
 
 
+class _LogEcho:
+    """Live `log` events → stderr (FR-512: log nodes and worker
+    stdout/stderr are visible as they happen, already masked)."""
+
+    def write(self, record: dict) -> None:
+        if record.get("event") != "log":
+            return
+        label = record.get("label") or record.get("node") or "log"
+        value = record.get("value")
+        shown = value if isinstance(value, str) else json.dumps(value, default=str)
+        typer.echo(f"[{record.get('level', 'info')}] {label}: {shown}", err=True)
+
+    def close(self) -> None:
+        pass
+
+
 def _parse_inputs(pairs: list[str] | None, input_json: str | None) -> dict:
     """`-i` values arrive as strings (BIND coerces them against the
     port's type); `--input-json` carries structured values; `-i`
@@ -222,7 +238,7 @@ def run(
     stream = EventStream(
         run_id,
         SecretMasker(manifest.environments.secrets, layered),
-        [JsonlSink(log_path), collect],
+        [JsonlSink(log_path), collect, _LogEcho()],
     )
     apply_retention(log_path.parent, manifest.defaults.run.history)
 

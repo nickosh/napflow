@@ -139,10 +139,13 @@ and guards follow; container frames close the stage.
       multi-param function. Engine/CLI now thread `flow_dir` +
       `workspace_root`; unwired-error-port reports carry the payload's
       cause. (FR-108/506/901–906)
-- [ ] **M3 — simple frame-local nodes**: switch, set/get, log, fixture
-      (incl. rule-6 auto-seed of unconnected `trigger`), note runtime
-      no-op. `napf run flows/smoke` passes offline → EC34 first-touch
-      test. (FR-507/512/513/514/517)
+- [x] **M3 — simple frame-local nodes** (landed 2026-07-06): switch
+      (first-match), set/get (unset get = `variable_unset` error, never
+      null), log (+ live stderr echo in `napf run`), fixture (per-run
+      cache keyed by path, CSV pins, rule-6 auto-seed through the
+      normal firing path), note runtime no-op. `napf run flows/smoke`
+      passes offline on a fresh `napf init` → EC34 first-touch test
+      green. Semantics pinned in EN §5. (FR-507/512/513/514/517)
 - [ ] **M4 — guards**: counter (EC16 check-then-decrement) + timeout,
       `reset` inputs (rule 4), frame-local guard state. TR-4 green;
       flagship retry-until-ready example lands as flow + test.

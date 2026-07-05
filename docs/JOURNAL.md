@@ -4,6 +4,22 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S3/M3 simple frame-local nodes + first-touch green
+
+- Done: switch/set/get/log/fixture runners + rule-6 fixture auto-seed
+  (synthetic `__seed__` trigger through the normal firing path) +
+  per-run fixture cache + `_LogEcho` live stderr echo in `napf run`.
+  EC34 first-touch DoD green: fresh `napf init` → `napf run
+  flows/smoke` exits 0 offline. FR-507/512/513/514/517 ticked; FR-403
+  now only awaits rule 4. 242 tests green (13 new).
+- Decided (EN §5 pins): switch first-match native equality; get of an
+  unset variable = `variable_unset` node error (never silent null,
+  EC19); fixture `file`/`format` literal in v1, cache keyed by resolved
+  path, CSV values stay strings, ragged-long rows error; log events
+  echo to stderr live, masked.
+- Next: S3/M4 — guards (counter EC16 check-then-decrement, timeout,
+  `reset` inputs, rule 4) + flagship retry-until-ready example (TR-4).
+
 ## 2026-07-06 — S3/M2 python worker + python node
 
 - Done: `core/worker_main.py` (stdlib-only child; EC28 dup + fd1→fd2,

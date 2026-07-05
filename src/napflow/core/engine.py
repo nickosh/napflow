@@ -22,6 +22,8 @@ enqueued and the pump blocks forever.
 """
 
 import asyncio
+import csv
+import io
 import json
 import re
 import time
@@ -57,13 +59,18 @@ from napflow.core.models.flow import (
     DelayNode,
     EndNode,
     ExprCheck,
+    FixtureNode,
+    GetNode,
+    LogNode,
     MergeNode,
     Node,
     PythonNode,
     RequestNode,
     ResponseTimeCheck,
+    SetNode,
     StartNode,
     StatusCheck,
+    SwitchNode,
 )
 from napflow.core.models.manifest import Manifest, RequestDefaults
 from napflow.core.templating import (
@@ -90,9 +97,8 @@ EXIT_CODES: dict[RunState, int] = {
     "aborted": 130,
 }
 
-# Node types the engine can run; the rest land through S3
-# (set/get/switch/log/fixture at M3, guards at M4, loop/flow at M5).
-# `note` has no runtime behavior but is legal on any canvas.
+# Node types the engine can run; guards land at S3/M4, loop/flow at
+# S3/M5. `note` has no runtime behavior but is legal on any canvas.
 SUPPORTED_NODE_TYPES = frozenset(
     {
         "start",
@@ -103,6 +109,11 @@ SUPPORTED_NODE_TYPES = frozenset(
         "request",
         "merge",
         "python",
+        "switch",
+        "set",
+        "get",
+        "log",
+        "fixture",
         "note",
     }
 )
@@ -308,6 +319,7 @@ class FlowRun:
 
         self._http: HttpClient | None = None
         self._workers: WorkerPool | None = None
+        self._fixture_cache: dict[str, Any] = {}  # per RUN, keyed by path
         self._request_defaults: RequestDefaults = manifest.defaults.request
         self._body_cap = int(self._defaults.body_capture_mb * _MB)
         self._capture_remaining = int(self._defaults.run_capture_mb * _MB)
@@ -510,9 +522,10 @@ class FlowRun:
         self._emit_output(frame, node.id, "out", out)
 
     def _seed(self, frame: Frame) -> None:
-        """Start is seeded once per frame: `out` carries the full inputs
-        dict, and each declared port emits its bound value (FS catalog).
-        Unconnected fixture auto-seeding arrives with fixtures (S3)."""
+        """Sources (rule 6): Start is seeded once per frame — `out`
+        carries the full inputs dict, each declared port emits its
+        bound value (FS catalog); a fixture with an unconnected
+        `trigger` auto-fires once with a synthetic trigger (D17)."""
         start = frame.graph.start
         frame.firing_counts[start.id] = 1
         self._stream.emit(NodeFired(frame=frame.id, node=start.id, firing_no=1))
@@ -520,6 +533,21 @@ class FlowRun:
         outputs += [(p.name, frame.inputs[p.name]) for p in start.config.ports]
         for port, value in outputs:
             self._emit_output(frame, start.id, port, value)
+        for node in frame.graph.nodes.values():
+            if isinstance(node, FixtureNode) and "trigger" not in (
+                frame.graph.in_ports.get(node.id, [])
+            ):
+                seed = Message(
+                    value=None,
+                    msg_id="m-seed",
+                    produced_by="__seed__",
+                    frame=frame.id,
+                    ts=isoformat_ms(datetime.now(UTC)),
+                )
+                self._in_flight += 1
+                task = asyncio.create_task(self._fire(frame, node, seed))
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
 
     async def _fire(
         self,
@@ -653,6 +681,43 @@ class FlowRun:
                 return await self._run_request(frame, node, context)
             case PythonNode():
                 return await self._run_python(frame, node, slot_values or {})
+            case SwitchNode():
+                value = self._renderer.evaluate(node.config.expr, context)
+                port = "default"
+                for case in node.config.cases:  # first matching case wins
+                    if value == case.equals:
+                        port = case.name
+                        break
+                return [(port, trigger.value)]
+            case SetNode():
+                # config `value` templates recursively (D25 native rule)
+                written = self._renderer.render_config(node.config.value, context)
+                frame.variables[node.config.name] = written
+                return [("out", written)]
+            case GetNode():
+                name = node.config.name
+                if name not in frame.variables:
+                    # never a silent null (EC19/EC24): a Get racing its
+                    # Set means a missing wire, not an empty value
+                    raise _NodeError(
+                        "variable_unset",
+                        f"variable {name!r} was never set in this frame"
+                        " (EC19: wire a path from the Set to this trigger)",
+                    )
+                return [("value", frame.variables[name])]
+            case LogNode():
+                self._stream.emit(  # masked at emission (D13/D22)
+                    LogEvent(
+                        frame=frame.id,
+                        node=node.id,
+                        label=node.config.label,
+                        level=node.config.level,
+                        value=trigger.value,
+                    )
+                )
+                return [("out", trigger.value)]
+            case FixtureNode():
+                return [("value", self._load_fixture(node))]
             case DelayNode():
                 seconds = node.config.seconds
                 if isinstance(seconds, str):
@@ -733,6 +798,64 @@ class FlowRun:
                 )
             outputs.append((port, value[port]))
         return outputs
+
+    def _load_fixture(self, node: FixtureNode) -> Any:
+        """FR-514: workspace-relative json/csv, read once and cached
+        per RUN (keyed by resolved path — a mid-run file change or
+        deletion never splits the data). CSV → list of dicts, header
+        row required, values stay strings (no inference)."""
+        root = self._workspace_root or self._flow_dir
+        if root is None:
+            raise _NodeError(
+                "fixture_error",
+                "fixture nodes need workspace_root (or flow_dir) to"
+                " resolve files — pass it to FlowRun/execute_flow",
+            )
+        path = root / node.config.file
+        key = str(path)
+        if key in self._fixture_cache:
+            return self._fixture_cache[key]
+        fmt = node.config.format
+        if fmt is None:
+            fmt = {".json": "json", ".csv": "csv"}.get(path.suffix.lower())
+            if fmt is None:
+                raise _NodeError(
+                    "fixture_error",
+                    f"cannot infer format from {path.suffix!r}"
+                    " — set config.format to json or csv",
+                )
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise _NodeError(
+                "fixture_error", f"cannot read fixture {node.config.file!r}: {e}"
+            ) from e
+        if fmt == "json":
+            try:
+                value: Any = json.loads(text)
+            except ValueError as e:
+                raise _NodeError(
+                    "fixture_error", f"invalid JSON in {node.config.file!r}: {e}"
+                ) from e
+        else:
+            reader = csv.DictReader(io.StringIO(text))
+            if reader.fieldnames is None:
+                raise _NodeError(
+                    "fixture_error",
+                    f"{node.config.file!r} is empty (CSV needs a header row)",
+                )
+            rows = []
+            for line_no, row in enumerate(reader, start=2):
+                if None in row:  # DictReader parks extra fields under None
+                    raise _NodeError(
+                        "fixture_error",
+                        f"{node.config.file!r} line {line_no} has more"
+                        " fields than the header",
+                    )
+                rows.append(dict(row))
+            value = rows
+        self._fixture_cache[key] = value
+        return value
 
     def _resolve_interpreter(self) -> str:
         """FR-108: `python.interpreter` from napflow.yaml; None = the

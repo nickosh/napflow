@@ -215,3 +215,60 @@ def test_junit_report_counts_match(tmp_path, monkeypatch):
     cases = suite.findall("testcase")
     assert len(cases) == int(suite.get("tests"))
     assert any(case.find("failure") is not None for case in cases)
+
+
+def test_first_touch_smoke_flow_offline(tmp_path, monkeypatch):
+    # EC34/FR-107 DoD: a fresh `napf init` workspace runs its smoke
+    # flow (fixture→python→assert) OFFLINE with exit 0 — the fixture
+    # auto-seed drives the run (the start node is fully unwired)
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    monkeypatch.chdir(fresh)
+    assert runner.invoke(app, ["init"]).exit_code == 0
+    result = runner.invoke(app, ["run", "flows/smoke"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["summary"] == {"total": 2, "names": ["Ada", "Linus"]}
+    assert payload["failed_check"] is None
+    assert payload["python_error"] is None
+    assert "passed — asserts: 2 passed, 0 failed" in result.stderr
+
+
+LOG_FLOW = """\
+schema: "napflow/v1"
+flow:
+  name: "logging"
+nodes:
+  - id: "start"
+    type: "start"
+    config:
+      ports:
+        - {name: "msg", type: "string"}
+  - id: "show"
+    type: "log"
+    config:
+      label: "checkpoint"
+  - id: "end"
+    type: "end"
+    config:
+      ports:
+        - {name: "result"}
+edges:
+  - {from: "start.msg", to: "show.in"}
+  - {from: "show.out", to: "end.result"}
+"""
+
+
+def test_log_events_echo_to_stderr_masked(tmp_path, monkeypatch):
+    # FR-512: log nodes are visible live on stderr, secrets masked at
+    # emission (the API_TOKEN value from dev.env is a *TOKEN* secret)
+    ws = make_workspace(tmp_path, flow_yaml=LOG_FLOW)
+    (ws / "flows" / "logging").mkdir()
+    (ws / "flows" / "hello" / "flow.yaml").rename(
+        ws / "flows" / "logging" / "flow.yaml"
+    )
+    monkeypatch.chdir(ws)
+    result = runner.invoke(app, ["run", "flows/logging", "-i", "msg=supersecret-token"])
+    assert result.exit_code == 0, result.stderr
+    assert "[info] checkpoint: ***" in result.stderr
+    assert "supersecret-token" not in result.stderr
