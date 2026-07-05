@@ -498,3 +498,169 @@ def test_event_stream_shape_and_never_fired():
 
 def test_exit_codes_mapping():
     assert EXIT_CODES == {"passed": 0, "failed": 1, "error": 2, "aborted": 130}
+
+
+# --------------------------------------------------------------------------
+# Firing rules 2–3 + merge (S3/M1: TR-1, FR-403, FR-508)
+
+AB = (start({"name": "a", "type": "number"}, {"name": "b", "type": "number"}),)
+
+
+def test_merge_any_forwards_each_delivery():
+    f = flow(
+        *AB,
+        {"id": "m", "type": "merge", "config": {"mode": "any"}},
+        end({"name": "x"}),
+        edges=[("start.a", "m.in1"), ("start.b", "m.in2"), ("m.out", "end.x")],
+    )
+    result, records = run(f, inputs={"a": 1, "b": 2})
+    assert result.state == "passed"
+    fired = [r for r in events_of(records, "node_fired") if r["node"] == "m"]
+    assert [r["firing_no"] for r in fired] == [1, 2]
+    assert result.end_outputs == {"x": 2}  # latest delivery passed through
+
+
+def test_merge_all_rendezvous_emits_dict_and_clears_slots():
+    # TR-1: strict rendezvous — after the emit clears the slots, a lone
+    # re-delivery to ONE input stalls (documented EC03/EC04), it never
+    # re-fires with a stale value from the previous rendezvous.
+    f = flow(
+        *AB,
+        {"id": "m", "type": "merge", "config": {"mode": "all"}},
+        {"id": "dly", "type": "delay", "config": {"seconds": 0.03}},
+        end({"name": "x"}),
+        edges=[
+            ("start.a", "m.in1"),
+            ("start.b", "m.in2"),
+            ("start.a", "dly.in"),
+            ("dly.out", "m.in1"),  # late refill of in1 only
+            ("m.out", "end.x"),
+        ],
+    )
+    result, records = run(f, inputs={"a": 1, "b": 2})
+    assert result.state == "passed"
+    assert result.end_outputs == {"x": {"in1": 1, "in2": 2}}
+    fired = [r for r in events_of(records, "node_fired") if r["node"] == "m"]
+    assert len(fired) == 1  # the partial refill did NOT re-fire
+
+
+def test_merge_all_refires_after_full_refill():
+    f = flow(
+        *AB,
+        {"id": "m", "type": "merge", "config": {"mode": "all"}},
+        {"id": "dly1", "type": "delay", "config": {"seconds": 0.03}},
+        {"id": "dly2", "type": "delay", "config": {"seconds": 0.06}},
+        end({"name": "x"}),
+        edges=[
+            ("start.a", "m.in1"),
+            ("start.b", "m.in2"),
+            ("start.a", "dly1.in"),
+            ("dly1.out", "m.in1"),
+            ("start.out", "dly2.in"),
+            ("dly2.out", "m.in2"),
+            ("m.out", "end.x"),
+        ],
+    )
+    result, records = run(f, inputs={"a": 1, "b": 2})
+    assert result.state == "passed"
+    fired = [r for r in events_of(records, "node_fired") if r["node"] == "m"]
+    assert len(fired) == 2  # second full set → second rendezvous
+    assert result.end_outputs == {"x": {"in1": 1, "in2": {"a": 1, "b": 2}}}
+
+
+def test_merge_collect_batches_count_and_drops_leftovers():
+    f = flow(
+        start(
+            {"name": "a", "type": "number"},
+            {"name": "b", "type": "number"},
+            {"name": "c", "type": "number"},
+        ),
+        {"id": "m", "type": "merge", "config": {"mode": "collect", "count": 2}},
+        end({"name": "x"}),
+        edges=[
+            ("start.a", "m.in1"),
+            ("start.b", "m.in1"),
+            ("start.c", "m.in1"),
+            ("m.out", "end.x"),
+        ],
+    )
+    result, records = run(f, inputs={"a": 1, "b": 2, "c": 3})
+    assert result.state == "passed"
+    fired = [r for r in events_of(records, "node_fired") if r["node"] == "m"]
+    assert len(fired) == 1  # one full batch; the leftover never emits
+    assert result.end_outputs == {"x": [1, 2]}
+
+
+def test_merge_all_partial_rendezvous_is_skipped_not_error():
+    f = flow(
+        *AB,
+        {"id": "gate", "type": "condition", "config": {"expr": "false"}},
+        {"id": "m", "type": "merge", "config": {"mode": "all"}},
+        end({"name": "x", "required": False}),
+        edges=[
+            ("start.a", "m.in1"),
+            ("start.b", "gate.in"),
+            ("gate.true", "m.in2"),  # never delivered
+            ("m.out", "end.x"),
+        ],
+    )
+    result, _ = run(f, inputs={"a": 1, "b": 2})
+    assert result.state == "passed"
+    assert "m" in result.nodes_never_fired  # skipped is first-class
+    assert result.end_outputs == {"x": None}
+
+
+def test_rule2_fires_on_full_slots_and_retains_latest_value():
+    # TR-1's other half: a plain multi-input node (rule 2) KEEPS its
+    # slots across firings — a later delivery overwrites one slot and
+    # re-fires immediately, unlike merge `all`'s clear-on-emit. The
+    # trigger of each firing is the delivery that completed/overwrote
+    # the set, never the first arrival. (Two fabricated inputs on a
+    # condition node — checker-invalid, runtime-tolerated, see header.)
+    f = flow(
+        start(),
+        {"id": "dly1", "type": "delay", "config": {"seconds": 0.03}},
+        {"id": "dly2", "type": "delay", "config": {"seconds": 0.09}},
+        {
+            "id": "joint",
+            "type": "condition",
+            "config": {"expr": "trigger.meta.produced_by != 'start.out'"},
+        },
+        end({"name": "x", "required": False}),
+        edges=[
+            ("start.out", "joint.in"),  # slot filled at t≈0, absorbed
+            ("start.out", "dly1.in"),
+            ("dly1.out", "joint.other"),  # completes the set → firing 1
+            ("start.out", "dly2.in"),
+            ("dly2.out", "joint.in"),  # overwrites `in` → firing 2
+            ("joint.true", "end.x"),
+        ],
+    )
+    result, records = run(f)
+    assert result.state == "passed"
+    fired = [r for r in events_of(records, "node_fired") if r["node"] == "joint"]
+    assert len(fired) == 2  # slots retained: one overwrite re-fired
+    routed = [
+        r
+        for r in events_of(records, "message_emitted")
+        if r["from_port"] == "joint.true"
+    ]
+    assert len(routed) == 2  # both triggers were the completing delivery
+    assert result.end_outputs["x"] is not None
+
+
+def test_budget_cycle_through_merge():
+    # TR-1 fast-cycle backstop: merge `any` inside a guardless cycle —
+    # the inline (in-pump) merge emission must hit the budget valve and
+    # finalize as run `error`, exactly like task-side emissions.
+    f = flow(
+        start(),
+        {"id": "a", "type": "condition", "config": {"expr": "true"}},
+        {"id": "m", "type": "merge", "config": {"mode": "any"}},
+        end({"name": "x", "required": False}),
+        edges=[("start.out", "a.in"), ("a.true", "m.in1"), ("m.out", "a.in")],
+    )
+    result, records = run(f, mani=manifest(message_budget=25))
+    assert result.state == "error"
+    assert result.error_reason == "budget_exhausted"
+    assert events_of(records, "run_finished")

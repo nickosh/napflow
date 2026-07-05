@@ -1,11 +1,12 @@
 """Execution engine: scheduler, frames, node runners (EN §1–§6).
 
-S2/M3 scope: the full scheduler (QUIESCENT sentinel + empty-seed guard,
+S2/M3 laid down the scheduler (QUIESCENT sentinel + empty-seed guard,
 budget, deadline, abort, `max_seconds` cancellation), frames, outcome
-aggregation (D18/D20), and runners for start/end/condition/assert —
-plus delay, pulled forward from S3 because TR-2's sentinel-race tests
-need an async node. Remaining node types land in S3/S4; a flow using
-one is a run `error` (`unsupported_node_type`), never a crash.
+aggregation (D18/D20), and runners for start/end/condition/assert/
+delay. S3/M1 grew the pump dispatch to firing rules 2–3: latest-value
+slots for multi-input nodes and the merge node (`any`/`all`/`collect`).
+Remaining node types land through S3; a flow using one is a run `error`
+(`unsupported_node_type`), never a crash.
 
 The engine trusts its input: LOAD and CHECK are the CLI's lifecycle
 steps (`napf run` refuses E-codes, M5). BIND and ENV happen here — the
@@ -53,6 +54,7 @@ from napflow.core.models.flow import (
     DelayNode,
     EndNode,
     ExprCheck,
+    MergeNode,
     Node,
     RequestNode,
     ResponseTimeCheck,
@@ -78,11 +80,12 @@ EXIT_CODES: dict[RunState, int] = {
     "aborted": 130,
 }
 
-# Node types the S2 engine can run; the rest land S3 (python worker,
-# merge, guards, loop, flow, set/get, switch, log, fixture). `note` has
-# no runtime behavior but is legal on any canvas.
+# Node types the engine can run; the rest land through S3 (python
+# worker at M2, set/get/switch/log/fixture at M3, guards at M4,
+# loop/flow at M5). `note` has no runtime behavior but is legal on any
+# canvas.
 SUPPORTED_NODE_TYPES = frozenset(
-    {"start", "end", "condition", "assert", "delay", "request", "note"}
+    {"start", "end", "condition", "assert", "delay", "request", "merge", "note"}
 )
 
 _MB = 1024 * 1024
@@ -178,11 +181,17 @@ class _Graph:
         self.start = next(n for n in flow.nodes if isinstance(n, StartNode))
         self.end = next(n for n in flow.nodes if isinstance(n, EndNode))
         self.out_edges: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        # connected input ports per node, in edge-declaration order —
+        # the rule-2/3 firing set AND merge-`all`'s emit key order
+        self.in_ports: dict[str, list[str]] = {}
         for edge in flow.edges:
             from_node, _, from_port = edge.from_.partition(".")
             to_node, _, to_port = edge.to.partition(".")
             key = (from_node, from_port)
             self.out_edges.setdefault(key, []).append((to_node, to_port))
+            ports = self.in_ports.setdefault(to_node, [])
+            if to_port not in ports:
+                ports.append(to_port)
 
 
 @dataclass
@@ -199,6 +208,10 @@ class Frame:
     node_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     firing_counts: dict[str, int] = field(default_factory=dict)
     end_values: dict[str, Any] = field(default_factory=dict)
+    # latest-value slots per multi-input node (rule 2 retains across
+    # firings; merge `all` clears on emit) + merge `collect` buffers
+    slots: dict[str, dict[str, Any]] = field(default_factory=dict)
+    collected: dict[str, list[Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -392,19 +405,76 @@ class FlowRun:
             item = await self._queue.get()
             if item is _QUIESCENT or item is _FATAL:
                 break
-            delivery: _Delivery = item
-            node = frame.graph.nodes.get(delivery.node_id)
-            if isinstance(node, EndNode):
-                # rule 5: End accumulates latest value, never fires
-                frame.end_values[delivery.port] = delivery.message.value
-            elif node is not None:
-                # rule 1: every supported non-End node is single-input —
-                # fire per delivery (rule-2 slots arrive with python, S3)
-                self._in_flight += 1
-                task = asyncio.create_task(self._fire(frame, node, delivery.message))
-                self._tasks.add(task)
-                task.add_done_callback(self._tasks.discard)
+            try:
+                self._dispatch(frame, item)
+            except _BudgetExhausted as e:
+                # inline merge firings emit inside the pump (EN §4)
+                self._set_fatal("budget_exhausted", str(e), e.edge)
             self._dec()  # delivery consumed
+
+    def _dispatch(self, frame: Frame, delivery: _Delivery) -> None:
+        """Firing rules per delivery (EN §4). Absorbed deliveries — a
+        slot fill short of rendezvous, a `collect` append short of
+        `count` — update state and emit nothing."""
+        node = frame.graph.nodes.get(delivery.node_id)
+        if node is None:
+            return
+        if isinstance(node, EndNode):
+            # rule 5: End accumulates latest value, never fires
+            frame.end_values[delivery.port] = delivery.message.value
+            return
+        if isinstance(node, MergeNode):
+            self._deliver_merge(frame, node, delivery)  # rule 3
+            return
+        connected = frame.graph.in_ports.get(node.id, [])
+        slot_values: dict[str, Any] | None = None
+        if len(connected) > 1:
+            # rule 2: latest-value slot per connected input; fire once
+            # all are filled; later deliveries overwrite their slot and
+            # re-fire immediately (slots retained, unlike merge `all`)
+            slots = frame.slots.setdefault(node.id, {})
+            slots[delivery.port] = delivery.message.value
+            if len(slots) < len(connected):
+                return
+            slot_values = dict(slots)  # snapshot at decision time
+        # rule 1 — or a complete rule-2 slot set: fire per delivery
+        self._in_flight += 1
+        task = asyncio.create_task(
+            self._fire(frame, node, delivery.message, slot_values)
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def _deliver_merge(
+        self, frame: Frame, node: MergeNode, delivery: _Delivery
+    ) -> None:
+        """Rule 3: `any` forwards every delivery; `all` is a strict
+        rendezvous (slots CLEARED on emit — no stale re-fire, EC03/04);
+        `collect` batches `count` values, leftovers never emit. Instant
+        node, fired inline: no task, no ceiling (an explicit
+        `max_seconds` is accepted and never trips — FS)."""
+        cfg = node.config
+        if cfg.mode == "any":
+            out: Any = delivery.message.value
+        elif cfg.mode == "all":
+            slots = frame.slots.setdefault(node.id, {})
+            slots[delivery.port] = delivery.message.value
+            connected = frame.graph.in_ports[node.id]
+            if len(slots) < len(connected):
+                return
+            out = {port: slots[port] for port in connected}
+            slots.clear()
+        else:  # collect
+            bucket = frame.collected.setdefault(node.id, [])
+            bucket.append(delivery.message.value)
+            if len(bucket) < (cfg.count or 1):
+                return
+            out = list(bucket)
+            bucket.clear()
+        firing_no = frame.firing_counts.get(node.id, 0) + 1
+        frame.firing_counts[node.id] = firing_no
+        self._stream.emit(NodeFired(frame=frame.id, node=node.id, firing_no=firing_no))
+        self._emit_output(frame, node.id, "out", out)
 
     def _seed(self, frame: Frame) -> None:
         """Start is seeded once per frame: `out` carries the full inputs
@@ -418,7 +488,13 @@ class FlowRun:
         for port, value in outputs:
             self._emit_output(frame, start.id, port, value)
 
-    async def _fire(self, frame: Frame, node: Node, trigger: Message) -> None:
+    async def _fire(
+        self,
+        frame: Frame,
+        node: Node,
+        trigger: Message,
+        slot_values: dict[str, Any] | None = None,
+    ) -> None:
         ceiling = self._max_seconds(node)
         try:
             firing_no = frame.firing_counts.get(node.id, 0) + 1
@@ -426,7 +502,7 @@ class FlowRun:
             self._stream.emit(
                 NodeFired(frame=frame.id, node=node.id, firing_no=firing_no)
             )
-            coro = self._run_node(frame, node, trigger)
+            coro = self._run_node(frame, node, trigger, slot_values)
             if ceiling is not None:
                 async with asyncio.timeout(ceiling):
                     outputs = await coro
@@ -516,8 +592,15 @@ class FlowRun:
     # -- node runners (EN §5) ------------------------------------------------
 
     async def _run_node(
-        self, frame: Frame, node: Node, trigger: Message
+        self,
+        frame: Frame,
+        node: Node,
+        trigger: Message,
+        slot_values: dict[str, Any] | None,
     ) -> list[tuple[str, Any]]:
+        """`slot_values` is the rule-2 snapshot (port → value) for
+        multi-input nodes — None on rule-1 firings. Its consumer is the
+        python runner (declared inputs only, S3/M2)."""
         context = self._template_context(frame, trigger)
         match node:
             case ConditionNode():

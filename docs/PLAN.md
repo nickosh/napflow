@@ -111,7 +111,41 @@ pass, exit 1 on a failing assert; TR-2 green; TR-3 root-frame green
 python + worker subprocess (protocol integrity per EC28), merge,
 guards, loop, flow, set/get, switch, delay, log, fixture, note.
 DoD: flagship retry example runs; `napf run flows/smoke` passes offline
-(first-touch, EC34); TR-1/4/5/6/8/9/10 green.
+(first-touch, EC34); TR-1/4/5/6/8/10 green (TR-9's protocol-integrity
+half lands here; its through-the-server half completes in S4).
+
+Milestone breakdown (adopted 2026-07-06) — worker-first: the python
+worker is the riskiest chunk (subprocess lifecycle, Windows), so it
+lands right after its one dependency (rule-2 slot firing); simple nodes
+and guards follow; container frames close the stage.
+
+- [x] **M1 — firing rules 2–3 + merge** (landed 2026-07-06): pump
+      dispatch grew the latest-value slot machinery (rule 2: fire when
+      all connected inputs filled, later deliveries overwrite +
+      re-fire, snapshot semantics pinned in EN §4) and merge
+      `any`/`all`/`collect` fired inline (rule 3: `all` clears slots on
+      emit, `collect` count-based, leftovers dropped). TR-1 green in
+      full — rule-2 retention proved with a fabricated two-input
+      condition node (engine trusts the checker), so it didn't have to
+      wait for M2's python nodes. (FR-403 rules 2–3, FR-508)
+- [ ] **M2 — python worker + python node**: persistent worker
+      subprocess, JSON-lines protocol, EC28 fd-dup protocol integrity,
+      timeout-kill-respawn, crash isolation, Windows spawn semantics
+      (FR-901–906); python runner incl. AssertionError→python-assert
+      (FR-506); `python.interpreter` (FR-108). TR-6 green; TR-9
+      print-flood half; TR-1 completes.
+- [ ] **M3 — simple frame-local nodes**: switch, set/get, log, fixture
+      (incl. rule-6 auto-seed of unconnected `trigger`), note runtime
+      no-op. `napf run flows/smoke` passes offline → EC34 first-touch
+      test. (FR-507/512/513/514/517)
+- [ ] **M4 — guards**: counter (EC16 check-then-decrement) + timeout,
+      `reset` inputs (rule 4), frame-local guard state. TR-4 green;
+      flagship retry-until-ready example lands as flow + test.
+      (FR-509/510)
+- [ ] **M5 — subflows + loops**: hierarchical frames (FR-404), flow
+      node w/ implicit error port (FR-516), loop node (FR-515).
+      Completes TR-3 (cross-frame), TR-5, TR-8. Stage close: bump
+      0.1.0.dev3. (D20/D21/D24)
 
 ## S4 — server + UI canvas
 

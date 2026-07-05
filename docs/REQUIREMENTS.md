@@ -49,7 +49,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 - [x] FR-401 (S2) Message-driven scheduler: single asyncio loop per run, `in_flight` accounting, QUIESCENT sentinel enqueued by the zero-reaching decrement. (EN §3, D14) — `FlowRun._pump`/`_dec` in `core/engine.py`, sentinel-race test in `tests/test_engine.py`, 2026-07-05
 - [x] FR-402 (S2) Empty-seed guard: finalize immediately when post-seed `in_flight == 0`. (EC08) — `_pump` post-seed return, `test_empty_seed_finalizes_immediately`, 2026-07-05
-- [ ] FR-403 (S2) Firing rules 1–6 exactly as specified — including merge `all`/`collect` slot-clearing vs rule-2 latest-value retention. (EN §4)
+- [ ] FR-403 (S2) Firing rules 1–6 exactly as specified — including merge `all`/`collect` slot-clearing vs rule-2 latest-value retention. (EN §4) — rules 1/5 at S2/M3; rules 2–3 at S3/M1 (`_dispatch`/`_deliver_merge` in `core/engine.py`, TR-1 tests, 2026-07-06); rule 4 lands S3/M4 (guards), rule 6 fixture-seed S3/M3
 - [ ] FR-404 (S2) Frames: per-frame variables, inputs, firing counts, guard state; hierarchical frame ids; data crosses only via Start/End. (EN §1)
 - [ ] FR-405 (S2) Outcome aggregation: asserts, python-asserts, unhandled error-port messages roll up run-wide; run state = worst outcome in the frame tree. (D20)
 - [x] FR-406 (S2) Run states `passed|failed|error|aborted` per EN §2 definitions, incl. required-End-port failure (D18); exit codes 0/1/2/130. — `_finalize` + `EXIT_CODES` in `core/engine.py` (error_reason vocabulary pinned in EN §2), `tests/test_engine.py`, 2026-07-05
@@ -68,7 +68,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [x] FR-505 (S2) `assert` — check kinds `status`/`expr`/`response_time`, ops `present|equals|not_equals|contains|matches|gt|lt`, `mode: report_all|fail_fast`; emits `assert_result` events; forwards on `passed`/`failed`. (FS) — `_run_assert`/`_eval_check` (present-op + label pins in EN §2), assert test block in `tests/test_engine.py`, 2026-07-05
 - [ ] FR-506 (S3) `python` — declared inputs only; JSON-serializable I/O; `AssertionError` → error port + report as python-assert; other exceptions → error port with traceback; declared outputs may not be named `error`; params with literal defaults = optional inputs, others required. (FS, E012, EC36)
 - [ ] FR-507 (S3) `switch` — expr + cases, `default` port, pass-through. (FS)
-- [ ] FR-508 (S3) `merge` — `any` (immediate forward), `all` (rendezvous, clear on emit), `collect` (count-based list). (FS, EN §4)
+- [x] FR-508 (S3) `merge` — `any` (immediate forward), `all` (rendezvous, clear on emit), `collect` (count-based list). (FS, EN §4) — inline pump rule-3 dispatch (`_deliver_merge`, instant-node + emit-order pins in EN §4), merge test block in `tests/test_engine.py`, 2026-07-06
 - [ ] FR-509 (S3) `counter` — check-then-decrement: exactly `count` passes on `continue`, then every message → `exhausted`; per-frame reset; optional `reset` input restores count silently. (FS, EC16)
 - [ ] FR-510 (S3) `timeout` — first-message timestamp; lazy evaluation on arrival; `continue`/`expired`; `reset` clears. (FS)
 - [x] FR-511 (S3) `delay` — templatable seconds, cancellable sleep, pass-through. (FS) — pulled forward to S2/M3 (TR-2 needed an async node); `_run_node` delay arm, templated-seconds + cancellation tests in `tests/test_engine.py`, 2026-07-05
@@ -139,7 +139,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## Test requirements (priority order — highest bug-risk first)
 
-- [ ] TR-1 Merge semantics under fast cycles: `all` clears slots vs rule-2 latest-value retention. (EN §4)
+- [x] TR-1 Merge semantics under fast cycles: `all` clears slots vs rule-2 latest-value retention. (EN §4) — `all` clear/stall/refill + rule-2 retention-with-refire + collect batching + fast-cycle budget backstop through inline merge, merge test block in `tests/test_engine.py`, 2026-07-06; guarded-cycle variant re-exercised at S3/M4 with `counter` (flagship example)
 - [x] TR-2 Quiescence detection: sentinel race + empty-seed finalize. (D14, EC08) — `test_quiescence_under_overlapping_async_firings` + `test_empty_seed_finalizes_immediately`, 2026-07-05
 - [ ] TR-3 Required-End-port failure path: unreached required output ⇒ `failed` ⇒ exit 1, across subflow and loop frames. (D18, D20) — root-frame half green at S2/M3 (`tests/test_engine.py` TR-3 block); subflow/loop frames complete it at S3
 - [ ] TR-4 Guard exhaustion routing: `exhausted`/`expired` as pass-through outputs; W106; counter N-passes boundary (Nth vs N+1th message). (D19, EC16)

@@ -258,6 +258,22 @@ User-facing consequences of rules 2–3 (EC03/EC04):
   serialized naturally by the event loop; python firings serialize at
   the worker (§5a). (EC36)
 
+Pins made at S3/M1 (2026-07-06, engine pump dispatch):
+- **Rule-2 trigger + snapshot**: the delivery that completes (or later
+  overwrites) the slot set is that firing's `trigger`; the firing sees
+  a snapshot of slot values taken at decision time — a later overwrite
+  re-fires with a new snapshot, it never mutates an in-flight firing.
+- **merge `all` emit order**: dict keys follow the edge-declaration
+  order of the connected inputs (deterministic per file; don't rely on
+  it beyond determinism).
+- **merge is instant**: fired inline by the pump — no task, no ceiling
+  (an explicit `max_seconds` is accepted and never trips, FS catalog).
+- **Absorbed deliveries emit nothing**: a rule-2/`all` slot fill short
+  of rendezvous or a `collect` append short of `count` updates state
+  only — the edge's `message_emitted` already recorded the arrival.
+  `collect` leftovers at quiescence are dropped (the node simply never
+  fires again; skipped-node reporting applies if it never fired).
+
 ## 5. Node runners
 
 - **request** — shared per-run `niquests.AsyncSession` (connection pooling,

@@ -4,6 +4,20 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S3/M1 firing rules 2–3 + merge
+
+- Done: pump dispatch refactor in `core/engine.py` — rule-2 latest-value
+  slots (fire on full set, overwrite re-fires, decision-time snapshot
+  plumbed to runners for M2's python) + merge `any`/`all`/`collect`
+  fired inline (`all` clears on emit, collect leftovers dropped). TR-1
+  + FR-508 ticked; 212 tests green (7 new). EN §4 pin block added.
+- Decided: S3 milestone order adopted worker-first (owner call, PLAN):
+  M1 rules/merge → M2 python worker → M3 simple nodes → M4 guards →
+  M5 loop/flow — subprocess risk surfaces earliest after its one
+  dependency.
+- Next: S3/M2 — python worker subprocess (FR-901–906, EC28 fd-dup
+  protocol integrity) + python node runner (FR-506) + FR-108.
+
 ## 2026-07-06 — Linux first-class (D26) + S4 UI shell pinned
 
 - Done: verified zero platform-conditional code in src/tests and 3-OS CI
