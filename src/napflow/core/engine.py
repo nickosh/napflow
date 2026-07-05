@@ -33,13 +33,18 @@ from napflow import __version__
 from napflow.core.events import (
     AssertResult,
     BudgetWarning,
+    CaptureWarning,
     EventStream,
     MessageEmitted,
     NodeFired,
+    RequestFailed,
+    RequestFinished,
+    RequestStarted,
     RunFinished,
     RunStarted,
     isoformat_ms,
 )
+from napflow.core.httpclient import HttpClient, TransportError, WireResponse
 from napflow.core.models import FlowFile
 from napflow.core.models.flow import (
     AssertCheck,
@@ -49,16 +54,18 @@ from napflow.core.models.flow import (
     EndNode,
     ExprCheck,
     Node,
+    RequestNode,
     ResponseTimeCheck,
     StartNode,
     StatusCheck,
 )
-from napflow.core.models.manifest import Manifest
+from napflow.core.models.manifest import Manifest, RequestDefaults
 from napflow.core.templating import (
     Renderer,
     TemplateEvaluationError,
     TypeCoercionError,
     coerce_value,
+    stringify_native,
 )
 
 RunState = Literal["passed", "failed", "error", "aborted"]
@@ -72,11 +79,13 @@ EXIT_CODES: dict[RunState, int] = {
 }
 
 # Node types the S2 engine can run; the rest land S3 (python worker,
-# merge, guards, loop, flow, set/get, switch, log, fixture) and S2/M4
-# (request). `note` has no runtime behavior but is legal on any canvas.
+# merge, guards, loop, flow, set/get, switch, log, fixture). `note` has
+# no runtime behavior but is legal on any canvas.
 SUPPORTED_NODE_TYPES = frozenset(
-    {"start", "end", "condition", "assert", "delay", "note"}
+    {"start", "end", "condition", "assert", "delay", "request", "note"}
 )
+
+_MB = 1024 * 1024
 
 # Node-error OUTLETS: where a failed firing routes (D24, EC24). Distinct
 # from error-CLASS ports (below): assert.failed carries check failures,
@@ -258,6 +267,12 @@ class FlowRun:
         self._asserts_failed = 0
         self._unhandled: list[dict[str, Any]] = []
 
+        self._http: HttpClient | None = None
+        self._request_defaults: RequestDefaults = manifest.defaults.request
+        self._body_cap = int(self._defaults.body_capture_mb * _MB)
+        self._capture_remaining = int(self._defaults.run_capture_mb * _MB)
+        self._capture_warned = False
+
     # -- public ------------------------------------------------------------
 
     def abort(self) -> None:
@@ -302,6 +317,8 @@ class FlowRun:
             if self._tasks:
                 await asyncio.gather(*self._tasks, return_exceptions=True)
 
+        if self._http is not None:  # FR-408: session closed on every exit
+            await self._http.close()
         return self._finalize(frame, started)
 
     # -- lifecycle: BIND / ENV (EN §2) --------------------------------------
@@ -508,6 +525,8 @@ class FlowRun:
                 return [("true" if result else "false", trigger.value)]
             case AssertNode():
                 return self._run_assert(frame, node, trigger, context)
+            case RequestNode():
+                return await self._run_request(frame, node, context)
             case DelayNode():
                 seconds = node.config.seconds
                 if isinstance(seconds, str):
@@ -516,6 +535,156 @@ class FlowRun:
                 return [("out", trigger.value)]
             case _:  # unreachable: _check_supported gates node types
                 raise _NodeError("internal", f"no runner for type '{node.type}'")
+
+    async def _run_request(
+        self, frame: Frame, node: RequestNode, context: dict[str, Any]
+    ) -> list[tuple[str, Any]]:
+        """FR-503: engine-level retry over the shared session; non-2xx
+        emits on `response`, transport failures on `error` (EC13).
+        `max_seconds` (default 300, D24) is enforced above this by
+        `_fire` — it cancels all attempts at once."""
+        if self._http is None:
+            self._http = HttpClient()
+        cfg = self._effective_request_config(node, context)
+        attempts: int = cfg["retry_attempts"]
+        for attempt in range(1, attempts + 1):
+            self._stream.emit(
+                RequestStarted(
+                    frame=frame.id,
+                    node=node.id,
+                    method=cfg["method"],
+                    url=cfg["url"],
+                    headers=cfg["headers"],
+                    body_preview=_preview(cfg["body"]),
+                    attempt=attempt,
+                )
+            )
+            try:
+                wire = await self._http.request(
+                    method=cfg["method"],
+                    url=cfg["url"],
+                    headers=cfg["headers"],
+                    query=cfg["query"],
+                    body=cfg["body"],
+                    timeout_s=cfg["timeout_s"],
+                    verify_tls=cfg["verify_tls"],
+                    http_version=node.config.http_version,
+                )
+            except TransportError as e:
+                will_retry = attempt < attempts
+                self._stream.emit(
+                    RequestFailed(
+                        frame=frame.id,
+                        node=node.id,
+                        error_kind=e.kind,
+                        message=str(e),
+                        attempt=attempt,
+                        will_retry=will_retry,
+                    )
+                )
+                if not will_retry:
+                    raise _NodeError(
+                        e.kind, f"transport failure after {attempt} attempt(s): {e}"
+                    ) from e
+                continue
+            self._stream.emit(
+                RequestFinished(
+                    frame=frame.id,
+                    node=node.id,
+                    status=wire.status,
+                    http_version=wire.http_version,
+                    headers=wire.headers,
+                    body=self._capture_body(wire),
+                    size_bytes=wire.size_bytes,
+                    timing=wire.timing,
+                    attempt=attempt,
+                    retries_total=attempt - 1,
+                )
+            )
+            value = {
+                "status": wire.status,
+                "headers": wire.headers,
+                "body": wire.body,
+                "elapsed_ms": wire.elapsed_ms,
+                "url": wire.url,
+                "http_version": wire.http_version,
+                "attempt": attempt,
+            }
+            return [("response", value)]
+        raise AssertionError("unreachable: retry loop returns or raises")
+
+    def _effective_request_config(
+        self, node: RequestNode, context: dict[str, Any]
+    ) -> dict[str, Any]:
+        """`defaults.request` merges SHALLOWLY (FR-105/EC23): node keys
+        win wholesale, `retry:` replaces the whole block. Default-origin
+        templates render with env/run scope only — `inputs`/`nodes`
+        there are StrictUndefined by design."""
+        cfg = node.config
+        defaults = self._request_defaults
+        restricted = {"env": context["env"], "run": context["run"]}
+
+        def render(value: Any, from_defaults: bool) -> Any:
+            return self._renderer.render_config(
+                value, restricted if from_defaults else context
+            )
+
+        def merged(name: str) -> tuple[Any, bool]:
+            node_value = getattr(cfg, name)
+            if node_value is None:
+                return getattr(defaults, name), True
+            return node_value, False
+
+        headers_raw, headers_default = merged("headers")
+        headers = render(headers_raw, headers_default)
+        if not isinstance(headers, Mapping):
+            raise TypeCoercionError(headers, "object (headers)")
+        query = render(cfg.query, False)
+        if query is not None and not isinstance(query, Mapping):
+            raise TypeCoercionError(query, "object (query)")
+        timeout_raw, timeout_default = merged("timeout_s")
+        verify_raw, verify_default = merged("verify_tls")
+        retry = cfg.retry if cfg.retry is not None else defaults.retry
+        return {
+            "method": render(cfg.method, False).upper(),
+            "url": coerce_value(render(cfg.url, False), "string"),
+            "headers": {str(k): coerce_value(v, "string") for k, v in headers.items()},
+            "query": (
+                {str(k): coerce_value(v, "string") for k, v in query.items()}
+                if query is not None
+                else None
+            ),
+            "body": render(cfg.body, False),
+            "timeout_s": coerce_value(render(timeout_raw, timeout_default), "number"),
+            "verify_tls": coerce_value(render(verify_raw, verify_default), "boolean"),
+            "retry_attempts": retry.max_attempts,
+        }
+
+    def _capture_body(self, wire: WireResponse) -> Any:
+        """Capture valves (FR-703/706): the EVENT copy of a body is
+        capped per body and per run; the port value always carries the
+        full body. Truncation is a marked wrapper, never a silent cut."""
+        size = wire.size_bytes
+        self._capture_remaining -= size
+        run_cap = int(self._defaults.run_capture_mb * _MB)
+        if not self._capture_warned and self._capture_remaining <= run_cap // 10:
+            self._capture_warned = True
+            remaining_mb = max(self._capture_remaining, 0) / _MB
+            self._stream.emit(CaptureWarning(remaining_mb=round(remaining_mb, 3)))
+        if size <= self._body_cap and self._capture_remaining >= 0:
+            return wire.body
+        body = wire.body
+        if isinstance(body, dict) and body.get("__binary__") is True:
+            return body | {
+                "base64": body["base64"][: self._body_cap],
+                "truncated": True,
+            }
+        text = body if isinstance(body, str) else stringify_native(body)
+        return {
+            "__truncated__": True,
+            "size_bytes": size,
+            "prefix": text[: self._body_cap],
+        }
 
     def _run_assert(
         self,

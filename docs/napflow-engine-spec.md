@@ -302,6 +302,30 @@ User-facing consequences of rules 2–3 (EC03/EC04):
   `aborted`; asserts/errors it already recorded still aggregate per D20)
   and fires the same port with `{state: "aborted", error_kind:
   "timeout"}` (D24).
+- Pins made at S2/M4 (2026-07-05, `core/httpclient.py` + engine):
+  - **Adapter seam (NFR-09)**: `core/httpclient.py` is the only module
+    importing niquests, guarded by a test. `http_version` pinning uses
+    one cached session per version option (session-level disable flags;
+    best-effort where niquests lacks a flag).
+  - **Retry** = immediate re-attempt (no backoff in v1 — the config
+    surface pinned at M1 has only `max_attempts`), transport failures
+    only, never status-based. `retries_total` in `request_finished` =
+    attempts performed − 1.
+  - **Body decode**: JSON mime → native value; `text/*` and XML/form
+    mimes → text; anything else → the binary envelope (FR-207); empty
+    body → null. Capture accounting uses the encoded form (base64
+    length for binary). **Body encode**: dict/list → JSON; str → UTF-8
+    raw with no implicit content-type; other scalars →
+    `stringify_native`; an inbound envelope sends its decoded bytes
+    (its `content_type` applies when no header is set).
+  - **Header/query values stringify post-render** (D25 Scalar pin) —
+    `n: 3` arrives as `"3"`.
+  - **Capture valves cap the EVENT copy only**; the `response` port
+    value always carries the full body in memory. Truncation wrappers:
+    text → `{"__truncated__": true, "size_bytes", "prefix"}`; binary →
+    the envelope with sliced base64 + `"truncated": true`.
+  - **Timing** best-effort per §7: `total_ms` always; dns/connect/tls/
+    ttfb only where `conn_info` exposes the latency.
 - **set/get** — frame variable map; set forwards written value.
 - **fixture** — file read at first fire, cached per run; json/csv
   (csv → list of dicts, header row required).

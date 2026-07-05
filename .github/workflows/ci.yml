@@ -27,3 +27,21 @@ jobs:
         run: uv run lint-imports
       - name: Tests
         run: uv run pytest
+
+  # NFR-10: niquests pulls urllib3-future — napflow.core gets installed
+  # into users' pytest envs next to requests/botocore; that combination
+  # must keep working or the "importable pytest surface" promise breaks.
+  compat:
+    name: dependency compat (requests + botocore)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Install napflow alongside requests + botocore
+        run: |
+          uv venv
+          uv pip install . requests botocore pytest
+      - name: Import both HTTP stacks side by side, then run the suite
+        run: |
+          uv run --no-sync python -c "import requests, botocore, niquests, napflow.core"
+          uv run --no-sync pytest

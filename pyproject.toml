@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "jinja2>=3.1",
+    "niquests>=3.7",
     "pydantic>=2.7",
     "ruamel.yaml>=0.18",
     "typer>=0.12",

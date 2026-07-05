@@ -86,11 +86,13 @@ consumes the engine, `napf run` wires it all.
       green. Left open by design: FR-403 rules 2–4 (python/merge/guards,
       S3), FR-404 hierarchical frames (S3), FR-408 session close (M4),
       FR-410 error-port routing (M4/S3), FR-411 `--timeout` flag (M5).
-- [ ] **M4 — request node**: niquests behind the internal adapter
-      module (NFR-09), engine-level retry, non-2xx-is-data (EC13),
-      `defaults.request` merge (EC23), capture valves, timing fields,
-      timeout routing, binary envelope. (FR-105/207/503/703/705/706;
-      NFR-10; TR-8 request paths, TR-10 round-trip)
+- [x] **M4 — request node** (landed 2026-07-05): niquests behind
+      `core/httpclient.py` (NFR-09, guarded by test), engine-level
+      retry, non-2xx-is-data (EC13), `defaults.request` merge (EC23),
+      capture valves, timing fields, timeout→error-port routing, binary
+      envelope; NFR-10 compat CI job; local-server test suite — no
+      external network. (FR-105/207/503/703/705/706 + FR-408 session
+      close; NFR-09/10; TR-8 request paths, TR-10 complete)
 - [ ] **M5 — `napf run`**: BIND/ENV lifecycle steps, `--env` / `-i` /
       `--input-json` / `--timeout`, End outputs → stdout JSON, logs →
       stderr, junit/json reports, exit codes 0/1/2/130. (FR-803/804;

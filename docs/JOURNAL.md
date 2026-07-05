@@ -4,6 +4,24 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-05 — S2/M4 request node + niquests adapter
+
+- Done: `core/httpclient.py` (the ONLY niquests import, NFR-09 — guard
+  test) + `_run_request` in the engine: shared per-run sessions (one
+  per http_version option), engine-level retry (transport-only,
+  immediate), non-2xx-is-data (EC13), defaults.request shallow merge
+  (EC23), body codec incl. binary envelope (FR-207), capture valves
+  (event copy only), best-effort timing, timeout→error-port (TR-8
+  request paths); NFR-10 compat CI job. Tests run against a local
+  threaded HTTP server — zero external network. 192 tests (17 new).
+  FR-105/207/408/503/703/705/706 + TR-10 + NFR-09/10 ticked.
+- Decided (EN §5 pins): retry = immediate re-attempt, max_attempts
+  only; retries_total = attempts−1; decode json→native / text →
+  str / else envelope, empty→null; valves cap the event copy, port
+  values stay full; header/query values stringify post-render.
+- Next: S2/M5 — `napf run` CLI (BIND inputs, reports, --timeout, exit
+  codes) → S2 done.
+
 ## 2026-07-05 — S2/M3 engine scheduler + frames + first runners
 
 - Done: `core/engine.py` — `FlowRun` (pump/QUIESCENT/empty-seed per EN
