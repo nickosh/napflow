@@ -57,7 +57,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [x] FR-408 (S2) Abort: cancel tasks, close session, state `aborted`; events already written stay valid (dangling `request_started` tolerated). (EN §3, EC20) — abort mechanism + task cancellation landed M3 (`FlowRun.abort`, tested); session close completes at M4 with the niquests session — abort + task cancellation at M3, session close on every exit path at M4 (`FlowRun.execute`), `test_abort_finalizes_as_aborted`, 2026-07-05
 - [x] FR-409 (S2) Unhandled error-port message ⇒ run `failed`; nodes without an error port surface evaluation errors as unhandled node errors. (EN §2/§6, EC24) — `_emit_output` error-class check + `_node_error`, `tests/test_engine.py`, 2026-07-05
 - [ ] FR-410 (S2) Per-firing `max_seconds` settable on any node; the manifest default (`node_timeout_s` 300) auto-applies to `request`/`python` only — `delay`/`loop`/`flow` exempt from the default, explicit value honored. Tripped ceiling → `{error_kind: "timeout"}` on the node's error port; `flow` → child frame `aborted` + implicit error port payload; `loop`/port-less nodes → unhandled node error ⇒ `failed`. (D24)
-- [ ] FR-411 (S2) Run deadline: `defaults.run.run_timeout_s` (null = off) + `napf run --timeout N`; expiry cancels in-flight work, finalizes state `error` (exit 2) with `error_reason: run_timeout`, report and JSONL written. (D24)
+- [x] FR-411 (S2) Run deadline: `defaults.run.run_timeout_s` (null = off) + `napf run --timeout N`; expiry cancels in-flight work, finalizes state `error` (exit 2) with `error_reason: run_timeout`, report and JSONL written. (D24) — engine deadline at M3 (`test_run_deadline_expires_with_report`), `--timeout` flag at M5 (`test_timeout_flag_exits_2`), 2026-07-05
 
 ## FR-5xx — Node types
 
@@ -99,8 +99,8 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 - [x] FR-801 (S1) `napf check` — full rule set over all discovered flows; non-zero exit on E-codes. (WM) — `cli/main.py check` — exit 1 on E-codes, 0 warnings-only, 2 no-workspace, 2026-07-05
 - [x] FR-802 (S1) `napf list` — discovered flows with their Start/End ports. (WM) — `cli/main.py list_flows` — identity + Start/End ports, invalid-flow marker, 2026-07-05
-- [ ] FR-803 (S2) `napf run <flow> [--env NAME] [-i k=v ...] [--input-json] [--timeout N]` — inputs validated & type-coerced against Start ports, fail-fast on unknown/missing; End outputs → stdout as one JSON object; logs → stderr; exit codes 0/1/2/130. (FS, EN §2, D24)
-- [ ] FR-804 (S2) Report formats `none|junit|json` per `defaults.run.report`. (WM)
+- [x] FR-803 (S2) `napf run <flow> [--env NAME] [-i k=v ...] [--input-json] [--timeout N]` — inputs validated & type-coerced against Start ports, fail-fast on unknown/missing; End outputs → stdout as one JSON object; logs → stderr; exit codes 0/1/2/130. (FS, EN §2, D24) — `cli/main.py run` (pins in WM CLI section: run gate, unmasked stdout, input precedence, best-effort default env, Ctrl-C), `tests/test_run_cli.py` + S2 DoD test in `tests/test_request.py`, 2026-07-05
+- [x] FR-804 (S2) Report formats `none|junit|json` per `defaults.run.report`. (WM) — `cli/report.py` `write_report` (paths + junit mapping pinned in WM), `test_json_report`/`test_junit_report_counts_match`, 2026-07-05
 - [x] FR-805 (S1) `napf init [dir]` per FR-107. (WM) — `cli/main.py init`, refuses existing napflow.yaml, 2026-07-05
 - [ ] FR-806 (S4) `napf ui [--port]` — serve UI + API + WebSocket on one localhost port, open browser. (WM, D03)
 

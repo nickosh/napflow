@@ -51,7 +51,7 @@ S1 DoD: every S1 checkbox in REQUIREMENTS ticked with a test; `check`
 catches all E/W codes on a fixture corpus; round-trip byte-identical
 across OS in CI.
 
-## S2 — engine core + `napf run`  ← current
+## S2 — engine core + `napf run`  ✅ done 2026-07-05
 
 Scheduler, frames, budget, deadline (FR-4xx); templating incl. the
 native-value rule (D25); request/condition/assert/start/end; events +
@@ -93,12 +93,20 @@ consumes the engine, `napf run` wires it all.
       envelope; NFR-10 compat CI job; local-server test suite — no
       external network. (FR-105/207/503/703/705/706 + FR-408 session
       close; NFR-09/10; TR-8 request paths, TR-10 complete)
-- [ ] **M5 — `napf run`**: BIND/ENV lifecycle steps, `--env` / `-i` /
-      `--input-json` / `--timeout`, End outputs → stdout JSON, logs →
-      stderr, junit/json reports, exit codes 0/1/2/130. (FR-803/804;
-      stage DoD check)
+- [x] **M5 — `napf run`** (landed 2026-07-05): LOAD/CHECK gate
+      (`check_flow`, E-codes → exit 2), env profile resolution +
+      layering, `--env` / `-i` / `--input-json` / `--timeout`, JSONL
+      sink + retention wiring, End outputs → stdout JSON (unmasked —
+      functional output, pinned in WM), logs → stderr, junit/json
+      reports (`cli/report.py`), Ctrl-C abort, exit codes 0/1/2/130.
+      (FR-411/803/804)
 
-## S3 — full node set + python worker
+S2 DoD verified: `test_s2_dod_request_assert_headless` runs a linear
+request→assert flow via `napf run` against a local server — exit 0 on
+pass, exit 1 on a failing assert; TR-2 green; TR-3 root-frame green
+(cross-frame half completes with S3 subflow/loop frames).
+
+## S3 — full node set + python worker  ← current
 
 python + worker subprocess (protocol integrity per EC28), merge,
 guards, loop, flow, set/get, switch, delay, log, fixture, note.

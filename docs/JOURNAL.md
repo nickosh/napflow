@@ -4,6 +4,24 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-05 — S2/M5 `napf run` — stage S2 complete
+
+- Done: `cli/main.py run` + `cli/report.py` — LOAD/CHECK gate
+  (`check_flow`, E-codes exit 2 before anything executes), env profile
+  resolution + layering, `-i`/`--input-json`/`--timeout`, JSONL sink +
+  retention wiring, stdout End-outputs JSON (unmasked, pipeable),
+  stderr summary, junit/json reports, Ctrl-C abort, exit codes
+  0/1/2/130. S2 DoD test: request→assert via `napf run` against a
+  local server, exit 0/1. 205 tests green (31 new). Version bumped
+  `0.1.0.dev2` (stage-closing commit per RELEASING.md).
+- Decided (WM pins): run gate = single-flow check until S3; stdout NOT
+  masked (functional output); `--input-json` first, `-i` overrides;
+  missing default profile = note + process env; report files next to
+  the JSONL.
+- Next: S3 — full node set + python worker (worker subprocess protocol
+  EC28, merge, guards, loop, flow, set/get, switch, log, fixture;
+  TR-1/4/5/6/8/9 remainder; `flows/smoke` first-touch run).
+
 ## 2026-07-05 — S2/M4 request node + niquests adapter
 
 - Done: `core/httpclient.py` (the ONLY niquests import, NFR-09 — guard

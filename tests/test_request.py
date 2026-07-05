@@ -382,3 +382,62 @@ def test_secret_masked_in_request_events(server):
     assert result.state == "passed"
     started = events_of(sink.records, "request_started")[0]
     assert started["headers"]["Authorization"] == "Bearer ***"  # born masked
+
+
+# --------------------------------------------------------------------------
+# S2 DoD: a linear request→assert flow runs headless with correct exit codes
+
+
+DOD_FLOW = """\
+schema: "napflow/v1"
+flow:
+  name: "job"
+env:
+  required: ["BASE_URL"]
+nodes:
+  - id: "start"
+    type: "start"
+  - id: "req"
+    type: "request"
+    config:
+      url: "{{ env.BASE_URL }}/json"
+  - id: "check"
+    type: "assert"
+    config:
+      checks:
+        - {kind: "status", equals: STATUS}
+        - {kind: "expr", expr: "trigger.value.body.id", op: "present"}
+  - id: "end"
+    type: "end"
+    config:
+      ports:
+        - {name: "job"}
+edges:
+  - {from: "start.out", to: "req.trigger"}
+  - {from: "req.response", to: "check.in"}
+  - {from: "check.passed", to: "end.job"}
+"""
+
+
+def test_s2_dod_request_assert_headless(server, tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from napflow.cli.main import app
+
+    ws = tmp_path / "ws"
+    for identity, status in (("good", 200), ("bad", 999)):
+        (ws / "flows" / identity).mkdir(parents=True)
+        flow_yaml = DOD_FLOW.replace("STATUS", str(status))
+        (ws / "flows" / identity / "flow.yaml").write_text(flow_yaml, encoding="utf-8")
+    (ws / "envs").mkdir()
+    (ws / "napflow.yaml").write_text('schema: "napflow/v1"\n', encoding="utf-8")
+    (ws / "envs" / "dev.env").write_text(f"BASE_URL={server}\n", encoding="utf-8")
+    monkeypatch.chdir(ws)
+
+    runner = CliRunner()
+    passed = runner.invoke(app, ["run", "flows/good", "--env", "dev"])
+    assert passed.exit_code == 0, passed.stderr
+    assert json.loads(passed.stdout)["job"]["body"]["id"] == "abc123"
+
+    failed = runner.invoke(app, ["run", "flows/bad", "--env", "dev"])
+    assert failed.exit_code == 1  # assert-driven exit code, headless

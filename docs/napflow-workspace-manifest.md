@@ -165,10 +165,33 @@ napf check                    validate all flows (schema, edges, env.required,
 ```
 
 Exit codes for `napf run`: 0 passed · 1 failed · 2 error · 130 aborted.
-`napf check` (pinned at M5): 0 clean or warnings-only · 1 any E-code ·
+`napf check` (pinned at S1/M5): 0 clean or warnings-only · 1 any E-code ·
 2 operational error (no workspace found). `napf init` refuses a
 directory that already has a `napflow.yaml` (exit 2) and never
 overwrites individual files.
+
+`napf run` pins (S2/M5, 2026-07-05):
+- **Run gate** = `check_flow` on the target flow (E-codes → exit 2
+  before anything executes, no JSONL; warnings print to stderr and
+  proceed). The full-workspace closure gate stays `napf check`; the
+  run gate deepens at S3 when flow references become runnable.
+- **stdout carries ONLY the End-outputs JSON and is NOT masked** — it
+  is the functional output (`napf run flows/login | jq .token` is the
+  contract); masking (D22) covers UI, logs, events, and stored runs.
+- **Inputs**: `--input-json` (object) is applied first, `-i KEY=VALUE`
+  overrides per key; `-i` values arrive as strings and BIND coerces
+  them against the port's declared type.
+- **Env**: explicit `--env NAME` must exist (exit 2 otherwise); the
+  manifest `environments.default` is best-effort — profiles are
+  gitignored, so a fresh clone falls back to process env with a stderr
+  note.
+- **Reports** (`defaults.run.report`) are written next to the JSONL:
+  `<run-id>.report.json` / `<run-id>.junit.xml`, built from the masked
+  event records (junit: testcase per assert, errored testcase per
+  unhandled error).
+- **Ctrl-C** = clean abort (exit 130) where asyncio signal handlers
+  exist; on Windows the KeyboardInterrupt path exits 130 and the JSONL
+  keeps a valid prefix (EC20).
 
 Dropped for now: `napf sync` — with no registry, copied folders just appear
 and broken references surface in `napf check` / on canvas. Possible later

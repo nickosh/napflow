@@ -2,7 +2,7 @@
 name = "napflow"
 # 0.1.0.devN — N bumps in the commit that completes a PLAN.md stage
 # (S1 → dev1, S2 → dev2, ...); see docs/RELEASING.md
-version = "0.1.0.dev1"
+version = "0.1.0.dev2"
 description = "Local-first, git-friendly, node-based flow editor and engine for API request/response processing"
 readme = "README.md"
 license = "Apache-2.0"
