@@ -126,7 +126,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 ## NFR — Non-functional requirements
 
 - [x] NFR-01 `napflow.core` importable standalone — zero cli/server/UI imports; enforced by an import-linter test. (EN §0) — `tests/test_architecture.py` + contract in `pyproject.toml`, 2026-07-04
-- [x] NFR-02 macOS + Windows from day one, Linux via CI: pathlib everywhere, no shell-isms, spawn-safe subprocesses. (CLAUDE.md) — 3-OS CI matrix green since 2026-07-04; pathlib enforced via ruff PTH; spawn-safety re-verified as subprocess code lands (S3)
+- [x] NFR-02 macOS + Windows + Linux from day one (D26): pathlib everywhere, no shell-isms, spawn-safe subprocesses. (CLAUDE.md) — 3-OS CI matrix green since 2026-07-04; Linux promoted to first-class 2026-07-06 (D26, zero platform-conditional code); pathlib enforced via ruff PTH; spawn-safety re-verified as subprocess code lands (S3)
 - [ ] NFR-03 Distribution: one pip wheel containing the pre-built UI; no Docker, no Node at runtime; installable via `uv tool install napflow`. (D03)
 - [ ] NFR-04 Python 3.12+; Pydantic v2; ruamel.yaml; Jinja2 sandbox; niquests; BlackSheep + uvicorn; Typer. (CLAUDE.md stack)
 - [ ] NFR-05 Security posture: sandboxed Jinja2 only (no eval), safe YAML loading only, secrets masked at emission, worker subprocess isolation with kill ceiling. (D10/D12/D22/D23)

@@ -104,8 +104,8 @@ CI** with assert-driven exit codes and full wire-level history.
 ## Success criteria (v1)
 
 - `uv tool install napflow && napf init && napf run flows/smoke` is
-  green in under five minutes on macOS and Windows — fully offline, no
-  external services (httpbin demo is separate, EC34).
+  green in under five minutes on macOS, Windows, and Linux — fully
+  offline, no external services (httpbin demo is separate, EC34).
 - The flagship retry-until-ready pattern is buildable on the canvas
   without reading the engine spec.
 - A flow PR (add a node + edge) is reviewable at a glance — no layout

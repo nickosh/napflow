@@ -322,6 +322,23 @@ structured passing); a second syntax for native mode (`!expr` tags —
 violates D10's one-language rule); auto-JSON-parsing of rendered strings
 (heuristic, silently wrong on JSON-looking text).
 
+## D26 — Linux is a first-class v1 platform
+
+(2026-07-06, owner decision.) The original scope said "macOS + Windows
+from day one, Linux implicitly via CI" — a hedge, not a technical
+constraint. By S2 close the codebase has zero platform-conditional code
+(pure Python, pathlib discipline, no shell-isms), and the full suite has
+run green on ubuntu-latest in the 3-OS CI matrix since M0 — Linux support
+already exists and is already verified on every commit. The primary
+audience (QA/dev teams) runs CI and often dev boxes on Linux. Chosen:
+promote Linux to the same support tier as macOS/Windows — PRODUCT success
+criteria, NFR-02, and the S4 `napf ui` DoD now name all three. Windows
+remains the platform needing special care (spawn semantics,
+CREATE_NO_WINDOW, line-ending discipline); Linux rides the POSIX path
+already exercised on macOS. Rejected: keeping the "Linux via CI" hedge
+(understates what the CI matrix already proves and undersells to the
+audience most likely to run napflow headless).
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.

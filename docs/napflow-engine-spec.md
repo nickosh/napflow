@@ -10,8 +10,8 @@ capture valve, Windows loop policy, trust model (EC28–EC37).
 
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
-types, JSONL history, last-write-wins, macOS+Windows, canonical YAML
-profile D23).
+types, JSONL history, last-write-wins, macOS+Windows+Linux (D26),
+canonical YAML profile D23).
 
 Changes from v0.1: run states redefined — required End ports (D18) and
 run-wide outcome aggregation (D20); empty-seed guard in the pump (EC08);

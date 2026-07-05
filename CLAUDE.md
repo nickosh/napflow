@@ -66,8 +66,8 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
   **BlackSheep** + uvicorn (Pydantic-friendly ASGI; thin adapter only),
   **Typer** CLI. Frontend: React + TS + **@xyflow/react** + Zustand +
   Monaco + Vite (dev-time only; ships as static files).
-- Platforms: macOS + Windows from day one → pathlib everywhere, no
-  shell-isms, subprocess spawn semantics, CREATE_NO_WINDOW.
+- Platforms: macOS + Windows + Linux from day one (D26) → pathlib
+  everywhere, no shell-isms, subprocess spawn semantics, CREATE_NO_WINDOW.
 - License: Apache-2.0 + NOTICE file (NOTICE is the attribution lever).
   No CLA (Apache §5 inbound=outbound suffices); DCO later if external
   contributors appear.

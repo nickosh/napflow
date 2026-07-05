@@ -116,7 +116,7 @@ DoD: flagship retry example runs; `napf run flows/smoke` passes offline
 ## S4 — server + UI canvas
 
 FR-10xx; canvas edits keep golden diffs clean.
-DoD: `napf ui` end-to-end on macOS + Windows (incl. TR-9).
+DoD: `napf ui` end-to-end on macOS + Windows + Linux (incl. TR-9).
 Per PRODUCT.md: S1–S3 is a shippable CLI-only product — S4 must not
 block a first release.
 

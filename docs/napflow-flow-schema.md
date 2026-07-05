@@ -379,8 +379,8 @@ as everywhere else.
   negotiated HTTP version, request & response headers, bodies, status,
   timing breakdown (DNS/connect/TLS/TTFB/total where niquests exposes it),
   retries attempted. Replay-on-canvas = re-reading the file.
-- Platforms: macOS and Windows from day one (pathlib discipline, no
-  shell-isms); Linux implicitly via CI.
+- Platforms: macOS, Windows, and Linux from day one (D26; pathlib
+  discipline, no shell-isms); all three in the CI matrix.
 
 ### Merge node
 - `any` — forward each arriving message immediately (use in front of
