@@ -4,13 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
-## 2026-07-06 — Linux promoted to first-class v1 platform (D26)
+## 2026-07-06 — Linux first-class (D26) + S4 UI shell pinned
 
 - Done: verified zero platform-conditional code in src/tests and 3-OS CI
   green since M0; updated CLAUDE.md, PRODUCT, NFR-02, PLAN S4 DoD, flow
   schema, engine spec header; added OS classifiers to pyproject.
 - Decided: D26 — Linux same tier as macOS/Windows (owner call; "Linux
   via CI" hedge dropped since CI already proves it on every commit).
+- Decided: S4 `napf ui` opens the default browser (stdlib `webbrowser`);
+  no pywebview (Linux webview system deps would break the one-wheel
+  promise; three render engines to test). Chromium app-mode
+  `napf ui --app` deferred as a v1.1 candidate (owner call).
 - Next: unchanged — S3 python worker + remaining nodes.
 
 ## 2026-07-05 — S2/M5 `napf run` — stage S2 complete

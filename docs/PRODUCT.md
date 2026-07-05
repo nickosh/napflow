@@ -124,7 +124,11 @@ CI** with assert-driven exit codes and full wire-level history.
   explicit option (the UI is roughly half the total work).
 - **v1.1 candidates** (decided-deferred, kept compatible): `poll` node,
   `duplicate` node, inline loop bodies, marker-based `collect`, runtime
-  secret redaction, `napf check --write-env-example`, python worker pool.
+  secret redaction, `napf check --write-env-example`, python worker pool,
+  `napf ui --app` (chromeless Chromium app-mode window via
+  `msedge`/`chrome --app=<url>`, falling back to plain
+  `webbrowser.open` — app-like feel with zero new deps; v1 always opens
+  the default browser).
 - **v2 direction**: codegen (flows → niquests clients + Pydantic
   models) — scoped to the *reducible subset*: linear chains and
   recognized patterns (retry cycles → `while` loops). Arbitrary cyclic,

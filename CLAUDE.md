@@ -160,3 +160,5 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 - Endpoint collections + Postman/OpenAPI import (one-directional,
   generation not sync; `endpoint:` = future additive request-config
   key — nothing to reserve in v1; see PRODUCT.md roadmap)
+- `napf ui --app` Chromium app-mode window (v1 opens the default
+  browser via stdlib `webbrowser`; no pywebview — see PRODUCT.md roadmap)

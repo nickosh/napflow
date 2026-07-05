@@ -117,6 +117,8 @@ DoD: flagship retry example runs; `napf run flows/smoke` passes offline
 
 FR-10xx; canvas edits keep golden diffs clean.
 DoD: `napf ui` end-to-end on macOS + Windows + Linux (incl. TR-9).
+v1 `napf ui` opens the default browser (stdlib `webbrowser`, no GUI
+deps); Chromium app-mode `--app` is a v1.1 candidate (PRODUCT roadmap).
 Per PRODUCT.md: S1–S3 is a shippable CLI-only product — S4 must not
 block a first release.
 
