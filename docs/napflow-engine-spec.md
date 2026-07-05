@@ -112,6 +112,36 @@ fails — by design, not contradiction.
 
 CLI exit codes: 0 passed · 1 failed · 2 error · 130 aborted.
 
+Pins made at S2/M3 (2026-07-05, `core/engine.py`):
+- **`error_reason` vocabulary** (state `error`): `bind_error` |
+  `env_missing` | `unsupported_node_type` | `budget_exhausted` |
+  `run_timeout` | `internal_error`. BIND/ENV failures still emit
+  `run_started` + `run_finished` — every run leaves a JSONL.
+- **`unhandled_errors` entry shape** (report + `run_finished`):
+  `{frame, node, port, kind, message}`. Required-End misses are
+  recorded here as `kind: required_end_unwritten` (D18); fatal reasons
+  append one entry too, with the budget's hot edge in `port`.
+- **assert.failed unconnected** records an `unhandled_error_port` entry
+  *in addition to* the failed-assert tally — the letter of §2's
+  "error/failed port with no edge" rule; one logical failure may thus
+  appear in both categories.
+- **`op: present` on an undefined path is a failed check, not a node
+  error** (actual recorded as null) — "is it there?" is the question
+  the op asks. Other ops raise node errors on evaluation failure.
+- **assert `check` label** in events: the kind name for
+  status/response_time, the expression text for expr checks.
+- **`nodes_never_fired`** excludes `end` (never fires by design, §4
+  rule 5) and `note`; `start` counts as fired via seeding.
+- **`run_started.inputs`** = caller-supplied bindings, pre-coercion
+  (BIND may still fail; effective inputs appear as `start.out`).
+- **`value_preview`** (message_emitted): the native value when its
+  compact JSON is ≤ 512 chars, else the truncated JSON string marked
+  `…(truncated)`.
+- **`delay` runs in S2** — pulled forward from the S3 node set because
+  TR-2's sentinel-race tests need an async node. Other S3/S4 node
+  types in a flow ⇒ run `error` (`unsupported_node_type`), never a
+  crash.
+
 ## 3. Scheduler
 
 Single asyncio event loop per run. Pseudocode:

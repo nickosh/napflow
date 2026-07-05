@@ -1,0 +1,767 @@
+"""Execution engine: scheduler, frames, node runners (EN §1–§6).
+
+S2/M3 scope: the full scheduler (QUIESCENT sentinel + empty-seed guard,
+budget, deadline, abort, `max_seconds` cancellation), frames, outcome
+aggregation (D18/D20), and runners for start/end/condition/assert —
+plus delay, pulled forward from S3 because TR-2's sentinel-race tests
+need an async node. Remaining node types land in S3/S4; a flow using
+one is a run `error` (`unsupported_node_type`), never a crash.
+
+The engine trusts its input: LOAD and CHECK are the CLI's lifecycle
+steps (`napf run` refuses E-codes, M5). BIND and ENV happen here — the
+engine is also the `from napflow.core import ...` pytest surface and
+must fail fast standalone.
+
+The QUIESCENT sentinel (EN §3) is the load-bearing detail: termination
+is detected by whichever `in_flight` decrement reaches zero, never by
+the pump polling. Single event loop ⇒ no locks, but every emission MUST
+increment before enqueueing, and the pump finalizes immediately when
+post-seed `in_flight` is zero (EC08) — otherwise QUIESCENT is never
+enqueued and the pump blocks forever.
+"""
+
+import asyncio
+import json
+import re
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any, Literal
+
+from napflow import __version__
+from napflow.core.events import (
+    AssertResult,
+    BudgetWarning,
+    EventStream,
+    MessageEmitted,
+    NodeFired,
+    RunFinished,
+    RunStarted,
+    isoformat_ms,
+)
+from napflow.core.models import FlowFile
+from napflow.core.models.flow import (
+    AssertCheck,
+    AssertNode,
+    ConditionNode,
+    DelayNode,
+    EndNode,
+    ExprCheck,
+    Node,
+    ResponseTimeCheck,
+    StartNode,
+    StatusCheck,
+)
+from napflow.core.models.manifest import Manifest
+from napflow.core.templating import (
+    Renderer,
+    TemplateEvaluationError,
+    TypeCoercionError,
+    coerce_value,
+)
+
+RunState = Literal["passed", "failed", "error", "aborted"]
+
+# FR-406: run states → CLI exit codes
+EXIT_CODES: dict[RunState, int] = {
+    "passed": 0,
+    "failed": 1,
+    "error": 2,
+    "aborted": 130,
+}
+
+# Node types the S2 engine can run; the rest land S3 (python worker,
+# merge, guards, loop, flow, set/get, switch, log, fixture) and S2/M4
+# (request). `note` has no runtime behavior but is legal on any canvas.
+SUPPORTED_NODE_TYPES = frozenset(
+    {"start", "end", "condition", "assert", "delay", "note"}
+)
+
+# Node-error OUTLETS: where a failed firing routes (D24, EC24). Distinct
+# from error-CLASS ports (below): assert.failed carries check failures,
+# never node errors.
+_NODE_ERROR_OUTLET = {"request": "error", "python": "error", "flow": "error"}
+
+# Error-class output ports (mirrors W103 in checker.py): a message into
+# one of these with no edge is an unhandled error ⇒ run failed (EN §2).
+_ERROR_CLASS_PORTS = {
+    "request": "error",
+    "python": "error",
+    "flow": "error",
+    "assert": "failed",
+}
+
+# The manifest node_timeout_s default auto-applies to these only —
+# the potentially-unbounded leaf firings (D24).
+_DEFAULT_CEILING_TYPES = ("request", "python")
+
+_PREVIEW_LIMIT = 512  # chars of compact JSON in message_emitted previews
+
+
+class _BudgetExhausted(Exception):
+    def __init__(self, edge: str):
+        self.edge = edge
+        super().__init__(f"message budget exhausted at edge {edge}")
+
+
+class _NodeError(Exception):
+    """A firing failed (template error, bad shape, timeout). Routed to
+    the node's error outlet when it has one, else recorded as an
+    unhandled node error ⇒ run failed (EC24)."""
+
+    def __init__(self, kind: str, message: str):
+        self.kind = kind
+        super().__init__(message)
+
+
+class _BindError(Exception):
+    """BIND/ENV lifecycle failure — run `error`, fail fast (EN §2)."""
+
+    def __init__(self, reason: str, message: str):
+        self.reason = reason
+        super().__init__(message)
+
+
+# --------------------------------------------------------------------------
+# Core objects (EN §1)
+
+
+@dataclass(frozen=True)
+class Message:
+    """The envelope on every edge; `trigger` in templates is exactly
+    this, as `{value, meta}` (EC12)."""
+
+    value: Any
+    msg_id: str
+    produced_by: str  # "<node>.<port>"
+    frame: str
+    ts: str
+
+    def envelope(self) -> dict[str, Any]:
+        return {
+            "value": self.value,
+            "meta": {
+                "msg_id": self.msg_id,
+                "produced_by": self.produced_by,
+                "frame": self.frame,
+                "ts": self.ts,
+            },
+        }
+
+
+@dataclass(frozen=True)
+class _Delivery:
+    node_id: str
+    port: str
+    message: Message
+
+
+_QUIESCENT = object()  # the last decrement wakes the pump (EN §3)
+_FATAL = object()  # budget exhaustion / abort: stop pumping now
+
+
+class _Graph:
+    """Static per-flow edge index."""
+
+    def __init__(self, flow: FlowFile):
+        self.nodes: dict[str, Node] = {n.id: n for n in flow.nodes}
+        self.start = next(n for n in flow.nodes if isinstance(n, StartNode))
+        self.end = next(n for n in flow.nodes if isinstance(n, EndNode))
+        self.out_edges: dict[tuple[str, str], list[tuple[str, str]]] = {}
+        for edge in flow.edges:
+            from_node, _, from_port = edge.from_.partition(".")
+            to_node, _, to_port = edge.to.partition(".")
+            key = (from_node, from_port)
+            self.out_edges.setdefault(key, []).append((to_node, to_port))
+
+
+@dataclass
+class Frame:
+    """One invocation of one flow (EN §1): the DATA isolation unit —
+    variables, inputs, firing counts, `nodes.*` context. Outcomes are
+    not isolated (D20). Hierarchical ids (`f-0/f-3`) arrive with
+    subflows/loops in S3; the root run is always `f-0`."""
+
+    id: str
+    graph: _Graph
+    inputs: dict[str, Any]
+    variables: dict[str, Any] = field(default_factory=dict)
+    node_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    firing_counts: dict[str, int] = field(default_factory=dict)
+    end_values: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RunResult:
+    state: RunState
+    end_outputs: dict[str, Any]
+    asserts_passed: int
+    asserts_failed: int
+    unhandled_errors: list[dict[str, Any]]
+    nodes_never_fired: list[str]
+    duration_ms: float
+    error_reason: str | None = None
+
+    @property
+    def exit_code(self) -> int:
+        return EXIT_CODES[self.state]
+
+
+# --------------------------------------------------------------------------
+# The run
+
+
+class FlowRun:
+    """One execution of one entry flow (EN §2 lifecycle from BIND on).
+
+    Single-use: construct, `await execute()` once. `abort()` may be
+    called from another task; the run finalizes as `aborted` with the
+    report and JSONL written (EC20).
+    """
+
+    def __init__(
+        self,
+        flow: FlowFile,
+        *,
+        flow_identity: str,
+        manifest: Manifest,
+        env: Mapping[str, str],
+        env_name: str | None,
+        inputs: Mapping[str, Any] | None,
+        stream: EventStream,
+        run_timeout_s: float | None = None,
+    ):
+        self._flow = flow
+        self._flow_identity = flow_identity
+        self._defaults = manifest.defaults.run
+        self._env = dict(env)
+        self._env_name = env_name
+        self._given_inputs = dict(inputs or {})
+        self._stream = stream
+        self._run_timeout_s = (
+            run_timeout_s if run_timeout_s is not None else self._defaults.run_timeout_s
+        )
+        self._renderer = Renderer()
+        self._started_ts = isoformat_ms(datetime.now(UTC))
+
+        self._queue: asyncio.Queue[Any] = asyncio.Queue()
+        self._in_flight = 0
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._msg_seq = 0
+        self._budget_remaining = self._defaults.message_budget
+        self._budget_warned = False
+        self._aborted = False
+        self._fatal: tuple[str, str] | None = None  # (error_reason, message)
+
+        self._asserts_passed = 0
+        self._asserts_failed = 0
+        self._unhandled: list[dict[str, Any]] = []
+
+    # -- public ------------------------------------------------------------
+
+    def abort(self) -> None:
+        """User cancellation: state `aborted`, exit 130 (FR-408)."""
+        self._aborted = True
+        self._queue.put_nowait(_FATAL)
+
+    async def execute(self) -> RunResult:
+        started = time.monotonic()
+        self._stream.emit(
+            RunStarted(
+                flow=self._flow_identity,
+                env_name=self._env_name,
+                inputs=dict(self._given_inputs),
+                engine_version=__version__,
+            )
+        )
+        frame: Frame | None = None
+        try:
+            self._check_supported()
+            self._check_env_required()
+            graph = _Graph(self._flow)
+            frame = Frame(id="f-0", graph=graph, inputs=self._bind(graph.start))
+        except _BindError as e:
+            self._fatal = (e.reason, str(e))
+        except TypeCoercionError as e:
+            self._fatal = ("bind_error", str(e))
+
+        if frame is not None:
+            try:
+                if self._run_timeout_s is not None:
+                    async with asyncio.timeout(self._run_timeout_s):
+                        await self._pump(frame)
+                else:
+                    await self._pump(frame)
+            except TimeoutError:
+                # D24: expiry cancels in-flight work like an abort but
+                # finalizes `error` — the report is still written
+                self._fatal = self._fatal or ("run_timeout", "run deadline expired")
+            for task in self._tasks:
+                task.cancel()
+            if self._tasks:
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        return self._finalize(frame, started)
+
+    # -- lifecycle: BIND / ENV (EN §2) --------------------------------------
+
+    def _check_supported(self) -> None:
+        for node in self._flow.nodes:
+            if node.type not in SUPPORTED_NODE_TYPES:
+                raise _BindError(
+                    "unsupported_node_type",
+                    f"node '{node.id}': type '{node.type}' is not runnable yet"
+                    " (lands in a later stage; see docs/PLAN.md)",
+                )
+
+    def _check_env_required(self) -> None:
+        required = self._flow.env.required if self._flow.env else []
+        missing = [k for k in required if k not in self._env]
+        if missing:
+            raise _BindError(
+                "env_missing",
+                "env.required key(s) missing from the active profile: "
+                + ", ".join(missing),
+            )
+
+    def _bind(self, start: StartNode) -> dict[str, Any]:
+        """Validate & type-coerce inputs against Start ports; evaluate
+        `default:` templates with env/run scope only (FR-501, EC36)."""
+        declared = {p.name: p for p in start.config.ports}
+        unknown = set(self._given_inputs) - set(declared)
+        if unknown:
+            raise _BindError(
+                "bind_error", f"unknown input(s): {', '.join(sorted(unknown))}"
+            )
+        context = {"env": self._env, "run": self._run_context()}
+        bound: dict[str, Any] = {}
+        for name, port in declared.items():
+            if name in self._given_inputs:
+                value = self._given_inputs[name]
+            elif "default" in port.model_fields_set:
+                value = port.default
+                if isinstance(value, str):
+                    try:
+                        value = self._renderer.render(value, context)
+                    except TemplateEvaluationError as e:
+                        raise _BindError(
+                            "bind_error", f"input '{name}' default: {e}"
+                        ) from e
+            else:
+                raise _BindError("bind_error", f"missing required input '{name}'")
+            try:
+                bound[name] = coerce_value(value, port.type)
+            except TypeCoercionError as e:
+                raise _BindError("bind_error", f"input '{name}': {e}") from e
+        return bound
+
+    # -- scheduler (EN §3) ---------------------------------------------------
+
+    def _dec(self) -> None:
+        self._in_flight -= 1
+        if self._in_flight == 0:
+            self._queue.put_nowait(_QUIESCENT)
+
+    async def _pump(self, frame: Frame) -> None:
+        try:
+            self._seed(frame)
+        except _BudgetExhausted as e:
+            self._set_fatal("budget_exhausted", str(e), e.edge)
+            return
+        if self._in_flight == 0:
+            return  # nothing seeded — finalize immediately (EC08)
+        while True:
+            item = await self._queue.get()
+            if item is _QUIESCENT or item is _FATAL:
+                break
+            delivery: _Delivery = item
+            node = frame.graph.nodes.get(delivery.node_id)
+            if isinstance(node, EndNode):
+                # rule 5: End accumulates latest value, never fires
+                frame.end_values[delivery.port] = delivery.message.value
+            elif node is not None:
+                # rule 1: every supported non-End node is single-input —
+                # fire per delivery (rule-2 slots arrive with python, S3)
+                self._in_flight += 1
+                task = asyncio.create_task(self._fire(frame, node, delivery.message))
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+            self._dec()  # delivery consumed
+
+    def _seed(self, frame: Frame) -> None:
+        """Start is seeded once per frame: `out` carries the full inputs
+        dict, and each declared port emits its bound value (FS catalog).
+        Unconnected fixture auto-seeding arrives with fixtures (S3)."""
+        start = frame.graph.start
+        frame.firing_counts[start.id] = 1
+        self._stream.emit(NodeFired(frame=frame.id, node=start.id, firing_no=1))
+        outputs = [("out", dict(frame.inputs))]
+        outputs += [(p.name, frame.inputs[p.name]) for p in start.config.ports]
+        for port, value in outputs:
+            self._emit_output(frame, start.id, port, value)
+
+    async def _fire(self, frame: Frame, node: Node, trigger: Message) -> None:
+        ceiling = self._max_seconds(node)
+        try:
+            firing_no = frame.firing_counts.get(node.id, 0) + 1
+            frame.firing_counts[node.id] = firing_no
+            self._stream.emit(
+                NodeFired(frame=frame.id, node=node.id, firing_no=firing_no)
+            )
+            coro = self._run_node(frame, node, trigger)
+            if ceiling is not None:
+                async with asyncio.timeout(ceiling):
+                    outputs = await coro
+            else:
+                outputs = await coro
+            for port, value in outputs:
+                self._emit_output(frame, node.id, port, value)
+        except TimeoutError:
+            self._node_error(
+                frame,
+                node,
+                kind="timeout",
+                message=f"firing exceeded max_seconds={ceiling}",
+            )
+        except (TemplateEvaluationError, TypeCoercionError) as e:
+            self._node_error(frame, node, kind="template_error", message=str(e))
+        except _NodeError as e:
+            self._node_error(frame, node, kind=e.kind, message=str(e))
+        except _BudgetExhausted as e:
+            self._set_fatal("budget_exhausted", str(e), e.edge)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # engine bug — run `error`, never a crash
+            self._set_fatal("internal_error", f"{node.id}: {type(e).__name__}: {e}")
+        finally:
+            self._dec()
+
+    def _emit_output(self, frame: Frame, node_id: str, port: str, value: Any) -> None:
+        # nodes.* holds the LATEST output — last-writer-wins (EC12/EC18)
+        frame.node_outputs.setdefault(node_id, {})[port] = value
+        node_type = frame.graph.nodes[node_id].type
+        edges = frame.graph.out_edges.get((node_id, port), [])
+        if not edges:
+            if _ERROR_CLASS_PORTS.get(node_type) == port:
+                # unhandled error-port message ⇒ run failed (EN §2, EC24)
+                self._record_unhandled(
+                    frame,
+                    node_id,
+                    port=port,
+                    kind="unhandled_error_port",
+                    message=f"message into unconnected error port {node_id}.{port}",
+                )
+            return
+        for to_node, to_port in edges:
+            edge_ref = f"{node_id}.{port} → {to_node}.{to_port}"
+            self._tick_budget(edge_ref)
+            self._msg_seq += 1
+            message = Message(
+                value=value,
+                msg_id=f"m-{self._msg_seq:06d}",
+                produced_by=f"{node_id}.{port}",
+                frame=frame.id,
+                ts=isoformat_ms(datetime.now(UTC)),
+            )
+            self._in_flight += 1  # ALWAYS increment before enqueueing
+            self._queue.put_nowait(_Delivery(to_node, to_port, message))
+            self._stream.emit(
+                MessageEmitted(
+                    frame=frame.id,
+                    node=node_id,
+                    from_port=f"{node_id}.{port}",
+                    to_node=to_node,
+                    to_port=to_port,
+                    msg_id=message.msg_id,
+                    value_preview=_preview(value),
+                )
+            )
+
+    def _tick_budget(self, edge: str) -> None:
+        self._budget_remaining -= 1
+        total = self._defaults.message_budget
+        if not self._budget_warned and self._budget_remaining <= total // 10:
+            self._budget_warned = True
+            self._stream.emit(BudgetWarning(remaining=self._budget_remaining))
+        if self._budget_remaining < 0:
+            raise _BudgetExhausted(edge)
+
+    def _max_seconds(self, node: Node) -> float | None:
+        """D24 scope: explicit `max_seconds` honored on any node; the
+        manifest default applies to request/python only."""
+        if node.max_seconds is not None:
+            return node.max_seconds
+        if node.type in _DEFAULT_CEILING_TYPES:
+            return self._defaults.node_timeout_s
+        return None
+
+    # -- node runners (EN §5) ------------------------------------------------
+
+    async def _run_node(
+        self, frame: Frame, node: Node, trigger: Message
+    ) -> list[tuple[str, Any]]:
+        context = self._template_context(frame, trigger)
+        match node:
+            case ConditionNode():
+                result = self._renderer.evaluate(node.config.expr, context)
+                return [("true" if result else "false", trigger.value)]
+            case AssertNode():
+                return self._run_assert(frame, node, trigger, context)
+            case DelayNode():
+                seconds = node.config.seconds
+                if isinstance(seconds, str):
+                    seconds = self._renderer.render(seconds, context)
+                await asyncio.sleep(coerce_value(seconds, "number"))
+                return [("out", trigger.value)]
+            case _:  # unreachable: _check_supported gates node types
+                raise _NodeError("internal", f"no runner for type '{node.type}'")
+
+    def _run_assert(
+        self,
+        frame: Frame,
+        node: AssertNode,
+        trigger: Message,
+        context: dict[str, Any],
+    ) -> list[tuple[str, Any]]:
+        all_passed = True
+        for check in node.config.checks:
+            label, op, expected, actual, passed = self._eval_check(
+                check, trigger, context
+            )
+            self._stream.emit(
+                AssertResult(
+                    frame=frame.id,
+                    node=node.id,
+                    check=label,
+                    op=op,
+                    expected=expected,
+                    actual=actual,
+                    passed=passed,
+                )
+            )
+            if passed:
+                self._asserts_passed += 1
+            else:
+                self._asserts_failed += 1
+                all_passed = False
+                if node.config.mode == "fail_fast":
+                    break
+        return [("passed" if all_passed else "failed", trigger.value)]
+
+    def _eval_check(
+        self, check: AssertCheck, trigger: Message, context: dict[str, Any]
+    ) -> tuple[str, str | None, Any, Any, bool]:
+        """→ (check label, op, expected, actual, passed). Evaluation
+        errors are node errors — except `op: present`, where an
+        undefined path IS the answer (check fails, run continues)."""
+        match check:
+            case StatusCheck():
+                actual = self._response_field(trigger, "status")
+                expected = self._render_scalar(check.equals, context, "number")
+                return ("status", None, expected, actual, actual == expected)
+            case ResponseTimeCheck():
+                actual = self._response_field(trigger, "elapsed_ms")
+                expected = self._render_scalar(check.under_ms, context, "number")
+                return ("response_time", None, expected, actual, actual < expected)
+            case ExprCheck():
+                pass
+        if check.op == "present":
+            try:
+                actual = self._renderer.evaluate(check.expr, context)
+            except TemplateEvaluationError:
+                return (check.expr, "present", None, None, False)
+            return (check.expr, "present", None, actual, actual is not None)
+        actual = self._renderer.evaluate(check.expr, context)
+        expected = self._renderer.render_config(check.value, context)
+        try:
+            passed = {
+                "equals": lambda: actual == expected,
+                "not_equals": lambda: actual != expected,
+                "contains": lambda: expected in actual,
+                "matches": lambda: re.search(str(expected), str(actual)) is not None,
+                "gt": lambda: actual > expected,
+                "lt": lambda: actual < expected,
+            }[check.op]()
+        except (TypeError, re.error) as e:
+            raise _NodeError(
+                "assert_error", f"check '{check.expr}' op '{check.op}': {e}"
+            ) from e
+        return (check.expr, check.op, expected, actual, passed)
+
+    def _response_field(self, trigger: Message, key: str) -> Any:
+        if not isinstance(trigger.value, Mapping) or key not in trigger.value:
+            raise _NodeError(
+                "assert_error",
+                f"this check needs a response-shaped message with '{key}'"
+                f" (got {type(trigger.value).__name__})",
+            )
+        return trigger.value[key]
+
+    def _render_scalar(
+        self, value: Any, context: dict[str, Any], type_: Literal["number"]
+    ) -> Any:
+        if isinstance(value, str):
+            value = self._renderer.render(value, context)
+        return coerce_value(value, type_)
+
+    # -- errors & outcomes (EN §2, D18/D20, EC24) ------------------------------
+
+    def _node_error(self, frame: Frame, node: Node, *, kind: str, message: str) -> None:
+        outlet = _NODE_ERROR_OUTLET.get(node.type)
+        if outlet is not None:
+            self._emit_output(
+                frame, node.id, outlet, {"error_kind": kind, "message": message}
+            )
+        else:
+            self._record_unhandled(
+                frame, node.id, port=None, kind=kind, message=message
+            )
+
+    def _record_unhandled(
+        self, frame: Frame, node_id: str, *, port: str | None, kind: str, message: str
+    ) -> None:
+        self._unhandled.append(
+            {
+                "frame": frame.id,
+                "node": node_id,
+                "port": port,
+                "kind": kind,
+                "message": message,
+            }
+        )
+
+    def _set_fatal(self, reason: str, message: str, edge: str | None = None) -> None:
+        if self._fatal is None:
+            self._fatal = (reason, message)
+            self._unhandled.append(
+                {
+                    "frame": None,
+                    "node": None,
+                    "port": edge,  # budget: the hot edge (EN §3)
+                    "kind": reason,
+                    "message": message,
+                }
+            )
+        self._queue.put_nowait(_FATAL)
+
+    def _finalize(self, frame: Frame | None, started: float) -> RunResult:
+        end_outputs: dict[str, Any] = {}
+        if frame is not None:
+            for port in frame.graph.end.config.ports:
+                if port.name in frame.end_values:
+                    end_outputs[port.name] = frame.end_values[port.name]
+                elif port.required:
+                    # D18: a declared output never produced is never a
+                    # false green — run failed
+                    self._record_unhandled(
+                        frame,
+                        frame.graph.end.id,
+                        port=port.name,
+                        kind="required_end_unwritten",
+                        message=f"required End port '{port.name}' was never written",
+                    )
+                else:
+                    end_outputs[port.name] = None  # noted by null (FR-502)
+
+        if self._aborted:
+            state: RunState = "aborted"
+        elif self._fatal is not None:
+            state = "error"
+        elif self._asserts_failed or self._unhandled:
+            state = "failed"
+        else:
+            state = "passed"
+
+        never_fired = []
+        if frame is not None:
+            never_fired = [
+                n.id
+                for n in self._flow.nodes
+                # End never fires by design (rule 5); note has no runtime
+                if n.type not in ("end", "note") and not frame.firing_counts.get(n.id)
+            ]
+
+        duration_ms = (time.monotonic() - started) * 1000
+        self._stream.emit(
+            RunFinished(
+                state=state,
+                duration_ms=round(duration_ms, 3),
+                asserts={
+                    "passed": self._asserts_passed,
+                    "failed": self._asserts_failed,
+                },
+                unhandled_errors=self._unhandled,
+                end_outputs=end_outputs,
+                nodes_never_fired=never_fired,
+                error_reason=self._fatal[0] if self._fatal else None,
+            )
+        )
+        return RunResult(
+            state=state,
+            end_outputs=end_outputs,
+            asserts_passed=self._asserts_passed,
+            asserts_failed=self._asserts_failed,
+            unhandled_errors=self._unhandled,
+            nodes_never_fired=never_fired,
+            duration_ms=duration_ms,
+            error_reason=self._fatal[0] if self._fatal else None,
+        )
+
+    # -- templating context (EN §6, FR-602) -----------------------------------
+
+    def _run_context(self) -> dict[str, Any]:
+        return {
+            "id": self._stream.run_id,
+            "timestamp": self._started_ts,
+            "env_name": self._env_name,
+        }
+
+    def _template_context(self, frame: Frame, trigger: Message) -> dict[str, Any]:
+        return {
+            "env": self._env,
+            "inputs": frame.inputs,
+            "run": self._run_context(),
+            "nodes": frame.node_outputs,
+            "trigger": trigger.envelope(),
+        }
+
+
+def _preview(value: Any) -> Any:
+    """`value_preview` for stream events: the value itself when small,
+    a truncated compact-JSON string when large (EN §7 — full bodies
+    live in request_* events, previews stay light)."""
+    try:
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        text = repr(value)
+    if len(text) <= _PREVIEW_LIMIT:
+        return value
+    return text[:_PREVIEW_LIMIT] + "…(truncated)"
+
+
+async def execute_flow(
+    flow: FlowFile,
+    *,
+    flow_identity: str,
+    manifest: Manifest,
+    env: Mapping[str, str],
+    env_name: str | None,
+    inputs: Mapping[str, Any] | None,
+    stream: EventStream,
+    run_timeout_s: float | None = None,
+) -> RunResult:
+    """Run one flow to quiescence (BIND → EXECUTE → FINALIZE). The
+    caller owns LOAD/CHECK, the event stream, and its sinks (M5 wires
+    `napf run`)."""
+    run = FlowRun(
+        flow,
+        flow_identity=flow_identity,
+        manifest=manifest,
+        env=env,
+        env_name=env_name,
+        inputs=inputs,
+        stream=stream,
+        run_timeout_s=run_timeout_s,
+    )
+    return await run.execute()

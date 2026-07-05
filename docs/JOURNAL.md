@@ -4,6 +4,23 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-05 — S2/M3 engine scheduler + frames + first runners
+
+- Done: `core/engine.py` — `FlowRun` (pump/QUIESCENT/empty-seed per EN
+  §3, budget + warning, run deadline, abort, `max_seconds` via
+  asyncio.timeout with D24 default scoping), BIND/ENV lifecycle,
+  root-frame + run-level outcome aggregation (D18/D20), runners for
+  start/end/condition/assert + delay (pulled forward — TR-2 needs an
+  async node). FR-401/402/406/407/409/501/502/504/505/511/602/603/704
+  ticked; TR-2 green, TR-3 root-frame half; 175 tests (26 new).
+- Decided (EN §2 pins): error_reason vocabulary; unhandled_errors shape
+  `{frame,node,port,kind,message}` incl. required-End misses;
+  `op: present` on undefined path = failed check, not node error;
+  never-fired excludes end/note; value_preview ≤512 chars; unsupported
+  node types ⇒ run `error`, never a crash.
+- Next: S2/M4 — request node + niquests adapter (NFR-09), retry,
+  capture valves, timeout→error-port routing.
+
 ## 2026-07-05 — S2/M2 events + JSONL + masking
 
 - Done: `core/events.py` — EN §7 vocabulary as 13 kw-only dataclasses,

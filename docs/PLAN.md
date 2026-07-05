@@ -77,11 +77,15 @@ consumes the engine, `napf run` wires it all.
       `defaults.run.history`, `SecretMasker` at emission (D22).
       (FR-106/701/702; FR-704 ticks at M3 when the engine emits
       `run_finished` for real)
-- [ ] **M3 — Scheduler + frames**: pump + QUIESCENT sentinel +
-      empty-seed guard (EC08), firing rules, frames, outcome
-      aggregation (D18/D20), message budget, abort, run deadline,
-      `max_seconds` cancellation; start/end/condition/assert runners.
-      (FR-401–411, FR-501/502/504/505, FR-602/603; TR-2, TR-3)
+- [x] **M3 — Scheduler + frames** (landed 2026-07-05): pump + QUIESCENT
+      sentinel + empty-seed guard (EC08), rule-1/5 firing, frames,
+      run-level outcome aggregation (D18/D20), message budget, abort,
+      run deadline, `max_seconds` cancellation; start/end/condition/
+      assert runners + delay (pulled forward for TR-2's async-race
+      tests) — `core/engine.py`. TR-2 green; TR-3 root-frame half
+      green. Left open by design: FR-403 rules 2–4 (python/merge/guards,
+      S3), FR-404 hierarchical frames (S3), FR-408 session close (M4),
+      FR-410 error-port routing (M4/S3), FR-411 `--timeout` flag (M5).
 - [ ] **M4 — request node**: niquests behind the internal adapter
       module (NFR-09), engine-level retry, non-2xx-is-data (EC13),
       `defaults.request` merge (EC23), capture valves, timing fields,

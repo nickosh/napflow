@@ -47,31 +47,31 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-4xx — Engine core
 
-- [ ] FR-401 (S2) Message-driven scheduler: single asyncio loop per run, `in_flight` accounting, QUIESCENT sentinel enqueued by the zero-reaching decrement. (EN §3, D14)
-- [ ] FR-402 (S2) Empty-seed guard: finalize immediately when post-seed `in_flight == 0`. (EC08)
+- [x] FR-401 (S2) Message-driven scheduler: single asyncio loop per run, `in_flight` accounting, QUIESCENT sentinel enqueued by the zero-reaching decrement. (EN §3, D14) — `FlowRun._pump`/`_dec` in `core/engine.py`, sentinel-race test in `tests/test_engine.py`, 2026-07-05
+- [x] FR-402 (S2) Empty-seed guard: finalize immediately when post-seed `in_flight == 0`. (EC08) — `_pump` post-seed return, `test_empty_seed_finalizes_immediately`, 2026-07-05
 - [ ] FR-403 (S2) Firing rules 1–6 exactly as specified — including merge `all`/`collect` slot-clearing vs rule-2 latest-value retention. (EN §4)
 - [ ] FR-404 (S2) Frames: per-frame variables, inputs, firing counts, guard state; hierarchical frame ids; data crosses only via Start/End. (EN §1)
 - [ ] FR-405 (S2) Outcome aggregation: asserts, python-asserts, unhandled error-port messages roll up run-wide; run state = worst outcome in the frame tree. (D20)
-- [ ] FR-406 (S2) Run states `passed|failed|error|aborted` per EN §2 definitions, incl. required-End-port failure (D18); exit codes 0/1/2/130.
-- [ ] FR-407 (S2) Message budget (`defaults.run.message_budget`, default 100000): tick per emission run-wide incl. child frames, `budget_warning` at 10%, exhaustion → run `error` naming the hot edge. (EN §3, EC31)
-- [ ] FR-408 (S2) Abort: cancel tasks, close session, state `aborted`; events already written stay valid (dangling `request_started` tolerated). (EN §3, EC20)
-- [ ] FR-409 (S2) Unhandled error-port message ⇒ run `failed`; nodes without an error port surface evaluation errors as unhandled node errors. (EN §2/§6, EC24)
+- [x] FR-406 (S2) Run states `passed|failed|error|aborted` per EN §2 definitions, incl. required-End-port failure (D18); exit codes 0/1/2/130. — `_finalize` + `EXIT_CODES` in `core/engine.py` (error_reason vocabulary pinned in EN §2), `tests/test_engine.py`, 2026-07-05
+- [x] FR-407 (S2) Message budget (`defaults.run.message_budget`, default 100000): tick per emission run-wide incl. child frames, `budget_warning` at 10%, exhaustion → run `error` naming the hot edge. (EN §3, EC31) — `_tick_budget`, `test_budget_exhaustion_names_hot_edge`, 2026-07-05
+- [ ] FR-408 (S2) Abort: cancel tasks, close session, state `aborted`; events already written stay valid (dangling `request_started` tolerated). (EN §3, EC20) — abort mechanism + task cancellation landed M3 (`FlowRun.abort`, tested); session close completes at M4 with the niquests session
+- [x] FR-409 (S2) Unhandled error-port message ⇒ run `failed`; nodes without an error port surface evaluation errors as unhandled node errors. (EN §2/§6, EC24) — `_emit_output` error-class check + `_node_error`, `tests/test_engine.py`, 2026-07-05
 - [ ] FR-410 (S2) Per-firing `max_seconds` settable on any node; the manifest default (`node_timeout_s` 300) auto-applies to `request`/`python` only — `delay`/`loop`/`flow` exempt from the default, explicit value honored. Tripped ceiling → `{error_kind: "timeout"}` on the node's error port; `flow` → child frame `aborted` + implicit error port payload; `loop`/port-less nodes → unhandled node error ⇒ `failed`. (D24)
 - [ ] FR-411 (S2) Run deadline: `defaults.run.run_timeout_s` (null = off) + `napf run --timeout N`; expiry cancels in-flight work, finalizes state `error` (exit 2) with `error_reason: run_timeout`, report and JSONL written. (D24)
 
 ## FR-5xx — Node types
 
-- [ ] FR-501 (S2) `start` — seeded once per frame; `out` carries the full `inputs` dict; ports define the flow's input interface; port `default:` templates evaluated at BIND with env/run scope only. (FS, EN §4, EC36)
-- [ ] FR-502 (S2) `end` — real input ports; accumulates latest value per port; `required: bool` default `true`; required-unwritten ⇒ run failed; `required: false` ⇒ `null`, noted in report; port name `error` rejected (E012). (D18, FS)
+- [x] FR-501 (S2) `start` — seeded once per frame; `out` carries the full `inputs` dict; ports define the flow's input interface; port `default:` templates evaluated at BIND with env/run scope only. (FS, EN §4, EC36) — `_seed` + `_bind` in `core/engine.py`, `test_bind_coerces_and_defaults`, 2026-07-05
+- [x] FR-502 (S2) `end` — real input ports; accumulates latest value per port; `required: bool` default `true`; required-unwritten ⇒ run failed; `required: false` ⇒ `null`, noted in report; port name `error` rejected (E012, S1 checker). (D18, FS) — pump rule-5 absorb + `_finalize`, TR-3 tests, 2026-07-05
 - [ ] FR-503 (S2) `request` — niquests shared per-run AsyncSession; `trigger` input; config templating; engine-level retry per node config; non-2xx on `response`, transport failures on `error`; full-detail events. (FS, EN §5, EC13)
-- [ ] FR-504 (S2) `condition` — sandboxed Jinja2 expr; forwards incoming message on `true`/`false`. (FS)
-- [ ] FR-505 (S2) `assert` — check kinds `status`/`expr`/`response_time`, ops `present|equals|not_equals|contains|matches|gt|lt`, `mode: report_all|fail_fast`; emits `assert_result` events; forwards on `passed`/`failed`. (FS)
+- [x] FR-504 (S2) `condition` — sandboxed Jinja2 expr; forwards incoming message on `true`/`false`. (FS) — `_run_node` in `core/engine.py`, `test_condition_routes_and_forwards_value`, 2026-07-05
+- [x] FR-505 (S2) `assert` — check kinds `status`/`expr`/`response_time`, ops `present|equals|not_equals|contains|matches|gt|lt`, `mode: report_all|fail_fast`; emits `assert_result` events; forwards on `passed`/`failed`. (FS) — `_run_assert`/`_eval_check` (present-op + label pins in EN §2), assert test block in `tests/test_engine.py`, 2026-07-05
 - [ ] FR-506 (S3) `python` — declared inputs only; JSON-serializable I/O; `AssertionError` → error port + report as python-assert; other exceptions → error port with traceback; declared outputs may not be named `error`; params with literal defaults = optional inputs, others required. (FS, E012, EC36)
 - [ ] FR-507 (S3) `switch` — expr + cases, `default` port, pass-through. (FS)
 - [ ] FR-508 (S3) `merge` — `any` (immediate forward), `all` (rendezvous, clear on emit), `collect` (count-based list). (FS, EN §4)
 - [ ] FR-509 (S3) `counter` — check-then-decrement: exactly `count` passes on `continue`, then every message → `exhausted`; per-frame reset; optional `reset` input restores count silently. (FS, EC16)
 - [ ] FR-510 (S3) `timeout` — first-message timestamp; lazy evaluation on arrival; `continue`/`expired`; `reset` clears. (FS)
-- [ ] FR-511 (S3) `delay` — templatable seconds, cancellable sleep, pass-through. (FS)
+- [x] FR-511 (S3) `delay` — templatable seconds, cancellable sleep, pass-through. (FS) — pulled forward to S2/M3 (TR-2 needed an async node); `_run_node` delay arm, templated-seconds + cancellation tests in `tests/test_engine.py`, 2026-07-05
 - [ ] FR-512 (S3) `log` — emits masked `log` event, persisted to JSONL, pass-through. (FS, D13)
 - [ ] FR-513 (S3) `set`/`get` — frame variable map; `set` forwards written value; `get` fires only on `trigger`. (FS, D17)
 - [ ] FR-514 (S3) `fixture` — json/csv from `fixtures/` (csv → list of dicts, header required); read once, cached per run; unconnected `trigger` auto-fires once at frame start. (FS, D17)
@@ -82,8 +82,8 @@ Stages (from CLAUDE.md build order — each independently useful):
 ## FR-6xx — Templating
 
 - [x] FR-601 (S2) Jinja2 `SandboxedEnvironment` + `StrictUndefined` is the only expression/template language, for `{{ }}` config strings and bare `expr:` alike. (D10) — `Renderer` in `core/templating.py` (sandboxed string + native envs; `render`/`evaluate`/`render_config`), `tests/test_templating.py`, 2026-07-05
-- [ ] FR-602 (S2) Context: `env`, `inputs`, `run` (`id`/`timestamp`/`env_name`), `nodes` (frame-local latest, unwrapped), `trigger` (full envelope), `item`/`index` in loop bodies. (EN §6)
-- [ ] FR-603 (S2) Undefined variable → node error to the error port; port-less nodes → unhandled node error, run failed. (EN §6, EC24)
+- [x] FR-602 (S2) Context: `env`, `inputs`, `run` (`id`/`timestamp`/`env_name`), `nodes` (frame-local latest, unwrapped), `trigger` (full envelope), `item`/`index` in loop bodies. (EN §6) — `_template_context` in `core/engine.py` (`item`/`index` bind with loops, FR-515/S3), `test_nodes_context_and_trigger_envelope`, 2026-07-05
+- [x] FR-603 (S2) Undefined variable → node error to the error port; port-less nodes → unhandled node error, run failed. (EN §6, EC24) — `_node_error` outlet routing (error-port path exercised at M4 with request), `test_undefined_variable_is_unhandled_node_error`, 2026-07-05
 - [x] FR-604 (S2) Native-value rule: a config value that is exactly one `{{ expr }}` evaluates to the native value; mixed content renders to string; field schema type applies post-evaluation. (D25) — structural detection + `coerce_value`/`stringify_native` (pins in EN §6); node runners apply field types at M3/M4, `tests/test_templating.py`, 2026-07-05
 
 ## FR-7xx — Observability
@@ -91,7 +91,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [x] FR-701 (S2) JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`, append-only, objects identical to the live WebSocket stream; retention per `defaults.run.history`. (D13) — `JsonlSink`/`run_log_path`/`apply_retention` in `core/events.py` (run-id format + JSONL profile pinned in EN §7), `tests/test_events.py`, 2026-07-05
 - [x] FR-702 (S2) Event vocabulary exactly per EN §7 (types, common fields, `seq`). — 13 event dataclasses + `EventStream` stamping in `core/events.py`, exact-vocabulary test in `tests/test_events.py`, 2026-07-05
 - [ ] FR-703 (S2) Full request/response bodies always stored; `defaults.run.body_capture_mb` (10) valve with `truncated: true` marker; `value_preview` truncation in stream-only fields. (D13, EN §7)
-- [ ] FR-704 (S2) Events are born masked (FR-106); `run_finished` carries state, durations, assert tallies, unhandled errors, masked end outputs, `nodes_never_fired`. (EN §7)
+- [x] FR-704 (S2) Events are born masked (FR-106); `run_finished` carries state, durations, assert tallies, unhandled errors, masked end outputs, `nodes_never_fired`. (EN §7) — masking at M2 (`EventStream.emit`); `run_finished` populated by `_finalize` at M3, `tests/test_engine.py`, 2026-07-05
 - [ ] FR-705 (S2) Timing breakdown captured where niquests exposes it; fields omitted otherwise. (EN §7)
 - [ ] FR-706 (S2) Run-level capture valve `defaults.run.run_capture_mb` (500): total body bytes per run capped, excess truncated with marker, `capture_warning` at 10% remaining. (EN §7, EC32)
 
@@ -140,8 +140,8 @@ Stages (from CLAUDE.md build order — each independently useful):
 ## Test requirements (priority order — highest bug-risk first)
 
 - [ ] TR-1 Merge semantics under fast cycles: `all` clears slots vs rule-2 latest-value retention. (EN §4)
-- [ ] TR-2 Quiescence detection: sentinel race + empty-seed finalize. (D14, EC08)
-- [ ] TR-3 Required-End-port failure path: unreached required output ⇒ `failed` ⇒ exit 1, across subflow and loop frames. (D18, D20)
+- [x] TR-2 Quiescence detection: sentinel race + empty-seed finalize. (D14, EC08) — `test_quiescence_under_overlapping_async_firings` + `test_empty_seed_finalizes_immediately`, 2026-07-05
+- [ ] TR-3 Required-End-port failure path: unreached required output ⇒ `failed` ⇒ exit 1, across subflow and loop frames. (D18, D20) — root-frame half green at S2/M3 (`tests/test_engine.py` TR-3 block); subflow/loop frames complete it at S3
 - [ ] TR-4 Guard exhaustion routing: `exhausted`/`expired` as pass-through outputs; W106; counter N-passes boundary (Nth vs N+1th message). (D19, EC16)
 - [ ] TR-5 Guard reset / per-frame isolation in loops & subflows. (EN §4)
 - [ ] TR-6 Worker lifecycle: timeout-kill-respawn, crash isolation, Windows semantics. (EN §5a)

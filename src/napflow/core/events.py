@@ -322,7 +322,7 @@ class EventStream:
             value = data.pop(common)
             if value is not None:
                 record[common] = value
-        record["ts"] = _isoformat_ms(self._clock())
+        record["ts"] = isoformat_ms(self._clock())
         record["seq"] = self._seq
         omittable = _omit_if_none(type(event))
         for key, value in data.items():
@@ -339,7 +339,7 @@ class EventStream:
             sink.close()
 
 
-def _isoformat_ms(dt: datetime) -> str:
+def isoformat_ms(dt: datetime) -> str:
     """UTC, millisecond precision, `Z` suffix — the Message meta format
     (EN §1): `2026-06-11T10:00:00.123Z`."""
     dt = dt.astimezone(UTC)
