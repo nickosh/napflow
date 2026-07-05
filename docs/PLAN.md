@@ -70,11 +70,13 @@ consumes the engine, `napf run` wires it all.
       `stringify_native`), `TemplateEvaluationError` (routing lands M3);
       env layering `layer_env` — `core/templating.py`,
       `core/workspace.py`. (FR-104/601/604; TR-10 core)
-- [ ] **M2 — Events + masking**: `core/events.py` — EN §7 vocabulary
-      with common fields + `seq`, JSONL sink at
+- [x] **M2 — Events + masking** (landed 2026-07-05): `core/events.py`
+      — EN §7 vocabulary (13 dataclasses) with common fields + `seq`,
+      `EventStream` (stamps + masks + fans out), JSONL sink at
       `.napflow/runs/<flow>/<run-id>.jsonl`, retention per
-      `defaults.run.history`, secret masking at emission (D22).
-      (FR-106/701/702/704)
+      `defaults.run.history`, `SecretMasker` at emission (D22).
+      (FR-106/701/702; FR-704 ticks at M3 when the engine emits
+      `run_finished` for real)
 - [ ] **M3 — Scheduler + frames**: pump + QUIESCENT sentinel +
       empty-seed guard (EC08), firing rules, frames, outcome
       aggregation (D18/D20), message budget, abort, run deadline,

@@ -450,6 +450,23 @@ Rules:
   matching `request_finished`; replay tolerates a dangling start (EC20).
 - UI replay = re-read the JSONL.
 
+Pins made at S2/M2 (2026-07-05, `core/events.py`):
+- **Run id** = `YYYYmmdd-HHMMSS-xxxxxx` (UTC + 6 hex): Windows-safe
+  (no `:`), lexicographic order == chronological; doubles as the JSONL
+  filename stem. Retention runs at run start, after the new run's file
+  is created (the new run counts toward `history`); the sink opens
+  with `x` — a run id collision fails loudly, never overwrites.
+- **Stamping**: `seq` starts at 1; `ts` is UTC, millisecond precision,
+  `Z` suffix (the EN §1 message format). Optional fields — declared
+  with default None, incl. `frame`/`node` — are omitted when unset;
+  required nullable fields (run_started `env_name`) appear as null.
+- **JSONL profile**: compact separators, `ensure_ascii=False`, UTF-8,
+  LF; every line flushed as written (abort leaves a replayable prefix).
+- **Masking**: token is `***`; secret NAME globs match case-sensitively
+  (`fnmatchcase`); values replaced longest-first (a secret embedded in
+  a longer secret masks fully); dict keys are scanned too ("wherever
+  they appear").
+
 ## 8. `napf check` rules (v1)
 
 ```

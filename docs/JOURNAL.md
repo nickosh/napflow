@@ -4,6 +4,19 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-05 — S2/M2 events + JSONL + masking
+
+- Done: `core/events.py` — EN §7 vocabulary as 13 kw-only dataclasses,
+  `EventStream` (stamps run_id/ts/seq, masks at emission, fans out to
+  sinks), `JsonlSink` + `run_log_path` + `apply_retention`,
+  `SecretMasker` (D22). FR-106/701/702 ticked; 149 tests green (17 new).
+- Decided (EN §7 pins): run id `YYYYmmdd-HHMMSS-xxxxxx` UTC (sortable,
+  Windows-safe, `x`-mode open); seq 1-based; ts UTC-ms-`Z`; optional
+  (default-None) fields omitted when unset; compact UTF-8 JSONL flushed
+  per line; mask token `***`, longest-first, keys scanned too.
+- Next: S2/M3 — scheduler + frames + start/end/condition/assert
+  (`core/engine.py`; TR-2, TR-3).
+
 ## 2026-07-05 — S2/M1 templating render (+ S2 milestone breakdown)
 
 - Done: render half of `core/templating.py` — `Renderer` (sandboxed

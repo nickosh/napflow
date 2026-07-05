@@ -17,7 +17,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [x] FR-103 (S1) Env profile discovery: every `envs/*.env` is a profile named by filename stem; no registry. Dialect: `KEY=VALUE`, `#` comments, optional quotes stripped, no `export`/interpolation. (WM §2, EC36) — `Workspace.env_profiles` + `parse_env_file` (dialect pins in WM §2), 2026-07-04
 - [x] FR-104 (S2) Env layering: profile file → process environment, last wins. (WM §3) — `layer_env` in `core/workspace.py`; whole process env visible (pinned in WM §3), `tests/test_templating.py`, 2026-07-05
 - [ ] FR-105 (S2) `defaults.request` merges shallowly into request nodes; templates there may reference only `env.*`/`run.*`. (WM §4, EC23)
-- [ ] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7)
+- [x] FR-106 (S2) Secret masking: values of env vars matching `environments.secrets` patterns (active profile + process env) replaced via substring scan, ≥5-char minimum, at event emission. Declared secrets only. (D22, EN §7) — `SecretMasker` in `core/events.py` (token `***`, longest-first, keys included — pins in EN §7), `tests/test_events.py`, 2026-07-05
 - [x] FR-107 (S1) `napf init` scaffolds: manifest, `flows/main`, `flows/example` (httpbin demo), `flows/smoke` (fixture→python→assert, offline), `envs/dev.env`, `envs/example.env`, `.gitignore`, `.gitattributes` (`*.yaml`/`*.yml` `text eol=lf`), `.napflow/`. First-touch: `napf run flows/smoke` passes **offline** out of the box (S1 only scaffolds it; the run becomes executable once the S3 node set lands). (WM, EC34) — `cli/scaffold.py` (fixtures/smoke.json added to the WM listing); scaffold checks clean, `tests/test_cli.py`, 2026-07-05
 - [ ] FR-108 (S3) `python.interpreter` manifest key selects the worker interpreter; `null` = napflow's own. (WM, EN §5a)
 - [x] FR-109 (S1) `codegen:` manifest key is parsed and ignored (reserved). (WM) — `Manifest.codegen: Any`, test in `tests/test_models_manifest.py`, 2026-07-04
@@ -88,8 +88,8 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-7xx — Observability
 
-- [ ] FR-701 (S2) JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`, append-only, objects identical to the live WebSocket stream; retention per `defaults.run.history`. (D13)
-- [ ] FR-702 (S2) Event vocabulary exactly per EN §7 (types, common fields, `seq`).
+- [x] FR-701 (S2) JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`, append-only, objects identical to the live WebSocket stream; retention per `defaults.run.history`. (D13) — `JsonlSink`/`run_log_path`/`apply_retention` in `core/events.py` (run-id format + JSONL profile pinned in EN §7), `tests/test_events.py`, 2026-07-05
+- [x] FR-702 (S2) Event vocabulary exactly per EN §7 (types, common fields, `seq`). — 13 event dataclasses + `EventStream` stamping in `core/events.py`, exact-vocabulary test in `tests/test_events.py`, 2026-07-05
 - [ ] FR-703 (S2) Full request/response bodies always stored; `defaults.run.body_capture_mb` (10) valve with `truncated: true` marker; `value_preview` truncation in stream-only fields. (D13, EN §7)
 - [ ] FR-704 (S2) Events are born masked (FR-106); `run_finished` carries state, durations, assert tallies, unhandled errors, masked end outputs, `nodes_never_fired`. (EN §7)
 - [ ] FR-705 (S2) Timing breakdown captured where niquests exposes it; fields omitted otherwise. (EN §7)
