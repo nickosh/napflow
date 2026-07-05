@@ -235,6 +235,8 @@ def run(
         inputs=bound,
         stream=stream,
         run_timeout_s=timeout,
+        flow_dir=ws.root / Path(identity),
+        workspace_root=ws.root,
     )
 
     async def _execute():

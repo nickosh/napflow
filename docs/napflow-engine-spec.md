@@ -410,6 +410,42 @@ engine ──spawn──▶ worker (configured interpreter)
   ASGI/WebSocket setups do) — a Windows integration test runs a
   python-node flow *through the server* to lock this in (EC33, TR-9).
 
+Pins made at S3/M2 (2026-07-06, `core/worker.py` + `core/worker_main.py`
++ engine `_run_python`):
+- **Protocol extensions** beyond the sketch above: a `{"ready": true}`
+  handshake after nodes.py imports; `{"fatal", "traceback"}` then exit 1
+  on import failure (surfaces as a `worker_crash` node error);
+  `{"stream": "stdout"|"stderr", "text"}` messages carry captured user
+  output (stdout → `log` level `info`, stderr → `warn`; `node` = the
+  firing's node, `label` = `python:<node>`); error replies carry
+  `error_kind` (`python_assert` | `python_error`) and `error_type`.
+- **Beyond `print()` (EC28)**: after the dup, fd 1 is pointed at fd 2 —
+  raw-fd writers (C extensions, user subprocesses) land in the stderr
+  pipe, forwarded as `warn` log events; a 15-line stderr tail is kept
+  for crash messages. Stream lines cap at 8192 chars.
+- **Return convention (FR-506)**: the function returns a dict keyed by
+  declared `outputs` — every declared key required (missing ⇒
+  `python_error`), extra keys ignored, `outputs: []` discards the
+  return. A python-assert = `asserts_failed` increment + `assert_result`
+  event (`op: "python-assert"`, junit picks it up) + `python_error`
+  event + error-port payload `{error_kind: "python_assert", message,
+  traceback, function}`.
+- **Worker env & cwd**: the subprocess inherits the parent's process
+  env untouched — the active profile is NOT injected (functions see
+  only declared inputs). cwd = workspace root (fallback: the flow dir).
+- **Interpreter resolution (FR-108)**: `null` → the interpreter running
+  napflow; a relative multi-part path resolves against the workspace
+  root; a bare name resolves through PATH; spawn failure = a
+  `worker_crash` node error, not a run error.
+- **Queued firings on worker death**: a task not yet written to the
+  pipe retries once on a fresh worker (the lazy-respawn path for
+  firings queued behind a killed task); a task in flight fails as
+  `worker_crash`.
+- **Timeout payloads now carry `max_seconds`** (the FS D24 shape) —
+  applied to request timeouts too.
+- **Pool cap**: enforcement deferred until multi-flow runs make >1
+  module possible (S3/M5) — a run holds exactly one module today.
+
 ## 6. Templating context
 
 Sandboxed Jinja2 (`SandboxedEnvironment`), per-frame context:

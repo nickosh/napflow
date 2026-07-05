@@ -58,7 +58,17 @@ def manifest(**run_defaults):
     return Manifest.model_validate(data)
 
 
-def run(flow_file, *, inputs=None, env=None, env_name="dev", mani=None, timeout=None):
+def run(
+    flow_file,
+    *,
+    inputs=None,
+    env=None,
+    env_name="dev",
+    mani=None,
+    timeout=None,
+    flow_dir=None,
+    workspace_root=None,
+):
     sink = CaptureSink()
     stream = EventStream("test-run", NO_SECRETS, [sink])
     result = asyncio.run(
@@ -72,8 +82,10 @@ def run(flow_file, *, inputs=None, env=None, env_name="dev", mani=None, timeout=
                 inputs=inputs,
                 stream=stream,
                 run_timeout_s=timeout,
+                flow_dir=flow_dir,
+                workspace_root=workspace_root,
             ),
-            timeout=10,
+            timeout=30,
         )
     )
     return result, sink.records
@@ -340,11 +352,17 @@ def test_env_required_missing_is_run_error():
 
 
 def test_unsupported_node_type_is_run_error():
+    # loop is the last S3 node type to land (M5) — until then a flow
+    # using it must be a clean run error, never a crash
     f = flow(
         start(),
-        {"id": "py", "type": "python", "config": {"function": "f"}},
+        {
+            "id": "lp",
+            "type": "loop",
+            "config": {"over": "trigger.value", "body": "flows/x"},
+        },
         end({"name": "x", "required": False}),
-        edges=[("start.out", "py.value")],
+        edges=[("start.out", "lp.trigger")],
     )
     result, _ = run(f)
     assert result.state == "error"

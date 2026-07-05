@@ -4,6 +4,22 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S3/M2 python worker + python node
+
+- Done: `core/worker_main.py` (stdlib-only child; EC28 dup + fd1→fd2,
+  stream capture → log events) + `core/worker.py` (lazy per-module
+  workers, serial lock, terminate→2s→kill, pre-send retry, stderr tail)
+  + engine `_run_python`/`_resolve_interpreter` + CLI `flow_dir`/
+  `workspace_root` threading. FR-108/506/901–906 + TR-6 ticked; TR-8/9
+  half-annotated. 229 tests green (17 new, all real subprocesses).
+- Decided (EN §5a pins): protocol ready/fatal/stream extensions;
+  dict-keyed return convention (missing key = python_error, `outputs:
+  []` discards); worker inherits process env (profile NOT injected),
+  cwd = workspace root; interpreter resolution rule; timeout payloads
+  now carry `max_seconds` (request too); pool cap deferred to M5.
+- Next: S3/M3 — simple frame-local nodes (switch, set/get, log,
+  fixture, note) → `napf run flows/smoke` passes offline (EC34).
+
 ## 2026-07-06 — S3/M1 firing rules 2–3 + merge
 
 - Done: pump dispatch refactor in `core/engine.py` — rule-2 latest-value

@@ -128,12 +128,17 @@ and guards follow; container frames close the stage.
       full — rule-2 retention proved with a fabricated two-input
       condition node (engine trusts the checker), so it didn't have to
       wait for M2's python nodes. (FR-403 rules 2–3, FR-508)
-- [ ] **M2 — python worker + python node**: persistent worker
-      subprocess, JSON-lines protocol, EC28 fd-dup protocol integrity,
-      timeout-kill-respawn, crash isolation, Windows spawn semantics
-      (FR-901–906); python runner incl. AssertionError→python-assert
-      (FR-506); `python.interpreter` (FR-108). TR-6 green; TR-9
-      print-flood half; TR-1 completes.
+- [x] **M2 — python worker + python node** (landed 2026-07-06):
+      `core/worker_main.py` (stdlib-only child, EC28 fd-dup + fd1→fd2
+      for raw writers) + `core/worker.py` (per-module pool, serial
+      lock, timeout-kill-respawn, crash isolation, CREATE_NO_WINDOW) +
+      engine `_run_python` (dict-keyed outputs, python-assert →
+      asserts_failed + assert_result + python_error events, FR-506);
+      `python.interpreter` resolution (FR-108). TR-6 green; TR-9
+      print-flood half green; rule-2 re-fire proven through a real
+      multi-param function. Engine/CLI now thread `flow_dir` +
+      `workspace_root`; unwired-error-port reports carry the payload's
+      cause. (FR-108/506/901–906)
 - [ ] **M3 — simple frame-local nodes**: switch, set/get, log, fixture
       (incl. rule-6 auto-seed of unconnected `trigger`), note runtime
       no-op. `napf run flows/smoke` passes offline → EC34 first-touch

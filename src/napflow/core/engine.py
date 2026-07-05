@@ -28,6 +28,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from napflow import __version__
@@ -36,8 +37,10 @@ from napflow.core.events import (
     BudgetWarning,
     CaptureWarning,
     EventStream,
+    LogEvent,
     MessageEmitted,
     NodeFired,
+    PythonError,
     RequestFailed,
     RequestFinished,
     RequestStarted,
@@ -56,6 +59,7 @@ from napflow.core.models.flow import (
     ExprCheck,
     MergeNode,
     Node,
+    PythonNode,
     RequestNode,
     ResponseTimeCheck,
     StartNode,
@@ -69,6 +73,12 @@ from napflow.core.templating import (
     coerce_value,
     stringify_native,
 )
+from napflow.core.worker import (
+    WorkerCrash,
+    WorkerPool,
+    WorkerTaskError,
+    default_interpreter,
+)
 
 RunState = Literal["passed", "failed", "error", "aborted"]
 
@@ -80,12 +90,21 @@ EXIT_CODES: dict[RunState, int] = {
     "aborted": 130,
 }
 
-# Node types the engine can run; the rest land through S3 (python
-# worker at M2, set/get/switch/log/fixture at M3, guards at M4,
-# loop/flow at M5). `note` has no runtime behavior but is legal on any
-# canvas.
+# Node types the engine can run; the rest land through S3
+# (set/get/switch/log/fixture at M3, guards at M4, loop/flow at M5).
+# `note` has no runtime behavior but is legal on any canvas.
 SUPPORTED_NODE_TYPES = frozenset(
-    {"start", "end", "condition", "assert", "delay", "request", "merge", "note"}
+    {
+        "start",
+        "end",
+        "condition",
+        "assert",
+        "delay",
+        "request",
+        "merge",
+        "python",
+        "note",
+    }
 )
 
 _MB = 1024 * 1024
@@ -120,10 +139,12 @@ class _BudgetExhausted(Exception):
 class _NodeError(Exception):
     """A firing failed (template error, bad shape, timeout). Routed to
     the node's error outlet when it has one, else recorded as an
-    unhandled node error ⇒ run failed (EC24)."""
+    unhandled node error ⇒ run failed (EC24). `extra` merges into the
+    error-port payload (traceback/function/max_seconds fields)."""
 
-    def __init__(self, kind: str, message: str):
+    def __init__(self, kind: str, message: str, extra: dict[str, Any] | None = None):
         self.kind = kind
+        self.extra = extra
         super().__init__(message)
 
 
@@ -253,9 +274,14 @@ class FlowRun:
         inputs: Mapping[str, Any] | None,
         stream: EventStream,
         run_timeout_s: float | None = None,
+        flow_dir: Path | None = None,
+        workspace_root: Path | None = None,
     ):
         self._flow = flow
         self._flow_identity = flow_identity
+        self._flow_dir = flow_dir
+        self._workspace_root = workspace_root
+        self._python_settings = manifest.python
         self._defaults = manifest.defaults.run
         self._env = dict(env)
         self._env_name = env_name
@@ -281,6 +307,7 @@ class FlowRun:
         self._unhandled: list[dict[str, Any]] = []
 
         self._http: HttpClient | None = None
+        self._workers: WorkerPool | None = None
         self._request_defaults: RequestDefaults = manifest.defaults.request
         self._body_cap = int(self._defaults.body_capture_mb * _MB)
         self._capture_remaining = int(self._defaults.run_capture_mb * _MB)
@@ -332,6 +359,8 @@ class FlowRun:
 
         if self._http is not None:  # FR-408: session closed on every exit
             await self._http.close()
+        if self._workers is not None:  # workers killed at FINALIZE (EN §5a)
+            await self._workers.close()
         return self._finalize(frame, started)
 
     # -- lifecycle: BIND / ENV (EN §2) --------------------------------------
@@ -437,6 +466,10 @@ class FlowRun:
             if len(slots) < len(connected):
                 return
             slot_values = dict(slots)  # snapshot at decision time
+        elif isinstance(node, PythonNode):
+            # single-input python: the function still needs its kwarg
+            # by port (=param) name (FR-506)
+            slot_values = {delivery.port: delivery.message.value}
         # rule 1 — or a complete rule-2 slot set: fire per delivery
         self._in_flight += 1
         task = asyncio.create_task(
@@ -516,11 +549,12 @@ class FlowRun:
                 node,
                 kind="timeout",
                 message=f"firing exceeded max_seconds={ceiling}",
+                extra={"max_seconds": ceiling},  # payload shape per FS D24
             )
         except (TemplateEvaluationError, TypeCoercionError) as e:
             self._node_error(frame, node, kind="template_error", message=str(e))
         except _NodeError as e:
-            self._node_error(frame, node, kind=e.kind, message=str(e))
+            self._node_error(frame, node, kind=e.kind, message=str(e), extra=e.extra)
         except _BudgetExhausted as e:
             self._set_fatal("budget_exhausted", str(e), e.edge)
         except asyncio.CancelledError:
@@ -537,13 +571,20 @@ class FlowRun:
         edges = frame.graph.out_edges.get((node_id, port), [])
         if not edges:
             if _ERROR_CLASS_PORTS.get(node_type) == port:
-                # unhandled error-port message ⇒ run failed (EN §2, EC24)
+                # unhandled error-port message ⇒ run failed (EN §2, EC24);
+                # surface the payload's cause — the report must say WHY
+                detail = ""
+                if isinstance(value, Mapping) and "message" in value:
+                    kind = value.get("error_kind", "error")
+                    detail = f" — {kind}: {value['message']}"
                 self._record_unhandled(
                     frame,
                     node_id,
                     port=port,
                     kind="unhandled_error_port",
-                    message=f"message into unconnected error port {node_id}.{port}",
+                    message=(
+                        f"message into unconnected error port {node_id}.{port}" + detail
+                    ),
                 )
             return
         for to_node, to_port in edges:
@@ -610,6 +651,8 @@ class FlowRun:
                 return self._run_assert(frame, node, trigger, context)
             case RequestNode():
                 return await self._run_request(frame, node, context)
+            case PythonNode():
+                return await self._run_python(frame, node, slot_values or {})
             case DelayNode():
                 seconds = node.config.seconds
                 if isinstance(seconds, str):
@@ -618,6 +661,102 @@ class FlowRun:
                 return [("out", trigger.value)]
             case _:  # unreachable: _check_supported gates node types
                 raise _NodeError("internal", f"no runner for type '{node.type}'")
+
+    async def _run_python(
+        self, frame: Frame, node: PythonNode, inputs: dict[str, Any]
+    ) -> list[tuple[str, Any]]:
+        """FR-506: declared inputs only (the slot snapshot, keyed by
+        port = param name), JSON-serializable I/O, run in the module's
+        persistent worker (EN §5a). AssertionError counts as a failed
+        assert run-wide AND routes to the error port; other exceptions
+        route with traceback. Return value: a dict keyed by declared
+        `outputs` (each key required); with no declared outputs the
+        return value is discarded."""
+        function = node.config.function
+        if self._flow_dir is None:
+            raise _NodeError(
+                "worker_crash",
+                "python nodes need the flow directory (pass flow_dir= to"
+                " FlowRun/execute_flow) to locate nodes.py",
+            )
+        nodes_path = self._flow_dir / "nodes.py"
+        if not nodes_path.is_file():
+            raise _NodeError("worker_crash", f"no nodes.py at {nodes_path}")
+        if self._workers is None:
+            self._workers = WorkerPool(
+                self._resolve_interpreter(),
+                cwd=self._workspace_root or self._flow_dir,
+                on_log=self._worker_log,
+            )
+        try:
+            value = await self._workers.call(
+                nodes_path, function, inputs, label=(frame.id, node.id)
+            )
+        except WorkerTaskError as e:
+            self._stream.emit(
+                PythonError(
+                    frame=frame.id,
+                    node=node.id,
+                    function=function,
+                    error_type=e.error_type,
+                    message=str(e),
+                    traceback=e.traceback_text,
+                )
+            )
+            if e.kind == "python_assert":  # FR-506: report as python-assert
+                self._asserts_failed += 1
+                self._stream.emit(
+                    AssertResult(
+                        frame=frame.id,
+                        node=node.id,
+                        check=f"{function}: {e}",
+                        op="python-assert",
+                        expected=None,
+                        actual=None,
+                        passed=False,
+                    )
+                )
+            raise _NodeError(
+                e.kind,
+                str(e),
+                extra={"traceback": e.traceback_text, "function": function},
+            ) from e
+        except WorkerCrash as e:
+            raise _NodeError("worker_crash", str(e)) from e
+        outputs: list[tuple[str, Any]] = []
+        for port in node.config.outputs:
+            if not isinstance(value, Mapping) or port not in value:
+                raise _NodeError(
+                    "python_error",
+                    f"{function}() must return a dict with a key for each"
+                    f" declared output (missing {port!r})",
+                )
+            outputs.append((port, value[port]))
+        return outputs
+
+    def _resolve_interpreter(self) -> str:
+        """FR-108: `python.interpreter` from napflow.yaml; None = the
+        interpreter running napflow. A relative multi-part path resolves
+        against the workspace root; bare names go through PATH."""
+        configured = self._python_settings.interpreter
+        if configured is None:
+            return default_interpreter()
+        path = Path(configured)
+        if not path.is_absolute() and len(path.parts) > 1 and self._workspace_root:
+            return str(self._workspace_root / path)
+        return configured
+
+    def _worker_log(self, level: str, label: tuple[str, str], text: str) -> None:
+        frame_id, node_id = label
+        self._stream.emit(
+            LogEvent(
+                frame=frame_id,
+                node=node_id,
+                label=f"python:{node_id}",
+                level=level,  # type: ignore[arg-type]  # worker sends info|warn
+                value=text,
+            )
+        )
 
     async def _run_request(
         self, frame: Frame, node: RequestNode, context: dict[str, Any]
@@ -859,12 +998,19 @@ class FlowRun:
 
     # -- errors & outcomes (EN §2, D18/D20, EC24) ------------------------------
 
-    def _node_error(self, frame: Frame, node: Node, *, kind: str, message: str) -> None:
+    def _node_error(
+        self,
+        frame: Frame,
+        node: Node,
+        *,
+        kind: str,
+        message: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         outlet = _NODE_ERROR_OUTLET.get(node.type)
         if outlet is not None:
-            self._emit_output(
-                frame, node.id, outlet, {"error_kind": kind, "message": message}
-            )
+            payload = {"error_kind": kind, "message": message} | (extra or {})
+            self._emit_output(frame, node.id, outlet, payload)
         else:
             self._record_unhandled(
                 frame, node.id, port=None, kind=kind, message=message
@@ -1002,10 +1148,14 @@ async def execute_flow(
     inputs: Mapping[str, Any] | None,
     stream: EventStream,
     run_timeout_s: float | None = None,
+    flow_dir: Path | None = None,
+    workspace_root: Path | None = None,
 ) -> RunResult:
     """Run one flow to quiescence (BIND → EXECUTE → FINALIZE). The
     caller owns LOAD/CHECK, the event stream, and its sinks (M5 wires
-    `napf run`)."""
+    `napf run`). `flow_dir` locates nodes.py for python nodes;
+    `workspace_root` sets the worker cwd and resolves a relative
+    `python.interpreter`."""
     run = FlowRun(
         flow,
         flow_identity=flow_identity,
@@ -1015,5 +1165,7 @@ async def execute_flow(
         inputs=inputs,
         stream=stream,
         run_timeout_s=run_timeout_s,
+        flow_dir=flow_dir,
+        workspace_root=workspace_root,
     )
     return await run.execute()
