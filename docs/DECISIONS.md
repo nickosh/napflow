@@ -210,6 +210,14 @@ such; (3) runtime redaction (a `set ... secret: true`, or a response
 field-path redaction directive) is a roadmap item, not v1. Rejected:
 silent partial coverage behind an absolute-sounding promise.
 
+Amended 2026-07-05 (S2/M5, owner-confirmed): masking covers UI, logs,
+events, stored runs, and reports — but **`napf run` stdout is NOT
+masked**. stdout carries only the End-outputs JSON and is the
+functional output; `napf run flows/login | jq .token` is the documented
+contract, and masking it would break the pipe use case the CLI exists
+for. Pinned in the WM CLI section with a test
+(`test_stdout_unmasked_but_jsonl_masked`).
+
 ## D23 — On-disk format is YAML, pinned to a safe, canonical profile
 YAML stays the serialization format for flows and the manifest — but
 "raw" YAML is not used. It is constrained to a fixed profile so the
