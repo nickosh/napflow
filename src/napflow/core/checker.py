@@ -766,6 +766,14 @@ def node_surfaces(
     return {node.id: resolver.surface(node, flow_dir) for node in model.nodes}
 
 
+def python_functions(flow_dir: Path) -> list[str] | None:
+    """Top-level function names in the flow's nodes.py, AST-only (EC14 —
+    never imports user code). None = no nodes.py or a syntax error; the
+    canvas function dropdown distinguishes that from an empty module."""
+    functions = _SurfaceResolver(None).module_functions(flow_dir)
+    return None if functions is None else list(functions)
+
+
 def check_workspace(workspace: Workspace) -> list[CheckDiagnostic]:
     """`napf check`: every discovered flow, the closure of referenced
     flows (FR-308), reference-DAG validation (E007), env coverage (W105)."""

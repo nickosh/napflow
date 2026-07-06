@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FlowDetail } from "./api";
 import { PORT_TYPE_COLORS } from "./colors";
-import { toGraph } from "./graph";
+import { freshNodeId, toGraph } from "./graph";
 
 function detail(overrides: Partial<FlowDetail> = {}): FlowDetail {
   // shaped like flows/smoke from `napf init` (fixture→python→assert)
@@ -27,6 +27,9 @@ function detail(overrides: Partial<FlowDetail> = {}): FlowDetail {
       layout: { start: [40, 40], users: [40, 160] },
     },
     diagnostics: [],
+    etag: "abc123",
+    code_etag: "def456",
+    functions: ["summarize"],
     ports: {
       start: { inputs: {}, outputs: { out: "object" }, required_inputs: [], growable: false },
       users: { inputs: {}, outputs: { value: "list" }, required_inputs: [], growable: false },
@@ -112,6 +115,15 @@ describe("toGraph", () => {
     ]);
   });
 
+  it("edge ids carry the model refs so deletion maps back", () => {
+    const { edges } = toGraph(detail());
+    expect(edges[0].id).toBe("users.value→summarize.users");
+    expect(edges[0].data).toEqual({
+      from: "users.value",
+      to: "summarize.users",
+    });
+  });
+
   it("attaches diagnostic counts to their nodes", () => {
     const d = detail({
       diagnostics: [
@@ -142,5 +154,15 @@ describe("toGraph", () => {
     expect(summarize.data.warnings).toBe(1);
     expect(summarize.data.errors).toBe(1);
     expect(nodes.find((n) => n.id === "users")!.data.warnings).toBe(0);
+  });
+});
+
+describe("freshNodeId", () => {
+  it("uses the bare type when free, then numbers from 2 (E011-safe)", () => {
+    const flow = detail().flow;
+    expect(freshNodeId(flow, "request")).toBe("request");
+    expect(freshNodeId(flow, "start")).toBe("start2");
+    flow.nodes.push({ id: "start2", type: "start" });
+    expect(freshNodeId(flow, "start")).toBe("start3");
   });
 });

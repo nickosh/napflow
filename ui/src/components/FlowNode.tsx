@@ -34,7 +34,6 @@ function PortRow({
         type={isInput ? "target" : "source"}
         position={isInput ? Position.Left : Position.Right}
         style={handleStyle(port.type)}
-        isConnectable={false}
       />
       <span title={`${port.name}: ${port.type}`}>
         {port.name}

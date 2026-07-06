@@ -3,7 +3,7 @@
 
 import type { Edge, Node } from "@xyflow/react";
 
-import type { Diagnostic, FlowDetail } from "./api";
+import type { Diagnostic, FlowDetail, FlowModel } from "./api";
 import { portColor } from "./colors";
 
 export type PortHandle = {
@@ -110,6 +110,15 @@ function handlesFor(
   return { inputs: [...inputs.values()], outputs: [...outputs.values()] };
 }
 
+/** A unique node id for the palette: type, type2, type3, ... (E011). */
+export function freshNodeId(flow: FlowModel, type: string): string {
+  const taken = new Set(flow.nodes.map((n) => n.id));
+  if (!taken.has(type)) return type;
+  for (let i = 2; ; i++) {
+    if (!taken.has(`${type}${i}`)) return `${type}${i}`;
+  }
+}
+
 export function toGraph(detail: FlowDetail): {
   nodes: CanvasNode[];
   edges: Edge[];
@@ -149,15 +158,18 @@ export function toGraph(detail: FlowDetail): {
     }
   }
 
-  const edges: Edge[] = detail.flow.edges.map((edge, index) => {
+  const edges: Edge[] = detail.flow.edges.map((edge) => {
     const [source, sourceHandle] = splitRef(edge.from);
     const [target, targetHandle] = splitRef(edge.to);
     return {
-      id: `edge-${index}`,
+      // the model refs ARE the identity (edges match by (from,to) in
+      // the merge) — deletion maps back through this id
+      id: `${edge.from}→${edge.to}`,
       source,
       sourceHandle,
       target,
       targetHandle,
+      data: { from: edge.from, to: edge.to },
       style: { stroke: portColor(outputType.get(edge.from)), strokeWidth: 1.5 },
     };
   });

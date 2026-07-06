@@ -222,7 +222,14 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   `ports: {node: {inputs, outputs, required_inputs, growable} | null}`
   — the canvas draws handles/colors from these (D11) and never derives
   them itself: python ports are AST-parsed server-side (EC14), `null`
-  = unknowable broken reference; 404 unknown) ·
+  = unknowable broken reference; 404 unknown. S4/M4 grew the payload:
+  `etag` + `code_etag` (16-hex sha256 content-hash prefixes; `null` =
+  file absent), `functions` (AST fn-name list from nodes.py, `null` =
+  missing/unparseable — the canvas python dropdown), and the model dump
+  became `exclude_unset` — the canvas PUTs the dump back, so
+  materialized defaults would bloat every saved file. M4 pin: check
+  E-codes do NOT 400 this endpoint (a mid-edit flow must stay
+  editable; diagnostics ride along) — only unloadable files 400) ·
   `POST /api/runs` `{flow, env?, inputs?}` → 202 `{run_id, flow,
   state, log, warnings, notes}` (gate failures: 404 `flow_not_found`,
   else 400 with `{error, message, diagnostics}`) ·
@@ -235,6 +242,27 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   D13; `?flow=` locates runs the server process didn't start) ·
   `POST /api/runs/{run_id}/abort` (202 aborting; on a finished run:
   200 + final state, idempotent no-op).
+- **Write path** (S4/M4, FR-1003; identities are `_safe_identity`-
+  guarded — absolute/`..`/drive-letter tails 400, the write path never
+  escapes the workspace root):
+  `PUT /api/flows/<identity>` `{flow, base_etag?, force?}` — validate
+  the FlowFile JSON (400 `validation` + pydantic diagnostics, nothing
+  written) → etag gate (`base_etag` ≠ current ⇒ 409 `{error:
+  "etag_conflict", etag}` unless `force`; last-write-wins is the v1
+  conflict ceiling) → `merge_flow_document` into the round-trip doc →
+  the ONE canonical serializer (D23). Returns `{identity, etag,
+  diagnostics}` — check runs post-save; E-codes gate RUNS, never saves
+  (work-in-progress flows must persist). The UI never emits YAML.
+  `GET /api/code/<identity>` → `{identity, exists, code, etag,
+  syntax_error, functions}`; `PUT /api/code/<identity>` `{code,
+  base_etag?, force?}` — nodes.py verbatim (LF), same etag gate;
+  a syntax error is REPORTED (`ast.parse`, EC14) but the file saves
+  anyway — the editor never holds user code hostage; broken code
+  surfaces as E008 until fixed. PUT creates a missing nodes.py.
+  `GET /api/etags/<identity>` → `{identity, etag, code_etag}` — cheap
+  poll target; FR-1004's v1 shape is polling (~2s), not a native FS
+  watcher: external change while the canvas is clean ⇒ silent reload;
+  while dirty ⇒ the PUT's 409 raises the reload/overwrite prompt.
 - **WebSocket** `/ws/runs/{run_id}`: text frames are the JSONL lines
   VERBATIM (one `encode_record` — identical by construction, D13).
   Live run: replay the buffered prefix, then stream; server closes

@@ -214,13 +214,22 @@ harness lands M2, suite grows M3–M6).
       diagnostics panel; E-code flows render diagnostics instead of a
       canvas. Vitest (5) + Playwright grown to 8. (FR-1002 render half;
       FR-1006 check half)
-- [ ] **M4 — editing + write path**: connect rules (E004 enforced at
-      connect time), node add/delete, config forms + Monaco for python,
-      Start-port key-value + End required-flag editing, save through
-      the server-side canonical serializer (the UI never emits YAML —
-      one serializer, D23), golden canvas-diff test (layout-only moves
-      touch only `layout:`), FS watch + last-write-wins reload prompt.
-      (FR-1002 edit half; FR-1003/1004/1006; FR-203 canvas enforcement)
+- [x] **M4 — editing + write path** (landed 2026-07-07):
+      `loader.merge_flow_document` — surgical merge of the validated
+      FlowFile dump into the ruamel doc (nodes by id, edges by
+      (from,to); no-op saves byte-identical, layout-only moves diff
+      only `layout:` — the golden canvas-diff test, comments survive);
+      write endpoints (`PUT /api/flows|code/*`, `GET /api/etags/*`)
+      with sha256-prefix etag concurrency (409 → reload/overwrite,
+      last-write-wins); editable canvas — drag/connect (E004
+      auto-replace)/delete/add + debounced ~1s autosave (owner fork);
+      per-type config form descriptors (`forms.ts`), Start/End port
+      editors, whole-file nodes.py editor (syntax reported via AST,
+      saves anyway; plain textarea in v1 — Monaco deferred, see
+      JOURNAL); external-change etag polling (~2s) instead of a native
+      FS watcher. 10 merge tests + 10 server write tests + 7 Vitest +
+      8 Playwright editing e2e. (FR-1002 edit half; FR-1003/1004/1006;
+      FR-203 canvas enforcement)
 - [ ] **M5 — run on canvas + history**: run button + live event overlay
       over the M1 WebSocket, per-node status + full wire detail, run
       history browser replays any JSONL (EC20 dangling

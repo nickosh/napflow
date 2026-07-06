@@ -354,6 +354,303 @@ def test_ui_bundle_served_with_spa_fallback(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Write path (S4/M4): PUT flows + code, etags (FR-1003)
+
+
+async def _flow_detail(client: TestClient, identity: str) -> dict:
+    response = await client.get(f"/api/flows/{identity}")
+    assert response.status == 200, await response.text()
+    return await response.json()
+
+
+async def _put_flow(client: TestClient, identity: str, **body):
+    return await client.put(f"/api/flows/{identity}", content=JSONContent(body))
+
+
+def test_flow_detail_carries_etags_and_functions(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/smoke")
+        assert detail["etag"]
+        assert detail["code_etag"]  # smoke has a nodes.py
+        assert "summarize" in detail["functions"]
+        # the scaffold main flow ships a stub nodes.py — empty fn list,
+        # which the dropdown must distinguish from None (no/broken file)
+        main = await _flow_detail(client, "flows/main")
+        assert main["etag"]
+        assert main["code_etag"]
+        assert main["functions"] == []
+
+    with_client(ws, scenario)
+
+
+def test_put_flow_noop_save_is_byte_identical(tmp_path):
+    """The canvas PUTs back the dump it received unchanged ⇒ the file
+    must not change at all (FR-1003's no-op guarantee via the merge)."""
+    ws = make_scaffold_ws(tmp_path)
+    file = ws.root / "flows" / "smoke" / "flow.yaml"
+    before = file.read_bytes()
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/smoke")
+        response = await _put_flow(
+            client, "flows/smoke", flow=detail["flow"], base_etag=detail["etag"]
+        )
+        assert response.status == 200, await response.text()
+        payload = await response.json()
+        assert payload["etag"] == detail["etag"]  # bytes unchanged ⇒ same hash
+        assert file.read_bytes() == before
+
+    with_client(ws, scenario)
+
+
+def test_put_flow_layout_move_persists(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    file = ws.root / "flows" / "main" / "flow.yaml"
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/main")
+        detail["flow"]["layout"]["start"] = [80.0, 200.0]
+        response = await _put_flow(
+            client, "flows/main", flow=detail["flow"], base_etag=detail["etag"]
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert payload["etag"] != detail["etag"]
+        assert payload["diagnostics"] == []
+        assert "start: [80, 200]" in file.read_text(encoding="utf-8")
+
+    with_client(ws, scenario)
+
+
+def test_put_flow_etag_conflict_and_force(tmp_path):
+    """409 on a stale base_etag; `force` overrides (last-write-wins is
+    the v1 conflict ceiling, FR-1004)."""
+    ws = make_scaffold_ws(tmp_path)
+    file = ws.root / "flows" / "main" / "flow.yaml"
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/main")
+        # an external edit lands between GET and PUT
+        file.write_text(
+            file.read_text(encoding="utf-8") + "# external edit\n", encoding="utf-8"
+        )
+        stale = await _put_flow(
+            client, "flows/main", flow=detail["flow"], base_etag=detail["etag"]
+        )
+        assert stale.status == 409
+        conflict = await stale.json()
+        assert conflict["error"] == "etag_conflict"
+        assert conflict["etag"] != detail["etag"]  # the current hash, for reload
+        forced = await _put_flow(client, "flows/main", flow=detail["flow"], force=True)
+        assert forced.status == 200
+
+    with_client(ws, scenario)
+
+
+def test_put_flow_invalid_payload_400_with_diagnostics(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    file = ws.root / "flows" / "main" / "flow.yaml"
+    before = file.read_bytes()
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/main")
+        detail["flow"]["nodes"].append({"id": "bad id!", "type": "nope"})
+        response = await _put_flow(
+            client, "flows/main", flow=detail["flow"], base_etag=detail["etag"]
+        )
+        assert response.status == 400
+        payload = await response.json()
+        assert payload["error"] == "validation"
+        assert payload["diagnostics"]
+        assert file.read_bytes() == before  # nothing written
+
+        not_an_object = await _put_flow(client, "flows/main", flow="nope")
+        assert not_an_object.status == 400
+
+    with_client(ws, scenario)
+
+
+def test_put_flow_with_check_warnings_saves_and_reports_them(tmp_path):
+    """E-codes gate RUNS, not saves — the canvas must persist
+    work-in-progress flows (M4 pin). W-codes come back on the response."""
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/main")
+        # a request node with an unconnected error port ⇒ W103 warning
+        detail["flow"]["nodes"].insert(
+            1, {"id": "req", "type": "request", "config": {"url": "http://x"}}
+        )
+        detail["flow"]["edges"].append({"from": "start.out", "to": "req.trigger"})
+        response = await _put_flow(
+            client, "flows/main", flow=detail["flow"], base_etag=detail["etag"]
+        )
+        assert response.status == 200
+        payload = await response.json()
+        assert any(d["code"] == "W103" for d in payload["diagnostics"])
+        # and the detail round-trips with the node present
+        after = await _flow_detail(client, "flows/main")
+        assert any(n["id"] == "req" for n in after["flow"]["nodes"])
+
+    with_client(ws, scenario)
+
+
+def test_flow_detail_with_check_errors_still_returns_the_model(tmp_path):
+    """M4 pin: the editor keeps working on an E-code flow — GET returns
+    the model + error diagnostics instead of 400 (only runs are gated)."""
+    ws = make_scaffold_ws(tmp_path)
+    bad = ws.root / "flows" / "badcheck"
+    bad.mkdir()
+    (bad / "flow.yaml").write_text(
+        """\
+schema: "napflow/v1"
+flow: {name: "badcheck"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "note1", type: "log", config: {}}
+  - {id: "end", type: "end", config: {ports: [{name: "out"}]}}
+edges:
+  - {from: "start.out", to: "end.out"}
+  - {from: "note1.out", to: "end.out"}
+""",
+        encoding="utf-8",
+    )
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/badcheck")
+        assert any(d["code"] == "E004" for d in detail["diagnostics"])
+        assert [n["id"] for n in detail["flow"]["nodes"]] == ["start", "note1", "end"]
+
+    with_client(ws, scenario)
+
+
+def test_write_endpoints_reject_path_escapes(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        for path in (
+            "/api/flows/flows/../../etc",
+            "/api/code/flows/../../etc",
+            "/api/etags/flows/../../etc",
+        ):
+            get = await client.get(path)
+            assert get.status in (400, 404)  # never 200, never escapes
+        put = await client.put(
+            "/api/flows/flows/../../etc", content=JSONContent({"flow": {}})
+        )
+        assert put.status == 400
+
+    with_client(ws, scenario)
+
+
+def test_code_get_put_roundtrip_with_syntax_report(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    path = ws.root / "flows" / "smoke" / "nodes.py"
+
+    async def scenario(client):
+        got = await client.get("/api/code/flows/smoke")
+        assert got.status == 200
+        code = await got.json()
+        assert code["exists"] is True
+        assert "def summarize" in code["code"]
+        assert code["syntax_error"] is None
+        assert "summarize" in code["functions"]
+
+        # broken code SAVES anyway (last-write-wins) but reports the error
+        broken = code["code"] + "\ndef oops(:\n"
+        saved = await client.put(
+            "/api/code/flows/smoke",
+            content=JSONContent({"code": broken, "base_etag": code["etag"]}),
+        )
+        assert saved.status == 200
+        payload = await saved.json()
+        assert payload["syntax_error"]["line"]
+        assert payload["functions"] is None  # unparseable ⇒ no fn list
+        assert path.read_text(encoding="utf-8") == broken
+
+        # stale etag conflicts now
+        stale = await client.put(
+            "/api/code/flows/smoke",
+            content=JSONContent({"code": code["code"], "base_etag": code["etag"]}),
+        )
+        assert stale.status == 409
+        # fix it back with the fresh etag
+        fixed = await client.put(
+            "/api/code/flows/smoke",
+            content=JSONContent({"code": code["code"], "base_etag": payload["etag"]}),
+        )
+        assert fixed.status == 200
+        assert (await fixed.json())["syntax_error"] is None
+
+    with_client(ws, scenario)
+
+
+def test_code_put_creates_nodes_py(tmp_path):
+    """PUT can CREATE nodes.py — a flow gains python nodes from the
+    canvas without touching a terminal."""
+    ws = make_scaffold_ws(tmp_path)
+    bare = ws.root / "flows" / "bare"
+    bare.mkdir()
+    (bare / "flow.yaml").write_text(
+        """\
+schema: "napflow/v1"
+flow: {name: "bare"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "end", type: "end", config: {ports: [{name: "out"}]}}
+edges:
+  - {from: "start.out", to: "end.out"}
+""",
+        encoding="utf-8",
+    )
+    path = bare / "nodes.py"
+
+    async def scenario(client):
+        got = await client.get("/api/code/flows/bare")
+        code = await got.json()
+        assert code == {
+            "identity": "flows/bare",
+            "exists": False,
+            "code": "",
+            "etag": None,
+            "syntax_error": None,
+            "functions": None,
+        }
+        created = await client.put(
+            "/api/code/flows/bare",
+            content=JSONContent({"code": "def go(x):\n    return x\n"}),
+        )
+        assert created.status == 200, await created.text()
+        payload = await created.json()
+        assert payload["functions"] == ["go"]
+        assert path.is_file()
+
+        missing = await client.get("/api/code/flows/nope")
+        assert missing.status == 404
+
+    with_client(ws, scenario)
+
+
+def test_etags_poll_endpoint(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        response = await client.get("/api/etags/flows/smoke")
+        assert response.status == 200
+        payload = await response.json()
+        detail = await _flow_detail(client, "flows/smoke")
+        assert payload["etag"] == detail["etag"]
+        assert payload["code_etag"] == detail["code_etag"]
+
+        missing = await client.get("/api/etags/flows/nope")
+        assert missing.status == 404
+
+    with_client(ws, scenario)
+
+
+# --------------------------------------------------------------------------
 # WebSocket (D13: frames identical to JSONL lines)
 
 

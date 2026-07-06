@@ -22,7 +22,7 @@ risk, which is what force-quoting exists to prevent.
 """
 
 import io
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -194,6 +194,13 @@ def load_flow(path: Path) -> LoadedFlow:
     return LoadedFlow(path=path, doc=doc, model=_validate(doc, FlowFile, path))
 
 
+def validate_flow_payload(payload: Any, path: Path) -> FlowFile:
+    """Validate a canvas PUT payload as a FlowFile — the write-path gate
+    (FR-1003). Raises LoadError with pydantic diagnostics; positions are
+    absent (the payload is JSON, not the file at `path`)."""
+    return _validate(payload, FlowFile, path)
+
+
 def load_manifest(path: Path) -> LoadedManifest:
     doc = load_document(path)
     return LoadedManifest(path=path, doc=doc, model=_validate(doc, Manifest, path))
@@ -264,3 +271,148 @@ def save_document(doc: Any, path: Path) -> None:
     text = emit_document(doc)
     with path.open("w", encoding="utf-8", newline="\n") as f:
         f.write(text)
+
+
+# --------------------------------------------------------------------------
+# Surgical merge (canvas write path — FR-1003, EC29)
+
+
+def _scalar_equal(old: Any, new: Any) -> bool:
+    # Python's `True == 1` would silently rewrite ints as bools (and
+    # vice versa) — in YAML those are different values
+    if isinstance(old, bool) != isinstance(new, bool):
+        return False
+    return bool(old == new)
+
+
+def _incoming_value(value: Any) -> Any:
+    """Normalize freshly-arriving JSON values recursively."""
+    if isinstance(value, Mapping):
+        return {k: _incoming_value(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [_incoming_value(v) for v in value]
+    if isinstance(value, float) and value.is_integer():
+        return int(value)  # JSON floats: layout stays `[40, 200]`, never 40.0
+    if isinstance(value, str) and "\n" in value:
+        return LiteralScalarString(value)  # multiline stays a readable block
+    return value
+
+
+def _merged_value(old: Any, new: Any) -> Any:
+    """Merge `new` into `old`, keeping `old`'s objects (comments, styles)
+    wherever the value is unchanged. Returns the value to store."""
+    if isinstance(old, MutableMapping) and isinstance(new, Mapping):
+        _merge_mapping(old, new)
+        return old
+    if (
+        isinstance(old, MutableSequence)
+        and not isinstance(old, str | bytes)
+        and isinstance(new, Sequence)
+        and not isinstance(new, str | bytes)
+    ):
+        _merge_sequence(old, new)
+        return old
+    if not isinstance(new, Mapping | list) and _scalar_equal(old, new):
+        return old
+    return _incoming_value(new)
+
+
+def _merge_mapping(old: MutableMapping, new: Mapping) -> None:
+    for key in [k for k in old if k not in new]:
+        del old[key]
+    for key, value in new.items():
+        if key in old:
+            merged = _merged_value(old[key], value)
+            if merged is not old[key]:
+                old[key] = merged
+        else:
+            old[key] = _incoming_value(value)
+
+
+def _merge_sequence(old: MutableSequence, new: Sequence) -> None:
+    for i in range(min(len(old), len(new))):
+        merged = _merged_value(old[i], new[i])
+        if merged is not old[i]:
+            old[i] = merged
+    while len(old) > len(new):
+        del old[-1]
+    for item in new[len(old) :]:
+        old.append(_incoming_value(item))
+
+
+def _merge_keyed_seq(seq: Any, new_items: Sequence[Any], key_of: Any) -> Any:
+    """Merge a list whose items have identity (nodes by `id`, edges by
+    `(from, to)`). Surviving items keep their ruamel objects; the original
+    CommentedSeq is mutated in place — seq-level comments (the blank line
+    before the next section lives in `ca.end`) die with the object."""
+    if not isinstance(seq, MutableSequence) or isinstance(seq, str | bytes):
+        return list(new_items)
+    old_by_key: dict[Any, Any] = {}
+    for item in seq:
+        if isinstance(item, MutableMapping):
+            key = key_of(item)
+            if key is not None and key not in old_by_key:
+                old_by_key[key] = item
+    merged: list[Any] = []
+    for new_item in new_items:
+        key = key_of(new_item) if isinstance(new_item, Mapping) else None
+        old_item = old_by_key.pop(key, None) if key is not None else None
+        if old_item is not None:
+            _merge_mapping(old_item, new_item)
+            merged.append(old_item)
+        else:
+            merged.append(_incoming_value(new_item))
+    same = len(merged) == len(seq) and all(
+        a is b for a, b in zip(merged, seq, strict=True)
+    )
+    if not same:
+        while len(seq):
+            del seq[-1]
+        seq.extend(merged)
+    return seq
+
+
+def _edge_key(edge: Mapping) -> Any:
+    return (edge.get("from"), edge.get("to"))
+
+
+def _node_key(node: Mapping) -> Any:
+    return node.get("id")
+
+
+def merge_flow_document(doc: Any, updated: Mapping[str, Any]) -> None:
+    """Mutate a round-trip-loaded flow document in place so it carries
+    `updated` — a validated FlowFile dump (``mode="json"``,
+    ``by_alias=True``, ``exclude_unset=True`` — exclude_unset keeps
+    model defaults OUT of the file; materializing them would bloat every
+    diff).
+
+    This is the canvas write path (FR-1003): the UI never emits YAML —
+    it PUTs the model JSON, the server merges it here and emits through
+    the one canonical serializer (D23). Nodes match by ``id``, edges by
+    ``(from, to)``; unchanged values keep their ruamel objects, so an
+    untouched file re-emits byte-identical and a layout-only move diffs
+    only the ``layout:`` block. Comment preservation is best-effort under
+    restructuring: comments anchored to deleted items go with them.
+    """
+    if not isinstance(doc, MutableMapping):
+        raise TypeError("flow document is not a mapping — reload before merging")
+    for key in [k for k in doc if k not in updated]:
+        del doc[key]
+    for key, value in updated.items():
+        if key == "nodes":
+            merged = _merge_keyed_seq(doc.get(key), value, _node_key)
+        elif key == "edges":
+            merged = _merge_keyed_seq(doc.get(key), value, _edge_key)
+        elif key in doc:
+            merged = _merged_value(doc[key], value)
+        else:
+            merged = _incoming_value(value)
+        if key in doc:
+            if merged is not doc[key]:
+                doc[key] = merged
+        elif key != "layout" and isinstance(doc, CommentedMap) and "layout" in doc:
+            # layout: stays quarantined at the file bottom (FR-203)
+            doc.insert(list(doc).index("layout"), key, merged)
+        else:
+            doc[key] = merged

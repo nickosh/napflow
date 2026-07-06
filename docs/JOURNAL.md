@@ -4,6 +4,26 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-07 — S4/M4 editing + write path
+
+- Done: `merge_flow_document` (surgical ruamel merge — no-op saves
+  byte-identical, layout-only drags diff only `layout:`, comments
+  survive; 10 tests) + `checker.python_functions`; write endpoints
+  (PUT flows/code, GET etags) with content-hash etag concurrency +
+  path-traversal guard (10 server tests); editable canvas — drag,
+  connect w/ E004 auto-replace, add/delete, per-type config forms,
+  Start/End port editors, nodes.py editor w/ AST syntax report,
+  debounced ~1s autosave, ~2s etag poll for external changes;
+  8 Playwright editing e2e.
+- Decided (pins): flow-detail GET no longer 400s on check E-codes
+  (mid-edit flows stay editable; only unloadable files 400) and dumps
+  `exclude_unset`; FR-1004 v1 = etag polling, not a native FS watcher;
+  broken nodes.py still saves (last-write-wins, error reported).
+  Deferred: Monaco — npm blocked in the session sandbox; the editor is
+  a monospace textarea behind the same GET/PUT contract, Monaco drops
+  in as a component swap (`ui/src/components/CodeEditor.tsx`).
+- Next: S4/M5 — run on canvas + history (FR-1005) over the M1 WS.
+
 ## 2026-07-06 — S4/M3 read-only canvas
 
 - Done: `checker.node_surfaces` public + flow-detail `ports` payload

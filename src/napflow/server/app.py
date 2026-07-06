@@ -7,6 +7,8 @@ Everything binds to localhost only; the server trusts core for all
 semantics (gate, env, masking) via core/runprep.py.
 """
 
+import ast
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -15,11 +17,25 @@ from blacksheep import Application, Request, Response, WebSocket
 from blacksheep.server.responses import html
 from blacksheep.server.responses import json as json_response
 from blacksheep.server.routing import Router
+from ruamel.yaml.comments import CommentedMap
 
 import napflow
-from napflow.core.checker import CheckDiagnostic, node_surfaces
+from napflow.core.checker import (
+    CheckDiagnostic,
+    check_run_closure,
+    diagnostics_from_load_error,
+    node_surfaces,
+    python_functions,
+)
 from napflow.core.events import encode_record
-from napflow.core.loader import LoadError, load_flow
+from napflow.core.loader import (
+    LoadError,
+    load_document,
+    load_flow,
+    merge_flow_document,
+    save_document,
+    validate_flow_payload,
+)
 from napflow.core.models import EndNode, StartNode
 from napflow.core.runprep import RunPrepError, prepare_run
 from napflow.core.workspace import Workspace
@@ -65,6 +81,54 @@ def _prep_error(e: RunPrepError, root: Path) -> Response:
         },
         status=status,
     )
+
+
+def _safe_identity(tail: str) -> str | None:
+    """Workspace-relative flow identity from a URL tail. None = rejected
+    (absolute or `..` segments — the write path must never escape the
+    workspace root)."""
+    identity = Path(tail).as_posix().strip("/")
+    parts = Path(identity).parts
+    if not identity or identity.startswith("/") or ".." in parts or ":" in identity:
+        return None
+    return identity
+
+
+def _etag(path: Path) -> str | None:
+    """Content hash of a file, or None when it doesn't exist. Hash (not
+    mtime): editors and git checkouts can rewrite identical bytes."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def _syntax_diagnostic(code: str) -> dict[str, Any] | None:
+    """One-line syntax report for a nodes.py body (EC14 — AST only,
+    never imports user code). None = parses."""
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        return {
+            "message": e.msg or "syntax error",
+            "line": e.lineno,
+            "column": e.offset,
+        }
+    return None
+
+
+async def _json_object(request: Request) -> dict[str, Any] | None:
+    """The request body as a JSON object, or None when it isn't one."""
+    try:
+        body = await request.json() or {}
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _bad_request(message: str) -> Response:
+    return json_response({"error": "bad_request", "message": message}, status=400)
 
 
 def _flow_summary(ref: Any) -> dict[str, Any]:
@@ -175,19 +239,51 @@ def build_app(workspace: Workspace) -> Application:
 
     @router.get("/api/flows/*")
     async def get_flow(request: Request) -> Response:
-        identity = request.route_values["tail"].strip("/")
+        """Flow detail for the canvas. Check E-codes do NOT 400 here
+        (M4 pin): the editor must keep working on a flow that is
+        mid-edit invalid (e.g. E008 while the python function is still
+        being written) — only RUNS are gated on E-codes. Load failures
+        still 400: there is no model to return."""
+        identity = _safe_identity(request.route_values["tail"])
+        if identity is None:
+            return _bad_request("flow identity escapes the workspace")
+        flow_dir = root / Path(identity)
+        file = flow_dir / "flow.yaml"
+        if not file.is_file():
+            return json_response(
+                {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
+                status=404,
+            )
         try:
-            prepared = prepare_run(workspace, identity)
-        except RunPrepError as e:
-            return _prep_error(e, root)
-        surfaces = node_surfaces(
-            prepared.loaded.model, root / Path(identity), workspace
-        )
+            loaded = load_flow(file)
+        except LoadError as e:
+            return json_response(
+                {
+                    "error": "load",
+                    "message": str(e),
+                    "diagnostics": [
+                        _diag_payload(d, root) for d in diagnostics_from_load_error(e)
+                    ],
+                },
+                status=400,
+            )
+        diagnostics = check_run_closure(loaded, identity, workspace)
+        surfaces = node_surfaces(loaded.model, flow_dir, workspace)
         return json_response(
             {
-                "identity": prepared.identity,
-                "flow": prepared.loaded.model.model_dump(mode="json", by_alias=True),
-                "diagnostics": [_diag_payload(d, root) for d in prepared.diagnostics],
+                "identity": identity,
+                # exclude_unset: the canvas edits and PUTs this dump back;
+                # materialized defaults would bloat every file it saves
+                "flow": loaded.model.model_dump(
+                    mode="json", by_alias=True, exclude_unset=True
+                ),
+                "diagnostics": [_diag_payload(d, root) for d in diagnostics],
+                # optimistic-concurrency tokens for the write path
+                "etag": _etag(flow_dir / "flow.yaml"),
+                "code_etag": _etag(flow_dir / "nodes.py"),
+                # the canvas python-function dropdown (EC14, AST-only);
+                # None = no nodes.py or unparseable
+                "functions": python_functions(flow_dir),
                 # canvas handle/coloring data (D11) — python ports are
                 # AST-derived server-side (EC14), never in the UI
                 "ports": {
@@ -203,6 +299,153 @@ def build_app(workspace: Workspace) -> Application:
                     )
                     for node_id, surface in surfaces.items()
                 },
+            }
+        )
+
+    @router.put("/api/flows/*")
+    async def put_flow(request: Request) -> Response:
+        """The canvas write path (FR-1003): validate the model JSON,
+        merge into the round-trip doc, emit through the ONE canonical
+        serializer (D23). `base_etag` is optimistic concurrency —
+        a mismatch means someone else wrote the file since the client
+        loaded it (409, client reloads or retries with `force`,
+        last-write-wins per FR-1004's ceiling)."""
+        identity = _safe_identity(request.route_values["tail"])
+        if identity is None:
+            return _bad_request("flow identity escapes the workspace")
+        body = await _json_object(request)
+        if body is None or not isinstance(body.get("flow"), dict):
+            return _bad_request('body must be {"flow": {...}, "base_etag"?, "force"?}')
+        file = root / Path(identity) / "flow.yaml"
+        if not file.is_file():
+            return json_response(
+                {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
+                status=404,
+            )
+        current = _etag(file)
+        if not body.get("force") and body.get("base_etag") != current:
+            return json_response(
+                {"error": "etag_conflict", "etag": current}, status=409
+            )
+        try:
+            model = validate_flow_payload(body["flow"], file)
+        except LoadError as e:
+            return json_response(
+                {
+                    "error": "validation",
+                    "message": "flow payload failed validation",
+                    "diagnostics": [
+                        _diag_payload(d, root) for d in diagnostics_from_load_error(e)
+                    ],
+                },
+                status=400,
+            )
+        try:
+            doc = load_document(file)
+        except LoadError:
+            doc = None
+        if not isinstance(doc, CommentedMap):
+            # unparseable/corrupt on disk — a fresh doc lets the canvas
+            # recover the flow (comments are already lost to the corruption)
+            doc = CommentedMap()
+        merge_flow_document(
+            doc, model.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        )
+        save_document(doc, file)
+        # saved state feedback: fresh etag + check diagnostics (a save
+        # with warnings is legal — E-codes only block RUNS, not saves;
+        # the canvas must be able to persist work-in-progress flows)
+        loaded = load_flow(file)
+        diagnostics = check_run_closure(loaded, identity, workspace)
+        return json_response(
+            {
+                "identity": identity,
+                "etag": _etag(file),
+                "diagnostics": [_diag_payload(d, root) for d in diagnostics],
+            }
+        )
+
+    @router.get("/api/code/*")
+    async def get_code(request: Request) -> Response:
+        """The flow's nodes.py for the Monaco editor — whole-file
+        read/write (owner fork, 2026-07-06)."""
+        identity = _safe_identity(request.route_values["tail"])
+        if identity is None:
+            return _bad_request("flow identity escapes the workspace")
+        flow_dir = root / Path(identity)
+        if not (flow_dir / "flow.yaml").is_file():
+            return json_response(
+                {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
+                status=404,
+            )
+        path = flow_dir / "nodes.py"
+        exists = path.is_file()
+        code = path.read_text(encoding="utf-8") if exists else ""
+        return json_response(
+            {
+                "identity": identity,
+                "exists": exists,
+                "code": code,
+                "etag": _etag(path),
+                "syntax_error": _syntax_diagnostic(code) if exists else None,
+                "functions": python_functions(flow_dir),
+            }
+        )
+
+    @router.put("/api/code/*")
+    async def put_code(request: Request) -> Response:
+        """Save nodes.py verbatim. A syntax error is reported but the
+        file is SAVED ANYWAY (last-write-wins; the editor must never
+        hold user code hostage) — broken code simply surfaces as E008
+        on the canvas until fixed."""
+        identity = _safe_identity(request.route_values["tail"])
+        if identity is None:
+            return _bad_request("flow identity escapes the workspace")
+        body = await _json_object(request)
+        if body is None or not isinstance(body.get("code"), str):
+            return _bad_request('body must be {"code": "...", "base_etag"?, "force"?}')
+        flow_dir = root / Path(identity)
+        if not (flow_dir / "flow.yaml").is_file():
+            return json_response(
+                {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
+                status=404,
+            )
+        path = flow_dir / "nodes.py"
+        current = _etag(path)
+        if not body.get("force") and body.get("base_etag") != current:
+            return json_response(
+                {"error": "etag_conflict", "etag": current}, status=409
+            )
+        code = body["code"]
+        with path.open("w", encoding="utf-8", newline="\n") as f:
+            f.write(code)
+        return json_response(
+            {
+                "identity": identity,
+                "etag": _etag(path),
+                "syntax_error": _syntax_diagnostic(code),
+                "functions": python_functions(flow_dir),
+            }
+        )
+
+    @router.get("/api/etags/*")
+    async def get_etags(request: Request) -> Response:
+        """Cheap poll target for external-change detection (FR-1004's
+        v1 shape: the canvas polls, prompts on drift)."""
+        identity = _safe_identity(request.route_values["tail"])
+        if identity is None:
+            return _bad_request("flow identity escapes the workspace")
+        flow_dir = root / Path(identity)
+        if not (flow_dir / "flow.yaml").is_file():
+            return json_response(
+                {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
+                status=404,
+            )
+        return json_response(
+            {
+                "identity": identity,
+                "etag": _etag(flow_dir / "flow.yaml"),
+                "code_etag": _etag(flow_dir / "nodes.py"),
             }
         )
 
