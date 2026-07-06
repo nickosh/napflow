@@ -24,6 +24,12 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   nodes/edges/layout render, D11 port coloring, E/W on canvas;
   FR-1002 render half). Verify the ui job + TR-9 Windows leg on this
   push's CI first.
+- [Update, same day: CI run 28785741251 all 7 jobs green — TR-9
+  Windows leg + NFR-03 ui job both CONFIRMED, ticks finalized. The
+  windows Playwright install stalled minutes in `--with-deps` (known
+  hosted-runner behavior, it installs nothing useful there) before
+  recovering; fixed to Linux-only deps + 20-min job timeout, and Node
+  pinned to 24 LTS (engines floor stays 22.12 = Vite 8's own).]
 
 ## 2026-07-06 — S4 adopted + S4/M1 server
 
