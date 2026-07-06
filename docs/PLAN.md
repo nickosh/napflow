@@ -146,10 +146,14 @@ and guards follow; container frames close the stage.
       normal firing path), note runtime no-op. `napf run flows/smoke`
       passes offline on a fresh `napf init` → EC34 first-touch test
       green. Semantics pinned in EN §5. (FR-507/512/513/514/517)
-- [ ] **M4 — guards**: counter (EC16 check-then-decrement) + timeout,
-      `reset` inputs (rule 4), frame-local guard state. TR-4 green;
-      flagship retry-until-ready example lands as flow + test.
-      (FR-509/510)
+- [x] **M4 — guards** (landed 2026-07-06): counter (EC16
+      check-then-decrement, `count: 0` exhausts everything) + timeout
+      (lazy monotonic deadline), `reset` absorbed silently (rule 4),
+      frame-local guard state, `guard_tripped` events. TR-4 green;
+      FR-403 complete (all six firing rules); flagship
+      retry-until-ready runs against a local server in both the
+      polls-until-ready and gives-up variants — the S3 DoD's "flagship
+      example runs" is done. (FR-509/510)
 - [ ] **M5 — subflows + loops**: hierarchical frames (FR-404), flow
       node w/ implicit error port (FR-516), loop node (FR-515).
       Completes TR-3 (cross-frame), TR-5, TR-8. Stage close: bump

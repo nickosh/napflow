@@ -4,6 +4,21 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S3/M4 guards + flagship retry example
+
+- Done: `_deliver_guard` — counter (EC16 boundary, count 0 = exhaust
+  all) + timeout (lazy monotonic clock), silent absorbed `reset`,
+  frame-local state, `guard_tripped` events; flagship retry-until-ready
+  (merge any → request → condition → counter → delay cycle) green
+  against a local server in ready and gave-up variants. FR-509/510 +
+  TR-4 ticked; FR-403 all six rules complete. 250 tests (8 new).
+- Decided (EN §4 pins): guards are instant/inline; reset = absorbed
+  delivery (no firing, no events); timeout boundary elapsed == seconds
+  ⇒ expired; guard_tripped emits alongside the pass-through (D19:
+  tripping is data).
+- Next: S3/M5 — hierarchical frames + flow/loop nodes (FR-404/515/516,
+  D20/D21/D24); completes TR-3/5/8; stage close → 0.1.0.dev3.
+
 ## 2026-07-06 — S3/M3 simple frame-local nodes + first-touch green
 
 - Done: switch/set/get/log/fixture runners + rule-6 fixture auto-seed

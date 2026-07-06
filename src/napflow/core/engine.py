@@ -39,6 +39,7 @@ from napflow.core.events import (
     BudgetWarning,
     CaptureWarning,
     EventStream,
+    GuardTripped,
     LogEvent,
     MessageEmitted,
     NodeFired,
@@ -56,6 +57,7 @@ from napflow.core.models.flow import (
     AssertCheck,
     AssertNode,
     ConditionNode,
+    CounterNode,
     DelayNode,
     EndNode,
     ExprCheck,
@@ -71,6 +73,7 @@ from napflow.core.models.flow import (
     StartNode,
     StatusCheck,
     SwitchNode,
+    TimeoutNode,
 )
 from napflow.core.models.manifest import Manifest, RequestDefaults
 from napflow.core.templating import (
@@ -97,8 +100,8 @@ EXIT_CODES: dict[RunState, int] = {
     "aborted": 130,
 }
 
-# Node types the engine can run; guards land at S3/M4, loop/flow at
-# S3/M5. `note` has no runtime behavior but is legal on any canvas.
+# Node types the engine can run; loop/flow land at S3/M5. `note` has
+# no runtime behavior but is legal on any canvas.
 SUPPORTED_NODE_TYPES = frozenset(
     {
         "start",
@@ -114,6 +117,8 @@ SUPPORTED_NODE_TYPES = frozenset(
         "get",
         "log",
         "fixture",
+        "counter",
+        "timeout",
         "note",
     }
 )
@@ -244,6 +249,9 @@ class Frame:
     # firings; merge `all` clears on emit) + merge `collect` buffers
     slots: dict[str, dict[str, Any]] = field(default_factory=dict)
     collected: dict[str, list[Any]] = field(default_factory=dict)
+    # rule-4 guard state, frame-local by construction (TR-5): counter
+    # remaining / timeout start; absent key = pristine (post-reset)
+    guards: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -467,6 +475,9 @@ class FlowRun:
         if isinstance(node, MergeNode):
             self._deliver_merge(frame, node, delivery)  # rule 3
             return
+        if isinstance(node, CounterNode | TimeoutNode):
+            self._deliver_guard(frame, node, delivery)  # rule 4
+            return
         connected = frame.graph.in_ports.get(node.id, [])
         slot_values: dict[str, Any] | None = None
         if len(connected) > 1:
@@ -520,6 +531,41 @@ class FlowRun:
         frame.firing_counts[node.id] = firing_no
         self._stream.emit(NodeFired(frame=frame.id, node=node.id, firing_no=firing_no))
         self._emit_output(frame, node.id, "out", out)
+
+    def _deliver_guard(
+        self, frame: Frame, node: CounterNode | TimeoutNode, delivery: _Delivery
+    ) -> None:
+        """Rule 4 (D19/EC16): guards consult/update frame-local state.
+        `reset` deliveries restore the pristine state and emit NOTHING
+        (absorbed — no firing, no events). `exhausted`/`expired` are
+        ordinary pass-through outputs, never error ports (D19). Instant
+        nodes, fired inline like merge."""
+        if delivery.port == "reset":
+            frame.guards.pop(node.id, None)  # silent restore
+            return
+        if isinstance(node, CounterNode):
+            # EC16 check-then-decrement: exactly `count` passes, then
+            # every message exhausts
+            remaining = frame.guards.get(node.id, node.config.count)
+            if remaining > 0:
+                frame.guards[node.id] = remaining - 1
+                port = "continue"
+            else:
+                port = "exhausted"
+        else:
+            # lazy deadline: the first message starts the clock; expiry
+            # is evaluated on arrival, never by a background timer
+            now = time.monotonic()
+            started = frame.guards.setdefault(node.id, now)
+            port = "continue" if now - started < node.config.seconds else "expired"
+        firing_no = frame.firing_counts.get(node.id, 0) + 1
+        frame.firing_counts[node.id] = firing_no
+        self._stream.emit(NodeFired(frame=frame.id, node=node.id, firing_no=firing_no))
+        if port in ("exhausted", "expired"):
+            self._stream.emit(
+                GuardTripped(frame=frame.id, node=node.id, kind=node.type, port=port)
+            )
+        self._emit_output(frame, node.id, port, delivery.message.value)
 
     def _seed(self, frame: Frame) -> None:
         """Sources (rule 6): Start is seeded once per frame — `out`

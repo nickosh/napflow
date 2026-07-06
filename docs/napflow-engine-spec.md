@@ -274,6 +274,21 @@ Pins made at S3/M1 (2026-07-06, engine pump dispatch):
   `collect` leftovers at quiescence are dropped (the node simply never
   fires again; skipped-node reporting applies if it never fired).
 
+Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
+- **Guards are instant nodes**, fired inline like merge (rule 4): a
+  `reset` delivery is ABSORBED — no firing count, no `node_fired`, no
+  output — it pops the frame-local state so the next `in` delivery
+  sees a pristine guard (counter back to `count`; timeout clock
+  restarted by that delivery).
+- **Counter state** = remaining passes (absent key ⇒ `count`);
+  check-then-decrement per EC16 — `count: 0` exhausts every message.
+  **Timeout state** = the monotonic timestamp of the first `in`
+  delivery; `continue` while `elapsed < seconds`, else `expired`
+  (elapsed exactly equal ⇒ expired).
+- **`guard_tripped` events** fire once per exhausted/expired emission
+  (kind = node type, port = the outlet), alongside the ordinary
+  pass-through `message_emitted` — D19: tripping is data, not failure.
+
 ## 5. Node runners
 
 - **request** — shared per-run `niquests.AsyncSession` (connection pooling,
