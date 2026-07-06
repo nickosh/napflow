@@ -19,9 +19,19 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   (mid-edit flows stay editable; only unloadable files 400) and dumps
   `exclude_unset`; FR-1004 v1 = etag polling, not a native FS watcher;
   broken nodes.py still saves (last-write-wins, error reported).
-  Deferred: Monaco — npm blocked in the session sandbox; the editor is
-  a monospace textarea behind the same GET/PUT contract, Monaco drops
-  in as a component swap (`ui/src/components/CodeEditor.tsx`).
+- Deferred from the M4 plan (tracked in PLAN "M4 leftovers"):
+  **Monaco** (npm was sandbox-blocked; textarea shipped behind the same
+  GET/PUT contract — sandbox allowlist since fixed in
+  `.claude/settings.json`, install works next session);
+  **drag-from-palette** (click-to-add shipped); **structured editors
+  for assert `checks` / switch `cases`** (raw-JSON textareas shipped);
+  **typed Start-port defaults** (the default cell writes strings only —
+  numbers/objects need the YAML for now); **live W102 type-mismatch
+  hint at connect time** (W102 surfaces post-save via diagnostics).
+- Verification gap: the sandbox blocked socket binds, so the 8
+  Playwright editing e2e + the uvicorn/port pytest cases ran ONLY in
+  CI for this commit — check job-level results on the M4 push before
+  trusting the FR ticks (NFR-10 lesson).
 - Next: S4/M5 — run on canvas + history (FR-1005) over the M1 WS.
 
 ## 2026-07-06 — S4/M3 read-only canvas

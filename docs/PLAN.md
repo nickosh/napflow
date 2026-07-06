@@ -230,6 +230,32 @@ harness lands M2, suite grows M3–M6).
       FS watcher. 10 merge tests + 10 server write tests + 7 Vitest +
       8 Playwright editing e2e. (FR-1002 edit half; FR-1003/1004/1006;
       FR-203 canvas enforcement)
+
+      **M4 leftovers** — planned for M4, consciously deferred; none
+      blocks M5 (pick up alongside M5/M6 or as polish):
+      - **Monaco editor** (owner fork asked for it, bundled/no CDN):
+        npm was blocked by the session sandbox; a monospace textarea
+        shipped behind the identical `/api/code` GET/PUT+etag contract,
+        so Monaco is a component swap inside
+        `ui/src/components/CodeEditor.tsx`. The sandbox allowlist fix
+        (`.claude/settings.json` → `registry.npmjs.org`) is in place;
+        `npm i monaco-editor @monaco-editor/react` then swap.
+      - **Drag-from-palette**: click-to-add shipped
+        (`NodePalette.tsx`); dragging a type onto the canvas at the
+        drop position is UX polish.
+      - **Structured editors for `assert.checks` / `switch.cases`**:
+        these config fields edit as raw-JSON textareas in `forms.ts`;
+        dedicated row editors (like the Start/End port editors) when
+        they earn it.
+      - **Typed Start-port defaults**: the default cell in
+        `PortEditor.tsx` writes strings only; a number/bool/object
+        default needs hand-editing the YAML until the cell grows a
+        type-aware parser.
+      - **W102 hint at connect time**: type-mismatch warnings surface
+        only AFTER save via the returned check diagnostics; a live
+        pre-connect hint on the dragged wire is still open (FR-1002
+        names W102 hints — the post-save path satisfies the letter,
+        the live hint is the spirit).
 - [ ] **M5 — run on canvas + history**: run button + live event overlay
       over the M1 WebSocket, per-node status + full wire detail, run
       history browser replays any JSONL (EC20 dangling

@@ -1,4 +1,9 @@
 {
+  "sandbox": {
+    "network": {
+      "allowedDomains": ["registry.npmjs.org"]
+    }
+  },
   "hooks": {
     "SessionEnd": [
       {
