@@ -794,6 +794,50 @@ def check_workspace(workspace: Workspace) -> list[CheckDiagnostic]:
     return sorted(diags, key=lambda d: (str(d.path), d.line or 0, d.code))
 
 
+def check_run_closure(
+    loaded: LoadedFlow, identity: str, workspace: Workspace
+) -> list[CheckDiagnostic]:
+    """`napf run` gate (WM, deepened at S3/M5): the entry flow PLUS
+    every flow reachable through flow/loop references, with E007 cycle
+    detection over that sub-closure — a broken subflow must block the
+    run before anything executes, exactly like a broken entry flow."""
+    resolver = _SurfaceResolver(workspace)
+    diags: list[CheckDiagnostic] = []
+    loaded_flows: dict[str, LoadedFlow] = {}
+    references: dict[str, list[tuple[str, str, int]]] = {}
+    queue = [identity]
+    seen = {identity}
+    while queue:
+        current = queue.pop(0)
+        if current == identity:
+            current_loaded = loaded
+        else:
+            file = workspace.root / Path(current) / "flow.yaml"
+            if not file.is_file():
+                continue  # the referencing flow already got E008
+            try:
+                current_loaded = load_flow(file)
+            except LoadError as e:
+                diags.extend(diagnostics_from_load_error(e))
+                continue
+        loaded_flows[current] = current_loaded
+        diags.extend(_FlowCheck(current_loaded, resolver).run())
+        references[current] = []
+        for i, node in enumerate(current_loaded.model.nodes):
+            target = None
+            if isinstance(node, FlowNode):
+                target = node.config.flow
+            elif isinstance(node, LoopNode):
+                target = node.config.body
+            if target and "{{" not in target:
+                references[current].append((target, node.id, i))
+                if target not in seen:
+                    seen.add(target)
+                    queue.append(target)
+    diags.extend(_reference_cycles(references, loaded_flows))
+    return sorted(diags, key=lambda d: (str(d.path), d.line or 0, d.code))
+
+
 def _reference_cycles(
     references: dict[str, list[tuple[str, str, int]]],
     loaded_flows: dict[str, LoadedFlow],

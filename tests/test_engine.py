@@ -351,22 +351,23 @@ def test_env_required_missing_is_run_error():
     assert result.state == "passed"
 
 
-def test_unsupported_node_type_is_run_error():
-    # loop is the last S3 node type to land (M5) — until then a flow
-    # using it must be a clean run error, never a crash
+def test_flow_reference_without_workspace_root_is_clean_failure():
+    # the full catalog is runnable since S3/M5; standalone engine use
+    # without workspace_root degrades to a node error, never a crash
     f = flow(
         start(),
         {
             "id": "lp",
             "type": "loop",
-            "config": {"over": "trigger.value", "body": "flows/x"},
+            "config": {"over": "[1, 2]", "body": "flows/x"},
         },
         end({"name": "x", "required": False}),
         edges=[("start.out", "lp.trigger")],
     )
     result, _ = run(f)
-    assert result.state == "error"
-    assert result.error_reason == "unsupported_node_type"
+    assert result.state == "failed"
+    assert result.unhandled_errors[0]["kind"] == "flow_load_error"
+    assert "workspace_root" in result.unhandled_errors[0]["message"]
 
 
 # --------------------------------------------------------------------------

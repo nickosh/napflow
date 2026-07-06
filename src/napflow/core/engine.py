@@ -1,12 +1,14 @@
 """Execution engine: scheduler, frames, node runners (EN §1–§6).
 
 S2/M3 laid down the scheduler (QUIESCENT sentinel + empty-seed guard,
-budget, deadline, abort, `max_seconds` cancellation), frames, outcome
-aggregation (D18/D20), and runners for start/end/condition/assert/
-delay. S3/M1 grew the pump dispatch to firing rules 2–3: latest-value
-slots for multi-input nodes and the merge node (`any`/`all`/`collect`).
-Remaining node types land through S3; a flow using one is a run `error`
-(`unsupported_node_type`), never a crash.
+budget, deadline, abort, `max_seconds` cancellation), root frame, and
+outcome aggregation (D18/D20); S3 M1–M4 added firing rules 2–4 and the
+leaf node set; S3/M5 completed the catalog with hierarchical frames:
+`flow`/`loop` spawn child frames that share ONE pump, ONE budget, and
+ONE quiescence detector — a frame completes when its own `in_flight`
+drains to zero (the same last-decrement trick, per frame), waking the
+container node that awaits it. Data crosses frames only via Start/End
+binding; outcomes aggregate run-wide (D20).
 
 The engine trusts its input: LOAD and CHECK are the CLI's lifecycle
 steps (`napf run` refuses E-codes, M5). BIND and ENV happen here — the
@@ -52,6 +54,7 @@ from napflow.core.events import (
     isoformat_ms,
 )
 from napflow.core.httpclient import HttpClient, TransportError, WireResponse
+from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import FlowFile
 from napflow.core.models.flow import (
     AssertCheck,
@@ -62,8 +65,10 @@ from napflow.core.models.flow import (
     EndNode,
     ExprCheck,
     FixtureNode,
+    FlowNode,
     GetNode,
     LogNode,
+    LoopNode,
     MergeNode,
     Node,
     PythonNode,
@@ -99,29 +104,6 @@ EXIT_CODES: dict[RunState, int] = {
     "error": 2,
     "aborted": 130,
 }
-
-# Node types the engine can run; loop/flow land at S3/M5. `note` has
-# no runtime behavior but is legal on any canvas.
-SUPPORTED_NODE_TYPES = frozenset(
-    {
-        "start",
-        "end",
-        "condition",
-        "assert",
-        "delay",
-        "request",
-        "merge",
-        "python",
-        "switch",
-        "set",
-        "get",
-        "log",
-        "fixture",
-        "counter",
-        "timeout",
-        "note",
-    }
-)
 
 _MB = 1024 * 1024
 
@@ -204,6 +186,7 @@ class _Delivery:
     node_id: str
     port: str
     message: Message
+    frame: "Frame"
 
 
 _QUIESCENT = object()  # the last decrement wakes the pump (EN §3)
@@ -234,13 +217,17 @@ class _Graph:
 @dataclass
 class Frame:
     """One invocation of one flow (EN §1): the DATA isolation unit —
-    variables, inputs, firing counts, `nodes.*` context. Outcomes are
-    not isolated (D20). Hierarchical ids (`f-0/f-3`) arrive with
-    subflows/loops in S3; the root run is always `f-0`."""
+    variables, inputs, firing counts, `nodes.*` context, guard state.
+    Outcomes are not isolated (D20) but ARE counted per frame so
+    container nodes can compute their child subtree's state (D21).
+    Ids are hierarchical paths (`f-0/f-3`); the root is always `f-0`.
+    A frame completes when its own `in_flight` drains to zero — the
+    per-frame copy of the run-level QUIESCENT trick."""
 
     id: str
     graph: _Graph
     inputs: dict[str, Any]
+    flow_dir: Path | None = None  # locates this flow's nodes.py
     variables: dict[str, Any] = field(default_factory=dict)
     node_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     firing_counts: dict[str, int] = field(default_factory=dict)
@@ -252,6 +239,17 @@ class Frame:
     # rule-4 guard state, frame-local by construction (TR-5): counter
     # remaining / timeout start; absent key = pristine (post-reset)
     guards: dict[str, Any] = field(default_factory=dict)
+    # frame tree + completion machinery (S3/M5)
+    in_flight: int = 0
+    done: asyncio.Event = field(default_factory=asyncio.Event)
+    tasks: set[asyncio.Task[None]] = field(default_factory=set)
+    children: list["Frame"] = field(default_factory=list)
+    cancelled: bool = False
+    loop_binding: tuple[Any, int] | None = None  # (item, index) in bodies
+    http: HttpClient | None = None  # fresh_session override, inherited
+    # frame-local outcome counts (subtree sums feed D21 payloads)
+    failed_asserts: int = 0
+    unhandled_count: int = 0
 
 
 @dataclass
@@ -326,8 +324,11 @@ class FlowRun:
         self._unhandled: list[dict[str, Any]] = []
 
         self._http: HttpClient | None = None
+        self._extra_http: list[HttpClient] = []  # fresh_session leftovers
         self._workers: WorkerPool | None = None
         self._fixture_cache: dict[str, Any] = {}  # per RUN, keyed by path
+        self._flow_cache: dict[str, tuple[_Graph, Path, Any]] = {}
+        self._frame_seq = 0
         self._request_defaults: RequestDefaults = manifest.defaults.request
         self._body_cap = int(self._defaults.body_capture_mb * _MB)
         self._capture_remaining = int(self._defaults.run_capture_mb * _MB)
@@ -352,10 +353,14 @@ class FlowRun:
         )
         frame: Frame | None = None
         try:
-            self._check_supported()
-            self._check_env_required()
+            self._check_env_required(self._flow.env)
             graph = _Graph(self._flow)
-            frame = Frame(id="f-0", graph=graph, inputs=self._bind(graph.start))
+            frame = Frame(
+                id="f-0",
+                graph=graph,
+                inputs=self._bind(graph.start, self._given_inputs),
+                flow_dir=self._flow_dir,
+            )
         except _BindError as e:
             self._fatal = (e.reason, str(e))
         except TypeCoercionError as e:
@@ -379,23 +384,16 @@ class FlowRun:
 
         if self._http is not None:  # FR-408: session closed on every exit
             await self._http.close()
+        for extra in self._extra_http:  # fresh_session iteration leftovers
+            await extra.close()
         if self._workers is not None:  # workers killed at FINALIZE (EN §5a)
             await self._workers.close()
         return self._finalize(frame, started)
 
     # -- lifecycle: BIND / ENV (EN §2) --------------------------------------
 
-    def _check_supported(self) -> None:
-        for node in self._flow.nodes:
-            if node.type not in SUPPORTED_NODE_TYPES:
-                raise _BindError(
-                    "unsupported_node_type",
-                    f"node '{node.id}': type '{node.type}' is not runnable yet"
-                    " (lands in a later stage; see docs/PLAN.md)",
-                )
-
-    def _check_env_required(self) -> None:
-        required = self._flow.env.required if self._flow.env else []
+    def _check_env_required(self, env_cfg: Any) -> None:
+        required = env_cfg.required if env_cfg else []
         missing = [k for k in required if k not in self._env]
         if missing:
             raise _BindError(
@@ -404,11 +402,13 @@ class FlowRun:
                 + ", ".join(missing),
             )
 
-    def _bind(self, start: StartNode) -> dict[str, Any]:
+    def _bind(self, start: StartNode, given: Mapping[str, Any]) -> dict[str, Any]:
         """Validate & type-coerce inputs against Start ports; evaluate
-        `default:` templates with env/run scope only (FR-501, EC36)."""
+        `default:` templates with env/run scope only (FR-501, EC36).
+        Used for the root frame's CLI inputs AND for child-frame
+        binding by flow/loop nodes — same rules everywhere."""
         declared = {p.name: p for p in start.config.ports}
-        unknown = set(self._given_inputs) - set(declared)
+        unknown = set(given) - set(declared)
         if unknown:
             raise _BindError(
                 "bind_error", f"unknown input(s): {', '.join(sorted(unknown))}"
@@ -416,8 +416,8 @@ class FlowRun:
         context = {"env": self._env, "run": self._run_context()}
         bound: dict[str, Any] = {}
         for name, port in declared.items():
-            if name in self._given_inputs:
-                value = self._given_inputs[name]
+            if name in given:
+                value = given[name]
             elif "default" in port.model_fields_set:
                 value = port.default
                 if isinstance(value, str):
@@ -437,14 +437,32 @@ class FlowRun:
 
     # -- scheduler (EN §3) ---------------------------------------------------
 
-    def _dec(self) -> None:
+    def _inc(self, frame: Frame) -> None:
+        frame.in_flight += 1
+        self._in_flight += 1
+
+    def _dec(self, frame: Frame) -> None:
+        # frame completion FIRST: the container node awaiting `done`
+        # is itself still in flight in the PARENT frame, so the global
+        # counter cannot hit zero before it resumes
+        frame.in_flight -= 1
+        if frame.in_flight == 0:
+            frame.done.set()
         self._in_flight -= 1
         if self._in_flight == 0:
             self._queue.put_nowait(_QUIESCENT)
 
-    async def _pump(self, frame: Frame) -> None:
+    def _spawn_task(self, frame: Frame, coro: Any) -> None:
+        self._inc(frame)
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        frame.tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(frame.tasks.discard)
+
+    async def _pump(self, root: Frame) -> None:
         try:
-            self._seed(frame)
+            self._seed(root)
         except _BudgetExhausted as e:
             self._set_fatal("budget_exhausted", str(e), e.edge)
             return
@@ -454,12 +472,14 @@ class FlowRun:
             item = await self._queue.get()
             if item is _QUIESCENT or item is _FATAL:
                 break
+            delivery: _Delivery = item
             try:
-                self._dispatch(frame, item)
+                if not delivery.frame.cancelled:
+                    self._dispatch(delivery.frame, delivery)
             except _BudgetExhausted as e:
-                # inline merge firings emit inside the pump (EN §4)
+                # inline merge/guard firings emit inside the pump (EN §4)
                 self._set_fatal("budget_exhausted", str(e), e.edge)
-            self._dec()  # delivery consumed
+            self._dec(delivery.frame)  # delivery consumed
 
     def _dispatch(self, frame: Frame, delivery: _Delivery) -> None:
         """Firing rules per delivery (EN §4). Absorbed deliveries — a
@@ -489,17 +509,12 @@ class FlowRun:
             if len(slots) < len(connected):
                 return
             slot_values = dict(slots)  # snapshot at decision time
-        elif isinstance(node, PythonNode):
-            # single-input python: the function still needs its kwarg
-            # by port (=param) name (FR-506)
+        elif isinstance(node, PythonNode | FlowNode):
+            # single-input python/flow: the runner still needs the
+            # value keyed by port name (param / target Start port)
             slot_values = {delivery.port: delivery.message.value}
         # rule 1 — or a complete rule-2 slot set: fire per delivery
-        self._in_flight += 1
-        task = asyncio.create_task(
-            self._fire(frame, node, delivery.message, slot_values)
-        )
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._spawn_task(frame, self._fire(frame, node, delivery.message, slot_values))
 
     def _deliver_merge(
         self, frame: Frame, node: MergeNode, delivery: _Delivery
@@ -590,10 +605,7 @@ class FlowRun:
                     frame=frame.id,
                     ts=isoformat_ms(datetime.now(UTC)),
                 )
-                self._in_flight += 1
-                task = asyncio.create_task(self._fire(frame, node, seed))
-                self._tasks.add(task)
-                task.add_done_callback(self._tasks.discard)
+                self._spawn_task(frame, self._fire(frame, node, seed))
 
     async def _fire(
         self,
@@ -618,12 +630,15 @@ class FlowRun:
             for port, value in outputs:
                 self._emit_output(frame, node.id, port, value)
         except TimeoutError:
+            extra: dict[str, Any] = {"max_seconds": ceiling}  # FS D24 shape
+            if isinstance(node, FlowNode):
+                extra["state"] = "aborted"  # child frame cancelled (D24)
             self._node_error(
                 frame,
                 node,
                 kind="timeout",
                 message=f"firing exceeded max_seconds={ceiling}",
-                extra={"max_seconds": ceiling},  # payload shape per FS D24
+                extra=extra,
             )
         except (TemplateEvaluationError, TypeCoercionError) as e:
             self._node_error(frame, node, kind="template_error", message=str(e))
@@ -636,7 +651,7 @@ class FlowRun:
         except Exception as e:  # engine bug — run `error`, never a crash
             self._set_fatal("internal_error", f"{node.id}: {type(e).__name__}: {e}")
         finally:
-            self._dec()
+            self._dec(frame)
 
     def _emit_output(self, frame: Frame, node_id: str, port: str, value: Any) -> None:
         # nodes.* holds the LATEST output — last-writer-wins (EC12/EC18)
@@ -672,8 +687,8 @@ class FlowRun:
                 frame=frame.id,
                 ts=isoformat_ms(datetime.now(UTC)),
             )
-            self._in_flight += 1  # ALWAYS increment before enqueueing
-            self._queue.put_nowait(_Delivery(to_node, to_port, message))
+            self._inc(frame)  # ALWAYS increment before enqueueing
+            self._queue.put_nowait(_Delivery(to_node, to_port, message, frame))
             self._stream.emit(
                 MessageEmitted(
                     frame=frame.id,
@@ -727,6 +742,10 @@ class FlowRun:
                 return await self._run_request(frame, node, context)
             case PythonNode():
                 return await self._run_python(frame, node, slot_values or {})
+            case FlowNode():
+                return await self._run_flow_node(frame, node, slot_values or {})
+            case LoopNode():
+                return await self._run_loop(frame, node, context)
             case SwitchNode():
                 value = self._renderer.evaluate(node.config.expr, context)
                 port = "default"
@@ -784,13 +803,13 @@ class FlowRun:
         `outputs` (each key required); with no declared outputs the
         return value is discarded."""
         function = node.config.function
-        if self._flow_dir is None:
+        if frame.flow_dir is None:
             raise _NodeError(
                 "worker_crash",
                 "python nodes need the flow directory (pass flow_dir= to"
                 " FlowRun/execute_flow) to locate nodes.py",
             )
-        nodes_path = self._flow_dir / "nodes.py"
+        nodes_path = frame.flow_dir / "nodes.py"
         if not nodes_path.is_file():
             raise _NodeError("worker_crash", f"no nodes.py at {nodes_path}")
         if self._workers is None:
@@ -816,6 +835,7 @@ class FlowRun:
             )
             if e.kind == "python_assert":  # FR-506: report as python-assert
                 self._asserts_failed += 1
+                frame.failed_asserts += 1
                 self._stream.emit(
                     AssertResult(
                         frame=frame.id,
@@ -843,6 +863,252 @@ class FlowRun:
                     f" declared output (missing {port!r})",
                 )
             outputs.append((port, value[port]))
+        return outputs
+
+    # -- child frames: flow + loop (EN §5, FR-404/515/516, D20/D21) -----------
+
+    def _child_graph(self, ref: str) -> tuple[_Graph, Path, Any]:
+        """Load a referenced flow once per run. The engine trusts the
+        checker for E007 (reference DAG) — runtime recursion is caught
+        by the message budget, never by a stack overflow."""
+        cached = self._flow_cache.get(ref)
+        if cached is not None:
+            return cached
+        if self._workspace_root is None:
+            raise _NodeError(
+                "flow_load_error",
+                "flow references need workspace_root — pass it to FlowRun/execute_flow",
+            )
+        flow_dir = self._workspace_root / Path(ref)
+        try:
+            loaded = load_flow(flow_dir / "flow.yaml")
+        except (OSError, LoadError) as e:
+            raise _NodeError("flow_load_error", f"cannot load flow {ref!r}: {e}") from e
+        entry = (_Graph(loaded.model), flow_dir, loaded.model.env)
+        self._flow_cache[ref] = entry
+        return entry
+
+    def _spawn_frame(
+        self,
+        parent: Frame,
+        graph: _Graph,
+        flow_dir: Path,
+        inputs: dict[str, Any],
+        *,
+        loop_binding: tuple[Any, int] | None = None,
+        http: HttpClient | None = None,
+    ) -> Frame:
+        self._frame_seq += 1
+        child = Frame(
+            id=f"{parent.id}/f-{self._frame_seq}",
+            graph=graph,
+            inputs=inputs,
+            flow_dir=flow_dir,
+            loop_binding=loop_binding,
+            http=http or parent.http,
+        )
+        parent.children.append(child)
+        return child
+
+    def _cancel_frame(self, frame: Frame) -> None:
+        """Cancel a child subtree (D24): queued deliveries are skipped
+        by the pump, firing tasks are cancelled; outcomes the subtree
+        already recorded still aggregate (D20)."""
+        frame.cancelled = True
+        for task in frame.tasks:
+            task.cancel()
+        for child in frame.children:
+            self._cancel_frame(child)
+
+    async def _run_child(self, child: Frame) -> None:
+        """Seed a child frame and await its quiescence (the per-frame
+        `done` event set by the last decrement). Cancellation (a
+        container ceiling) cancels the whole subtree."""
+        try:
+            self._seed(child)
+            if child.in_flight > 0:
+                await child.done.wait()
+        except asyncio.CancelledError:
+            self._cancel_frame(child)
+            raise
+
+    def _close_child(self, child: Frame) -> tuple[str, int, list[dict], dict]:
+        """Child-frame FINALIZE: the D18 required-End check runs per
+        frame (TR-3 cross-frame), then the subtree outcome (D21):
+        → (state, failed_asserts, unhandled_entries, end_outputs)."""
+        outputs = self._close_end_ports(child)
+        failed_asserts, unhandled_count = self._subtree_counts(child)
+        prefix = child.id + "/"
+        entries = [
+            u
+            for u in self._unhandled
+            if u["frame"] and (u["frame"] == child.id or u["frame"].startswith(prefix))
+        ]
+        if child.cancelled:
+            state = "aborted"
+        elif failed_asserts or unhandled_count:
+            state = "failed"
+        else:
+            state = "passed"
+        return state, failed_asserts, entries, outputs
+
+    def _subtree_counts(self, frame: Frame) -> tuple[int, int]:
+        failed, unhandled = frame.failed_asserts, frame.unhandled_count
+        for child in frame.children:
+            child_failed, child_unhandled = self._subtree_counts(child)
+            failed += child_failed
+            unhandled += child_unhandled
+        return failed, unhandled
+
+    def _close_end_ports(self, frame: Frame) -> dict[str, Any]:
+        """D18, applied to ANY frame at its quiescence: a required End
+        port never written fails the run; optional ports note null."""
+        outputs: dict[str, Any] = {}
+        for port in frame.graph.end.config.ports:
+            if port.name in frame.end_values:
+                outputs[port.name] = frame.end_values[port.name]
+            elif port.required:
+                self._record_unhandled(
+                    frame,
+                    frame.graph.end.id,
+                    port=port.name,
+                    kind="required_end_unwritten",
+                    message=f"required End port '{port.name}' was never written",
+                )
+            else:
+                outputs[port.name] = None  # noted by null (FR-502)
+        return outputs
+
+    async def _run_flow_node(
+        self, frame: Frame, node: FlowNode, slot_values: dict[str, Any]
+    ) -> list[tuple[str, Any]]:
+        """FR-516/D21: bind inputs → child Start, await child
+        quiescence, emit child End values on derived ports; the
+        implicit `error` port fires when the child subtree ended
+        failed/error, carrying `{state, failed_asserts,
+        unhandled_errors}`. Outcomes aggregate regardless (D20) — a
+        wired error port is branching, not absolution."""
+        graph, flow_dir, env_cfg = self._child_graph(node.config.flow)
+        try:
+            self._check_env_required(env_cfg)
+            inputs = self._bind(graph.start, slot_values)
+        except _BindError as e:
+            raise _NodeError(e.reason, f"flow {node.config.flow!r}: {e}") from e
+        child = self._spawn_frame(frame, graph, flow_dir, inputs)
+        await self._run_child(child)
+        state, failed_asserts, entries, port_values = self._close_child(child)
+        outputs = list(port_values.items())
+        if state != "passed":
+            outputs.append(
+                (
+                    "error",
+                    {
+                        "state": state,
+                        "failed_asserts": failed_asserts,
+                        "unhandled_errors": entries,
+                    },
+                )
+            )
+        return outputs
+
+    async def _run_loop(
+        self, frame: Frame, node: LoopNode, context: dict[str, Any]
+    ) -> list[tuple[str, Any]]:
+        """FR-515: child frame per item; `results` = end-value dicts of
+        PASSED iterations in item-index order (EC36); `errors` = one
+        entry per failed iteration, emitted only when non-empty.
+        `on_error: stop` gates scheduling only; failed iterations count
+        toward the run regardless (EC06/D20). Node-level failures
+        (bad `over`, load failure, tripped ceiling) have no outlet:
+        unhandled node error, the loop emits nothing (EC24)."""
+        cfg = node.config
+        items = self._renderer.evaluate(cfg.over, context)
+        if not isinstance(items, list):
+            raise _NodeError(
+                "loop_error",
+                f"`over` must evaluate to a list, got {type(items).__name__}",
+            )
+        graph, flow_dir, env_cfg = self._child_graph(cfg.body)
+        try:
+            self._check_env_required(env_cfg)
+        except _BindError as e:
+            raise _NodeError(e.reason, f"loop body {cfg.body!r}: {e}") from e
+        declared = {p.name for p in graph.start.config.ports}
+        results: dict[int, dict[str, Any]] = {}
+        errors: list[dict[str, Any]] = []
+        stop = False
+
+        async def run_iteration(index: int, item: Any) -> None:
+            nonlocal stop
+            given: dict[str, Any] = {"item": item}
+            if "index" in declared:
+                given["index"] = index
+            try:
+                inputs = self._bind(graph.start, given)
+            except _BindError as e:
+                # a frame that cannot start = iteration `error` (EN §5)
+                self._record_unhandled(
+                    frame,
+                    node.id,
+                    port=None,
+                    kind="bind_error",
+                    message=f"iteration {index}: {e}",
+                )
+                errors.append({"index": index, "state": "error", "message": str(e)})
+                stop = True
+                return
+            http = None
+            if cfg.fresh_session:
+                http = HttpClient()
+                self._extra_http.append(http)
+            child = self._spawn_frame(
+                frame,
+                graph,
+                flow_dir,
+                inputs,
+                loop_binding=(item, index),
+                http=http,
+            )
+            await self._run_child(child)
+            state, failed_asserts, entries, port_values = self._close_child(child)
+            if http is not None:  # close eagerly; cancellation paths
+                self._extra_http.remove(http)  # fall back to run cleanup
+                await http.close()
+            if state == "passed":
+                results[index] = port_values
+            else:
+                errors.append(
+                    {
+                        "index": index,
+                        "state": state,
+                        "failed_asserts": failed_asserts,
+                        "unhandled_errors": entries,
+                    }
+                )
+                stop = True
+
+        if cfg.mode == "sequential":
+            for index, item in enumerate(items):
+                if stop and cfg.on_error == "stop":
+                    break  # gates scheduling only — never in-flight work
+                await run_iteration(index, item)
+        else:
+            semaphore = asyncio.Semaphore(cfg.max_concurrency)
+
+            async def gated(index: int, item: Any) -> None:
+                async with semaphore:
+                    if stop and cfg.on_error == "stop":
+                        return
+                    await run_iteration(index, item)
+
+            await asyncio.gather(*(gated(i, it) for i, it in enumerate(items)))
+
+        outputs: list[tuple[str, Any]] = [
+            ("results", [results[i] for i in sorted(results)])
+        ]
+        if errors:
+            errors.sort(key=lambda e: e["index"])
+            outputs.append(("errors", errors))
         return outputs
 
     def _load_fixture(self, node: FixtureNode) -> Any:
@@ -934,8 +1200,11 @@ class FlowRun:
         emits on `response`, transport failures on `error` (EC13).
         `max_seconds` (default 300, D24) is enforced above this by
         `_fire` — it cancels all attempts at once."""
-        if self._http is None:
-            self._http = HttpClient()
+        http = frame.http  # fresh_session loops carry their own session
+        if http is None:
+            if self._http is None:
+                self._http = HttpClient()
+            http = self._http
         cfg = self._effective_request_config(node, context)
         attempts: int = cfg["retry_attempts"]
         for attempt in range(1, attempts + 1):
@@ -951,7 +1220,7 @@ class FlowRun:
                 )
             )
             try:
-                wire = await self._http.request(
+                wire = await http.request(
                     method=cfg["method"],
                     url=cfg["url"],
                     headers=cfg["headers"],
@@ -1104,6 +1373,7 @@ class FlowRun:
                 self._asserts_passed += 1
             else:
                 self._asserts_failed += 1
+                frame.failed_asserts += 1
                 all_passed = False
                 if node.config.mode == "fail_fast":
                     break
@@ -1188,6 +1458,7 @@ class FlowRun:
     def _record_unhandled(
         self, frame: Frame, node_id: str, *, port: str | None, kind: str, message: str
     ) -> None:
+        frame.unhandled_count += 1
         self._unhandled.append(
             {
                 "frame": frame.id,
@@ -1215,21 +1486,9 @@ class FlowRun:
     def _finalize(self, frame: Frame | None, started: float) -> RunResult:
         end_outputs: dict[str, Any] = {}
         if frame is not None:
-            for port in frame.graph.end.config.ports:
-                if port.name in frame.end_values:
-                    end_outputs[port.name] = frame.end_values[port.name]
-                elif port.required:
-                    # D18: a declared output never produced is never a
-                    # false green — run failed
-                    self._record_unhandled(
-                        frame,
-                        frame.graph.end.id,
-                        port=port.name,
-                        kind="required_end_unwritten",
-                        message=f"required End port '{port.name}' was never written",
-                    )
-                else:
-                    end_outputs[port.name] = None  # noted by null (FR-502)
+            # D18: same required-End check every frame gets (TR-3);
+            # child frames already closed at their own quiescence
+            end_outputs = self._close_end_ports(frame)
 
         if self._aborted:
             state: RunState = "aborted"
@@ -1285,13 +1544,16 @@ class FlowRun:
         }
 
     def _template_context(self, frame: Frame, trigger: Message) -> dict[str, Any]:
-        return {
+        context = {
             "env": self._env,
             "inputs": frame.inputs,
             "run": self._run_context(),
             "nodes": frame.node_outputs,
             "trigger": trigger.envelope(),
         }
+        if frame.loop_binding is not None:  # loop bodies (EN §6, FR-602)
+            context["item"], context["index"] = frame.loop_binding
+        return context
 
 
 def _preview(value: Any) -> Any:

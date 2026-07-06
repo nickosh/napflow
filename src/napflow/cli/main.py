@@ -19,7 +19,7 @@ import napflow
 from napflow.cli.report import ListSink, write_report
 from napflow.cli.scaffold import scaffold_workspace
 from napflow.core.checker import (
-    check_flow,
+    check_run_closure,
     check_workspace,
     diagnostics_from_load_error,
 )
@@ -195,15 +195,15 @@ def run(
         _fail(f"no flow at {identity!r} (discovered: {known})")
 
     # LOAD + CHECK (EN §2): E-codes block with exit 2; warnings proceed.
-    # Gate = check_flow on the target; the full-workspace closure gate
-    # stays `napf check` (deepens at S3 when flow references run).
+    # Gate = the entry flow plus its reference closure (flow/loop
+    # targets, E007) — a broken subflow blocks like a broken entry.
     try:
         loaded = load_flow(file)
     except LoadError as e:
         for diag in diagnostics_from_load_error(e):
             typer.echo(diag.render(), err=True)
         raise typer.Exit(2) from e
-    diagnostics = check_flow(loaded, ws)
+    diagnostics = check_run_closure(loaded, identity, ws)
     for diag in diagnostics:
         typer.echo(diag.render(), err=True)
     if any(d.severity == "error" for d in diagnostics):

@@ -361,6 +361,48 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
 - **fixture** — file read at first fire, cached per run; json/csv
   (csv → list of dicts, header row required).
 - **log** — emits `LogEvent` (masked); forwards unchanged.
+- Pins made at S3/M5 (2026-07-06, hierarchical frames — engine
+  `_run_flow_node` / `_run_loop` / `_spawn_frame`):
+  - **Frame completion**: one pump, one budget, one run-level
+    QUIESCENT; each frame ALSO counts its own `in_flight`, and the
+    frame's last decrement sets its `done` event — the container node
+    awaiting it is still in flight in the parent frame, so the global
+    counter cannot reach zero early. Frame ids are paths
+    (`parent-id/f-N`, N = a run-wide spawn counter).
+  - **flow node outputs**: child End values on derived ports —
+    optional-unwritten ports emit null (mirrors FR-502);
+    required-unwritten ports emit NOTHING (the child failed per D18,
+    recorded with the child's frame id — TR-3 cross-frame). The
+    implicit `error` payload is `{state, failed_asserts,
+    unhandled_errors}` computed over the child SUBTREE; child
+    bind/env failures fire it with `{error_kind: bind_error |
+    env_missing}` and no child frame is spawned. A wired error port
+    is branching, never absolution — outcomes aggregate regardless
+    (D20).
+  - **loop outputs**: `results` = End-value dicts of PASSED iterations
+    only, item-index-ordered (EC36); `errors` emits ONLY when
+    non-empty — entries `{index, state, failed_asserts,
+    unhandled_errors}` (or `{index, state: "error", message}` for an
+    iteration that could not bind); iterations never scheduled under
+    `on_error: stop` appear in neither output. A loop-node failure
+    (non-list `over`, load failure, tripped explicit ceiling) emits
+    nothing: unhandled node error (EC24), in-flight iteration
+    subtrees cancelled.
+  - **fresh_session**: each iteration gets its own HTTP session,
+    closed when the iteration completes (cancellation leftovers close
+    at run cleanup); the default shares the run session — cookies
+    persist across iterations by design.
+  - **Child flow loading**: referenced flows load once per run
+    (cached by reference); runtime recursion is caught by the message
+    budget — E007 in the checker is the real gate, and `napf run`'s
+    LOAD/CHECK gate now covers the entry flow's whole reference
+    closure (`check_run_closure`).
+  - **Worker pool bound**: one worker per distinct nodes.py in the
+    run's flow closure — statically bounded by the E007 DAG, no
+    eviction (module state persists for the run). Replaces the
+    deferred "capped pool" note in §5a.
+  - **`nodes_never_fired`** reports the ROOT frame only; child-frame
+    skips are visible in the event stream per frame.
 - Pins made at S3/M3 (2026-07-06, engine `_run_node` / `_load_fixture`
   / `_seed`):
   - **switch**: the evaluated value is compared to each case `equals`

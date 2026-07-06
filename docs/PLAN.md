@@ -106,7 +106,7 @@ request→assert flow via `napf run` against a local server — exit 0 on
 pass, exit 1 on a failing assert; TR-2 green; TR-3 root-frame green
 (cross-frame half completes with S3 subflow/loop frames).
 
-## S3 — full node set + python worker  ← current
+## S3 — full node set + python worker  ✅ done 2026-07-06
 
 python + worker subprocess (protocol integrity per EC28), merge,
 guards, loop, flow, set/get, switch, delay, log, fixture, note.
@@ -154,12 +154,22 @@ and guards follow; container frames close the stage.
       retry-until-ready runs against a local server in both the
       polls-until-ready and gives-up variants — the S3 DoD's "flagship
       example runs" is done. (FR-509/510)
-- [ ] **M5 — subflows + loops**: hierarchical frames (FR-404), flow
-      node w/ implicit error port (FR-516), loop node (FR-515).
-      Completes TR-3 (cross-frame), TR-5, TR-8. Stage close: bump
-      0.1.0.dev3. (D20/D21/D24)
+- [x] **M5 — subflows + loops** (landed 2026-07-06): hierarchical
+      frames — one pump/budget/quiescence detector, per-frame
+      `in_flight` + `done` completion, path ids (FR-404); flow node
+      with subtree-computed implicit error payload (FR-516, D21); loop
+      node with index-ordered results, EC06 error entries,
+      fresh_session cookie isolation (FR-515); `napf run` gate
+      deepened to the reference closure (`check_run_closure`).
+      Completed TR-3 (cross-frame), TR-5, TR-8, FR-405/410. Stage
+      close: 0.1.0.dev3. (D20/D21/D24)
 
-## S4 — server + UI canvas
+S3 DoD verified: flagship retry example runs (M4); `napf run
+flows/smoke` passes offline on a fresh `napf init` (M3, EC34);
+TR-1/4/5/6/8/10 green + TR-9's protocol-integrity half (the
+through-the-server half is S4's, per the S3 DoD note above).
+
+## S4 — server + UI canvas  ← current
 
 FR-10xx; canvas edits keep golden diffs clean.
 DoD: `napf ui` end-to-end on macOS + Windows + Linux (incl. TR-9).

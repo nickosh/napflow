@@ -4,6 +4,25 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S3/M5 hierarchical frames — STAGE S3 COMPLETE
+
+- Done: flow + loop nodes on hierarchical frames — one pump/budget/
+  quiescence, per-frame `in_flight`+`done` completion (the QUIESCENT
+  trick per frame), path ids, subtree outcome sums (D21 payloads),
+  flow-timeout-aborts-child (TR-8), loop results/errors (EC06/EC36),
+  fresh_session cookie isolation, `check_run_closure` run gate.
+  TR-3/5/8 + FR-404/405/410/515/516 ticked. 265 tests (15+1 new).
+  Version 0.1.0.dev3 (stage-closing commit). Full node catalog
+  runnable — SUPPORTED_NODE_TYPES gate removed as dead code.
+- Decided (EN §5 pins): flow emits optional-unwritten as null, skips
+  required-unwritten (child failed instead); loop errors emit only
+  when non-empty, unscheduled iterations absent from both outputs;
+  worker pool bound = one worker per distinct nodes.py in the closure
+  (no eviction — module state preserved); nodes_never_fired is
+  root-frame only; runtime recursion = budget backstop (E007 gates).
+- Next: S4 — server + UI canvas (or first release from the CLI-only
+  product per PRODUCT.md; S1–S3 is shippable).
+
 ## 2026-07-06 — S3/M4 guards + flagship retry example
 
 - Done: `_deliver_guard` — counter (EC16 boundary, count 0 = exhaust

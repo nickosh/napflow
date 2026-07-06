@@ -272,3 +272,55 @@ def test_log_events_echo_to_stderr_masked(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.stderr
     assert "[info] checkpoint: ***" in result.stderr
     assert "supersecret-token" not in result.stderr
+
+
+PARENT_FLOW = """\
+schema: "napflow/v1"
+flow:
+  name: "parent"
+nodes:
+  - id: "start"
+    type: "start"
+  - id: "child_run"
+    type: "flow"
+    config:
+      flow: "flows/broken"
+  - id: "end"
+    type: "end"
+    config:
+      ports:
+        - {name: "res", required: false}
+edges:
+  - {from: "start.out", to: "child_run.trigger"}
+  - {from: "child_run.out", to: "end.res"}
+"""
+
+BROKEN_CHILD = """\
+schema: "napflow/v1"
+flow:
+  name: "broken"
+nodes:
+  - id: "start"
+    type: "start"
+  - id: "end"
+    type: "end"
+    config:
+      ports:
+        - {name: "out"}
+edges:
+  - {from: "start.out", to: "ghost.in"}
+"""
+
+
+def test_run_gate_checks_reference_closure(tmp_path, monkeypatch):
+    # S3/M5: the run gate deepened from single-flow to the reference
+    # closure — a broken SUBFLOW blocks with exit 2 before anything runs
+    ws = make_workspace(tmp_path, flow_yaml=PARENT_FLOW)
+    (ws / "flows" / "parent").mkdir()
+    (ws / "flows" / "hello" / "flow.yaml").rename(ws / "flows" / "parent" / "flow.yaml")
+    (ws / "flows" / "broken").mkdir()
+    (ws / "flows" / "broken" / "flow.yaml").write_text(BROKEN_CHILD, encoding="utf-8")
+    monkeypatch.chdir(ws)
+    result = runner.invoke(app, ["run", "flows/parent"])
+    assert result.exit_code == 2
+    assert "broken" in result.stderr  # the diagnostic names the subflow
