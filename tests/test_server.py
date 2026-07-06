@@ -287,13 +287,46 @@ edges:
     with_client(ws, scenario)
 
 
-def test_placeholder_page_until_ui_bundle_lands(tmp_path):
+def test_placeholder_page_without_a_ui_bundle(tmp_path, monkeypatch):
+    """No static dir (e.g. a source checkout that never ran the UI
+    build) ⇒ `/` serves the plain placeholder, not a 404."""
+    import napflow.server.app as server_app
+
+    monkeypatch.setattr(server_app, "STATIC_DIR", tmp_path / "no-static")
     ws = make_scaffold_ws(tmp_path)
 
     async def scenario(client):
         response = await client.get("/")
         assert response.status == 200
-        assert "napflow" in await response.text()
+        assert "napflow server is running" in await response.text()
+
+    with_client(ws, scenario)
+
+
+def test_ui_bundle_served_with_spa_fallback(tmp_path, monkeypatch):
+    """With a bundle in place (NFR-03: it ships inside the wheel), `/`
+    serves index.html, assets are reachable, and unknown client-side
+    routes fall back to index.html (SPA history API)."""
+    import napflow.server.app as server_app
+
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text(
+        "<!doctype html><title>bundle</title>", encoding="utf-8"
+    )
+    (static / "assets" / "app.js").write_text("// js", encoding="utf-8")
+    monkeypatch.setattr(server_app, "STATIC_DIR", static)
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        index = await client.get("/")
+        assert index.status == 200
+        assert "bundle" in await index.text()
+        asset = await client.get("/assets/app.js")
+        assert asset.status == 200
+        fallback = await client.get("/flows/some/client/route")
+        assert fallback.status == 200
+        assert "bundle" in await fallback.text()
 
     with_client(ws, scenario)
 

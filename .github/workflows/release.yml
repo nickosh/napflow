@@ -17,14 +17,32 @@ jobs:
           fetch-depth: 0 # git-cliff needs full history for notes
       # setup-uv publishes no moving major tag — pin the exact release
       - uses: astral-sh/setup-uv@v8.2.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
       - name: Gate
         run: |
           uv sync --locked
           uv run ruff check
           uv run lint-imports
           uv run pytest
+      - name: Build UI bundle (ships inside the wheel, NFR-03)
+        run: |
+          npm ci
+          npm run build
+        working-directory: ui
       - name: Build sdist + wheel
         run: uv build
+      - name: Artifacts carry the bundle (NFR-03)
+        run: |
+          uv run python - <<'EOF'
+          import glob, sys, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          ok = any(n == "napflow/server/static/index.html" for n in names)
+          sys.exit(0 if ok else "wheel is missing the UI bundle (NFR-03)")
+          EOF
       - name: Release notes for this tag
         run: uvx git-cliff --latest --strip header -o RELEASE_NOTES.md
       - name: Create GitHub Release

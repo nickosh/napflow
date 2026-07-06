@@ -195,12 +195,15 @@ harness lands M2, suite grows M3–M6).
       `napf ui` (port 6273 + scan, localhost-only, `--no-browser`).
       TR-9 through-the-server test on the 3-OS matrix; surface pinned
       in WM "Server surface". (FR-806/1001 server halves; TR-9; NFR-04)
-- [ ] **M2 — UI scaffold + packaging walking skeleton**: `ui/` (Vite +
-      React + TS + Zustand + @xyflow/react) hello-canvas; build output
-      force-included in the wheel (hatchling); CI grows the Node build
-      step; Playwright harness wired with a first smoke (`napf ui`
-      serves the real bundle). No Node at runtime. (NFR-03; FR-806/1001
-      complete)
+- [x] **M2 — UI scaffold + packaging walking skeleton** (landed
+      2026-07-06): `ui/` (Vite 8 + React 19 + TS + Zustand +
+      @xyflow/react 12, npm, Node 22 dev-only) hello-canvas fed by the
+      real API; vite builds into `src/napflow/server/static`, hatchling
+      `artifacts` forces the gitignored bundle into sdist+wheel; CI `ui`
+      job (3-OS: build + wheel gate + Playwright chromium e2e) and
+      release.yml bundle gate; Playwright harness (`e2e/serve.mjs`
+      scaffolds a fresh `napf init` workspace) + 2 smokes. (NFR-03;
+      FR-806/1001 complete)
 - [ ] **M3 — read-only canvas**: flow list, `main:` opens by default,
       nodes/edges/layout render, soft port-type coloring (D11),
       read-only node inspector, E/W diagnostics surfaced on canvas.

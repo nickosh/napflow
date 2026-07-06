@@ -4,6 +4,27 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S4/M2 UI scaffold + wheel walking skeleton
+
+- Done: `ui/` (Vite 8 + React 19 + TS 6 + Zustand + @xyflow/react 12;
+  npm; Node 22 pinned dev-only) — hello-canvas rendering one node per
+  discovered flow from the real API; vite builds into
+  `src/napflow/server/static`; hatchling `artifacts` forces the
+  gitignored bundle into sdist+wheel (NFR-03 gated in CI `ui` job AND
+  release.yml — a release can't ship a UI-less wheel); Playwright
+  harness (fresh `napf init` per run via `e2e/serve.mjs`) + 2 smokes
+  green locally; static tests made bundle-independent (monkeypatched
+  STATIC_DIR). NFR-03 + FR-806 + FR-1001 ticked. Also: M1's CI red was
+  a missed `ruff format` — fixed; TR-9's Windows leg rides this push.
+- Decided: e2e = chromium-only in v1 (default-browser UX, engine
+  matrix is overkill); e2e always runs against the BUILT bundle
+  through the real server (the wheel-user path, never vite dev);
+  README run-row unstuck (was 🚧 S2).
+- Next: S4/M3 — read-only canvas (flow list, `main:` default open,
+  nodes/edges/layout render, D11 port coloring, E/W on canvas;
+  FR-1002 render half). Verify the ui job + TR-9 Windows leg on this
+  push's CI first.
+
 ## 2026-07-06 — S4 adopted + S4/M1 server
 
 - Done: S4 breakdown adopted in PLAN (M1 server → M2 UI scaffold+wheel

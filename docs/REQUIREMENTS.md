@@ -102,7 +102,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 - [x] FR-803 (S2) `napf run <flow> [--env NAME] [-i k=v ...] [--input-json] [--timeout N]` — inputs validated & type-coerced against Start ports, fail-fast on unknown/missing; End outputs → stdout as one JSON object; logs → stderr; exit codes 0/1/2/130. (FS, EN §2, D24) — `cli/main.py run` (pins in WM CLI section: run gate, unmasked stdout, input precedence, best-effort default env, Ctrl-C), `tests/test_run_cli.py` + S2 DoD test in `tests/test_request.py`, 2026-07-05
 - [x] FR-804 (S2) Report formats `none|junit|json` per `defaults.run.report`. (WM) — `cli/report.py` `write_report` (paths + junit mapping pinned in WM), `test_json_report`/`test_junit_report_counts_match`, 2026-07-05
 - [x] FR-805 (S1) `napf init [dir]` per FR-107. (WM) — `cli/main.py init`, refuses existing napflow.yaml, 2026-07-05
-- [ ] FR-806 (S4) `napf ui [--port]` — serve UI + API + WebSocket on one localhost port, open browser. (WM, D03)
+- [x] FR-806 (S4) `napf ui [--port]` — serve UI + API + WebSocket on one localhost port, open browser. (WM, D03) — server half (port 6273 + scan, localhost-only, `--no-browser`, stdlib `webbrowser`) at S4/M1; complete at S4/M2 with the real bundle served (`test_ui_bundle_served_with_spa_fallback` + Playwright smoke), 2026-07-06
 
 ## FR-9xx — Python worker
 
@@ -115,7 +115,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 ## FR-10xx — Server & UI (S4)
 
-- [ ] FR-1001 BlackSheep server is a thin adapter over core: serves static UI bundle, REST for flows/runs, WebSocket for live events; core never imports it. (D03/D04)
+- [x] FR-1001 BlackSheep server is a thin adapter over core: serves static UI bundle, REST for flows/runs, WebSocket for live events; core never imports it. (D03/D04) — `napflow/server` at S4/M1 (REST/WS over `core/runprep.py`; import-linter forbids core→server and server→cli); static bundle real at S4/M2, 2026-07-06
 - [ ] FR-1002 Canvas (@xyflow/react): render/edit nodes+edges; single-edge-input enforcement on connect; output fan-out; soft port-type coloring + W102 hints. (FS, D11)
 - [ ] FR-1003 Canvas writes flow.yaml through the shared canonical serializer; layout changes touch only the `layout:` block. (YP)
 - [ ] FR-1004 Filesystem watch: external change → reload or prompt (last-write-wins). (FS)
@@ -127,7 +127,7 @@ Stages (from CLAUDE.md build order — each independently useful):
 
 - [x] NFR-01 `napflow.core` importable standalone — zero cli/server/UI imports; enforced by an import-linter test. (EN §0) — `tests/test_architecture.py` + contract in `pyproject.toml`, 2026-07-04
 - [x] NFR-02 macOS + Windows + Linux from day one (D26): pathlib everywhere, no shell-isms, spawn-safe subprocesses. (CLAUDE.md) — 3-OS CI matrix green since 2026-07-04; Linux promoted to first-class 2026-07-06 (D26, zero platform-conditional code); pathlib enforced via ruff PTH; spawn-safety re-verified as subprocess code lands (S3)
-- [ ] NFR-03 Distribution: one pip wheel containing the pre-built UI; no Docker, no Node at runtime; installable via `uv tool install napflow`. (D03)
+- [x] NFR-03 Distribution: one pip wheel containing the pre-built UI; no Docker, no Node at runtime; installable via `uv tool install napflow`. (D03) — hatchling `artifacts` force-includes the gitignored `src/napflow/server/static`; CI `ui` job + release.yml both GATE on the bundle being inside the built wheel, S4/M2 2026-07-06. NFR-10 lesson: confirm the ui job's first real CI run before treating as final
 - [x] NFR-04 Python 3.12+; Pydantic v2; ruamel.yaml; Jinja2 sandbox; niquests; BlackSheep + uvicorn; Typer. (CLAUDE.md stack) — final pieces (BlackSheep + uvicorn + websockets) in production use at S4/M1 (`napflow/server`, `napf ui`), 2026-07-06
 - [ ] NFR-05 Security posture: sandboxed Jinja2 only (no eval), safe YAML loading only, secrets masked at emission, worker subprocess isolation with kill ceiling. (D10/D12/D22/D23)
 - [x] NFR-06 Determinism: identical logical flow ⇒ byte-identical emitted file, cross-platform (golden round-trip test in CI). (YP) — checked-in golden + `.gitattributes`, green on 3-OS CI since M2, 2026-07-05

@@ -11,3 +11,10 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# UI (dev-time only; the BUILT bundle ships inside the wheel, NFR-03)
+ui/node_modules/
+src/napflow/server/static/
+ui/test-results/
+ui/playwright-report/
+ui/.e2e-workspaces/

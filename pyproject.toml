@@ -50,6 +50,13 @@ dev = [
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
+# The pre-built UI bundle is gitignored build output; `artifacts`
+# forces it into sdist + wheel anyway (NFR-03: one wheel, no Node at
+# runtime). CI builds the UI before `uv build` and gates on the bundle
+# being present in the wheel.
+[tool.hatch.build]
+artifacts = ["src/napflow/server/static"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/napflow"]
 

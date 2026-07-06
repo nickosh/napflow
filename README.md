@@ -35,8 +35,8 @@ the visual canvas comes after. See [docs/PLAN.md](docs/PLAN.md).
 | `napf init`  | ✅     | scaffold a workspace (demo + offline smoke flow included) |
 | `napf list`  | ✅     | discovered flows with their input/output ports |
 | `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with `file:line` diagnostics and CI exit codes |
-| `napf run`   | 🚧 S2  | headless engine, JSONL run history, exit codes 0/1/2/130 |
-| `napf ui`    | 🚧 S4  | local canvas editor (React Flow), served from the wheel |
+| `napf run`   | ✅     | headless engine — full node catalog incl. python worker, JSONL run history, exit codes 0/1/2/130 |
+| `napf ui`    | 🚧 S4  | local server (API + WebSocket + bundled UI) works; the canvas editor itself is being built milestone by milestone |
 
 ## Try it
 
@@ -105,6 +105,16 @@ uv sync
 uv run pytest          # test suite
 uv run ruff check      # lint
 uv run lint-imports    # architecture contract: core imports nothing from cli/server
+```
+
+UI (dev-time only — users get the pre-built bundle inside the wheel):
+
+```sh
+cd ui
+npm ci
+npm run build          # bundle → src/napflow/server/static (what `napf ui` serves)
+npm run dev            # Vite dev server, proxies /api + /ws to a running `napf ui`
+npm run e2e            # Playwright against the built bundle (needs npm run build)
 ```
 
 Conventional commits (`type(scope): subject`) — they feed the
