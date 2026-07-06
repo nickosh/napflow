@@ -274,6 +274,13 @@ def apply_retention(runs_dir: Path, history: int) -> list[Path]:
 # Sinks + stream
 
 
+def encode_record(record: dict[str, Any]) -> str:
+    """THE record wire encoding — compact JSON, `ensure_ascii=False`.
+    JSONL lines and WebSocket frames both use it, so they are identical
+    by construction (D13: replay = re-read file)."""
+    return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+
+
 class JsonlSink:
     """Append-only run log, one compact JSON object per line (UTF-8,
     LF, `ensure_ascii=False`). Every line is flushed as written, so an
@@ -287,8 +294,7 @@ class JsonlSink:
         self._file = path.open("x", encoding="utf-8", newline="\n")
 
     def write(self, record: dict[str, Any]) -> None:
-        line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-        self._file.write(line + "\n")
+        self._file.write(encode_record(record) + "\n")
         self._file.flush()
 
     def close(self) -> None:

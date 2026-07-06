@@ -4,6 +4,25 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S4 adopted + S4/M1 server
+
+- Done: S4 breakdown adopted in PLAN (M1 server → M2 UI scaffold+wheel
+  → M3 read canvas → M4 edit → M5 run overlay → M6 subflow UX). M1
+  landed: `core/runprep.py` (run gate/env/stream shared verbatim with
+  `napf run`), `napflow/server` (REST + run registry + WS; frames =
+  JSONL lines via one `encode_record`, D13 by construction), `napf ui`
+  (port 6273 "NAPF", scan, `--no-browser`). 282 tests (17 new) incl.
+  TR-9 through-the-server on real uvicorn. Surface pinned in WM.
+- Decided (owner): first release ships AFTER S4 — hand-authoring YAML
+  is too much friction for a fresh release; Playwright browser suite
+  grows per milestone (harness at M2). WM pins: no reports for server
+  runs in v1; end outputs reach the UI only via the masked
+  `run_finished` event; registry buffers drop at run end.
+- Next: S4/M2 — UI scaffold (`ui/`: Vite+React+TS+Zustand+xyflow) +
+  wheel walking-skeleton (hatchling force-include, CI Node build,
+  Playwright harness + first smoke). Confirm TR-9's WINDOWS CI leg on
+  this push before treating the tick as final (NFR-10 lesson).
+
 ## 2026-07-06 — S3/M5 hierarchical frames — STAGE S3 COMPLETE
 
 - Done: flow + loop nodes on hierarchical frames — one pump/budget/

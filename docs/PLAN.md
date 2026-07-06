@@ -176,7 +176,49 @@ DoD: `napf ui` end-to-end on macOS + Windows + Linux (incl. TR-9).
 v1 `napf ui` opens the default browser (stdlib `webbrowser`, no GUI
 deps); Chromium app-mode `--app` is a v1.1 candidate (PRODUCT roadmap).
 Per PRODUCT.md: S1–S3 is a shippable CLI-only product — S4 must not
-block a first release.
+block a first release. Owner call 2026-07-06: the first release ships
+AFTER S4 — hand-authoring YAML is too much friction for a fresh
+release; the canvas is the on-ramp.
+
+Milestone breakdown (adopted 2026-07-06) — server-first: the BlackSheep
+adapter is pytest-testable with zero frontend and surfaces the TR-9
+Windows risk (Proactor + worker pipes + uvicorn coexistence)
+immediately; the wheel walking-skeleton de-risks NFR-03 before real UI
+work exists; the canvas then grows read → edit → run. Playwright
+browser tests grow per milestone alongside the canvas (owner call —
+harness lands M2, suite grows M3–M6).
+
+- [x] **M1 — server: API + runs + WS + `napf ui`** (landed 2026-07-06):
+      `core/runprep.py` (gate + env + stream wiring shared verbatim
+      with `napf run`), `napflow/server` (REST + run registry +
+      WebSocket; frames = JSONL lines via one `encode_record`, D13),
+      `napf ui` (port 6273 + scan, localhost-only, `--no-browser`).
+      TR-9 through-the-server test on the 3-OS matrix; surface pinned
+      in WM "Server surface". (FR-806/1001 server halves; TR-9; NFR-04)
+- [ ] **M2 — UI scaffold + packaging walking skeleton**: `ui/` (Vite +
+      React + TS + Zustand + @xyflow/react) hello-canvas; build output
+      force-included in the wheel (hatchling); CI grows the Node build
+      step; Playwright harness wired with a first smoke (`napf ui`
+      serves the real bundle). No Node at runtime. (NFR-03; FR-806/1001
+      complete)
+- [ ] **M3 — read-only canvas**: flow list, `main:` opens by default,
+      nodes/edges/layout render, soft port-type coloring (D11),
+      read-only node inspector, E/W diagnostics surfaced on canvas.
+      (FR-1002 render half; FR-1006 check half)
+- [ ] **M4 — editing + write path**: connect rules (E004 enforced at
+      connect time), node add/delete, config forms + Monaco for python,
+      Start-port key-value + End required-flag editing, save through
+      the server-side canonical serializer (the UI never emits YAML —
+      one serializer, D23), golden canvas-diff test (layout-only moves
+      touch only `layout:`), FS watch + last-write-wins reload prompt.
+      (FR-1002 edit half; FR-1003/1004/1006; FR-203 canvas enforcement)
+- [ ] **M5 — run on canvas + history**: run button + live event overlay
+      over the M1 WebSocket, per-node status + full wire detail, run
+      history browser replays any JSONL (EC20 dangling
+      `request_started` tolerated). (FR-1005)
+- [ ] **M6 — subflow UX + stage close**: drill-in navigation, "used in
+      N places", clone-to-new-flow, ghost-wires for cross-node template
+      references; 3-OS DoD sweep; version 0.1.0.dev4. (FR-1007)
 
 ## Working agreements
 

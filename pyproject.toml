@@ -21,11 +21,14 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
+    "blacksheep>=2.6.3",
     "jinja2>=3.1",
     "niquests>=3.7",
     "pydantic>=2.7",
     "ruamel.yaml>=0.18",
     "typer>=0.12",
+    "uvicorn>=0.30",
+    "websockets>=16.0",
 ]
 
 [project.urls]
@@ -74,9 +77,16 @@ select = [
 root_package = "napflow"
 
 # NFR-01: core is the pytest/CI/codegen surface and must stay importable
-# standalone. Add "napflow.server" to forbidden_modules when it exists (S4).
+# standalone.
 [[tool.importlinter.contracts]]
 name = "core imports nothing from cli/server/UI"
 type = "forbidden"
 source_modules = ["napflow.core"]
+forbidden_modules = ["napflow.cli", "napflow.server"]
+
+# server is a thin adapter over core; only cli may import server
+[[tool.importlinter.contracts]]
+name = "server does not import the cli"
+type = "forbidden"
+source_modules = ["napflow.server"]
 forbidden_modules = ["napflow.cli"]

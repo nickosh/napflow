@@ -9,6 +9,8 @@ with the server (S4). `run` exit codes come from the run state
 import asyncio
 import json
 import signal
+import socket
+import webbrowser
 from contextlib import suppress
 from pathlib import Path
 from typing import Annotated
@@ -18,29 +20,15 @@ import typer
 import napflow
 from napflow.cli.report import ListSink, write_report
 from napflow.cli.scaffold import scaffold_workspace
-from napflow.core.checker import (
-    check_run_closure,
-    check_workspace,
-    diagnostics_from_load_error,
-)
+from napflow.core.checker import check_workspace
 from napflow.core.engine import FlowRun
-from napflow.core.events import (
-    EventStream,
-    JsonlSink,
-    SecretMasker,
-    apply_retention,
-    new_run_id,
-    run_log_path,
-)
 from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import EndNode, StartNode
+from napflow.core.runprep import RunPrepError, open_run_stream, prepare_run
 from napflow.core.workspace import (
-    EnvFileError,
     Workspace,
     WorkspaceNotFoundError,
-    layer_env,
     load_workspace,
-    parse_env_file,
 )
 
 app = typer.Typer(
@@ -188,66 +176,37 @@ def run(
     """Run a flow headless: End outputs → stdout as one JSON object,
     logs → stderr, exit code 0/1/2/130 from the run state."""
     ws = _workspace()
-    identity = Path(flow).as_posix().strip("/")
-    file = ws.root / Path(identity) / "flow.yaml"
-    if not file.is_file():
-        known = ", ".join(r.identity for r in ws.discover_flows()) or "none"
-        _fail(f"no flow at {identity!r} (discovered: {known})")
-
-    # LOAD + CHECK (EN §2): E-codes block with exit 2; warnings proceed.
-    # Gate = the entry flow plus its reference closure (flow/loop
-    # targets, E007) — a broken subflow blocks like a broken entry.
+    # LOAD + CHECK + ENV gate shared with the server (core/runprep.py):
+    # E-codes block with exit 2 across the reference closure, warnings
+    # proceed; explicit --env must exist, the default is best-effort.
     try:
-        loaded = load_flow(file)
-    except LoadError as e:
-        for diag in diagnostics_from_load_error(e):
-            typer.echo(diag.render(), err=True)
+        prepared = prepare_run(ws, flow, env)
+    except RunPrepError as e:
+        if e.diagnostics:
+            for diag in e.diagnostics:
+                typer.echo(diag.render(), err=True)
+        else:
+            typer.echo(f"error: {e}", err=True)
         raise typer.Exit(2) from e
-    diagnostics = check_run_closure(loaded, identity, ws)
-    for diag in diagnostics:
+    for diag in prepared.diagnostics:
         typer.echo(diag.render(), err=True)
-    if any(d.severity == "error" for d in diagnostics):
-        raise typer.Exit(2)
+    for note in prepared.notes:
+        typer.echo(note, err=True)
 
-    # ENV: an explicit --env must exist; the manifest default is
-    # best-effort (profiles are gitignored — fresh clones have none)
-    profiles = ws.env_profiles()
-    env_name = env if env is not None else ws.manifest.model.environments.default
-    profile_values: dict[str, str] = {}
-    if env is not None and env not in profiles:
-        available = ", ".join(profiles) or "none"
-        _fail(f"--env {env!r}: no envs/{env}.env (available: {available})")
-    if env_name in profiles:
-        try:
-            profile_values = parse_env_file(profiles[env_name])
-        except EnvFileError as e:
-            _fail(str(e))
-    elif env_name is not None:
-        typer.echo(
-            f"note: env profile {env_name!r} not found — process env only", err=True
-        )
-        env_name = None
-
-    layered = layer_env(profile_values)
     bound = _parse_inputs(inputs, input_json)
     manifest = ws.manifest.model
+    identity = prepared.identity
 
-    run_id = new_run_id()
-    log_path = run_log_path(ws.root, identity, run_id)
     collect = ListSink()
-    stream = EventStream(
-        run_id,
-        SecretMasker(manifest.environments.secrets, layered),
-        [JsonlSink(log_path), collect, _LogEcho()],
-    )
-    apply_retention(log_path.parent, manifest.defaults.run.history)
+    opened = open_run_stream(ws, prepared, extra_sinks=[collect, _LogEcho()])
+    run_id, log_path, stream = opened.run_id, opened.log_path, opened.stream
 
     flow_run = FlowRun(
-        loaded.model,
+        prepared.loaded.model,
         flow_identity=identity,
         manifest=manifest,
-        env=layered,
-        env_name=env_name,
+        env=prepared.env,
+        env_name=prepared.env_name,
         inputs=bound,
         stream=stream,
         run_timeout_s=timeout,
@@ -302,6 +261,90 @@ def run(
     # .token` is the contract, so this is deliberately NOT masked
     typer.echo(json.dumps(result.end_outputs, indent=2, ensure_ascii=False))
     raise typer.Exit(result.exit_code)
+
+
+# "NAPF" on a phone keypad. When taken and --port wasn't explicit, the
+# next free port of the following 20 is used (multiple workspaces open
+# at once — the Jupyter convention).
+DEFAULT_UI_PORT = 6273
+_PORT_SCAN_SPAN = 20
+
+
+def _port_free(port: int) -> bool:
+    # probe WITHOUT SO_REUSEADDR — a TIME_WAIT port must read as taken
+    with socket.socket() as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
+
+
+def _pick_ui_port(requested: int | None) -> int:
+    """Explicit --port: use it or fail (exit 2). Default: scan."""
+    if requested is not None:
+        if not _port_free(requested):
+            _fail(f"--port {requested}: already in use")
+        return requested
+    for candidate in range(DEFAULT_UI_PORT, DEFAULT_UI_PORT + _PORT_SCAN_SPAN):
+        if _port_free(candidate):
+            return candidate
+    _fail(
+        f"no free port in {DEFAULT_UI_PORT}–"
+        f"{DEFAULT_UI_PORT + _PORT_SCAN_SPAN - 1}; pass --port"
+    )
+    raise AssertionError("unreachable")
+
+
+@app.command()
+def ui(
+    port: Annotated[
+        int | None,
+        typer.Option(
+            "--port",
+            help=f"Port to serve on (default {DEFAULT_UI_PORT}, auto-scans"
+            " when taken; an explicit busy port is an error).",
+        ),
+    ] = None,
+    no_browser: Annotated[
+        bool,
+        typer.Option("--no-browser", help="Don't open the default browser."),
+    ] = False,
+) -> None:
+    """Serve the canvas UI + API + WebSocket on one localhost port and
+    open the default browser (D03). Ctrl-C stops the server."""
+    ws = _workspace()
+    # deferred imports: blacksheep/uvicorn stay out of `napf run`'s path
+    import uvicorn
+
+    from napflow.server import build_app
+
+    chosen = _pick_ui_port(port)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            build_app(ws),
+            host="127.0.0.1",  # localhost only — never a network service
+            port=chosen,
+            log_level="warning",
+            ws="websockets-sansio",
+        )
+    )
+    url = f"http://127.0.0.1:{chosen}/"
+    typer.echo(f"napflow ui: {url}  (workspace: {ws.root}, Ctrl-C stops)", err=True)
+
+    async def _serve() -> None:
+        serving = asyncio.get_running_loop().create_task(server.serve())
+        if not no_browser:
+            while not server.started and not serving.done():
+                await asyncio.sleep(0.02)
+            if server.started:
+                webbrowser.open(url)
+        await serving
+
+    # uvicorn's own SIGINT handler usually shuts down first; suppress
+    # covers the Windows KeyboardInterrupt path
+    with suppress(KeyboardInterrupt):
+        asyncio.run(_serve())
 
 
 @app.command()

@@ -152,7 +152,8 @@ cannot break a user's first five minutes (nor napflow's own CI).
 
 ```
 napf init [dir]               scaffold workspace
-napf ui [--port]              serve editor + engine, open browser
+napf ui [--port] [--no-browser]  serve editor + engine on one localhost
+                              port (default 6273), open browser
 napf run <flow> [--env NAME]  headless run, exit code from asserts
      [-i key=value ...]       bind values to Start ports (validated, typed)
      [--input-json JSON]      structured inputs
@@ -200,6 +201,50 @@ nicety: `napf check --write-env-example` to regenerate a committed
 
 `napf check` is the CI pre-gate: fails fast on broken references before
 anything executes.
+
+## Server surface (v1) — pinned at S4/M1, 2026-07-06
+
+`napf ui [--port] [--no-browser]` serves UI + API + WebSocket on ONE
+localhost port (D03) and opens the default browser (stdlib
+`webbrowser`, D26 pin). The server (`napflow.server`, BlackSheep) is a
+THIN adapter: run semantics live in `core/runprep.py`, shared verbatim
+with `napf run` — one gate, one env-resolution rule, one stream wiring.
+
+- **Port**: default **6273** ("NAPF" on a phone keypad). Taken + no
+  explicit `--port` ⇒ scan the next 19 (multiple open workspaces, the
+  Jupyter convention). An explicit busy `--port` = error, exit 2.
+- **Bind**: `127.0.0.1` only — never a network service. No auth in v1
+  (localhost trust); anything beyond that is out of scope (PRODUCT).
+- **REST** (JSON): `GET /api/workspace` (manifest summary + profiles +
+  version) · `GET /api/flows` (structured `napf list`; unloadable
+  flows appear `valid: false`) · `GET /api/flows/<identity>` (catch-all
+  path; model dump + closure diagnostics; 404 unknown) ·
+  `POST /api/runs` `{flow, env?, inputs?}` → 202 `{run_id, flow,
+  state, log, warnings, notes}` (gate failures: 404 `flow_not_found`,
+  else 400 with `{error, message, diagnostics}`) ·
+  `GET /api/runs?flow=` (history from the JSONL dir; states from each
+  file's tail record, `incomplete` when it isn't `run_finished`) ·
+  `GET /api/runs/{run_id}` (status; result summary when finished — end
+  outputs are read from the masked `run_finished` event, NEVER from
+  this endpoint: unmasked outputs are `napf run` stdout's contract
+  only) · `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
+  D13; `?flow=` locates runs the server process didn't start) ·
+  `POST /api/runs/{run_id}/abort` (202 aborting; on a finished run:
+  200 + final state, idempotent no-op).
+- **WebSocket** `/ws/runs/{run_id}`: text frames are the JSONL lines
+  VERBATIM (one `encode_record` — identical by construction, D13).
+  Live run: replay the buffered prefix, then stream; server closes
+  normally after `run_finished`. Finished run: replay the file, close.
+  Unknown run: close `4404`.
+- **Run registry**: runs the server started, in memory — live buffers
+  drop at run end (JSONL is the durable record), finished summaries
+  capped at 32. Server shutdown aborts running flows (clean JSONL
+  prefix, EC20). Reports (`defaults.run.report`) are NOT written for
+  server runs in v1 — they stay a `napf run`/CI concern (revisit at
+  S4/M5 if canvas users want them).
+- **Static UI**: the pre-built bundle ships inside the wheel and is
+  served at `/` with an SPA fallback (S4/M2, NFR-03); until it exists,
+  `/` is a plain placeholder page.
 
 ## Roadmap / reserved
 
