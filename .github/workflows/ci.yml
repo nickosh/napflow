@@ -38,6 +38,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # a hung browser install must not burn hours
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
@@ -63,8 +64,17 @@ jobs:
           ok = any(n == "napflow/server/static/index.html" for n in names)
           sys.exit(0 if ok else "wheel is missing the UI bundle (NFR-03)")
           EOF
+      # --with-deps is Linux-only (apt libraries). On Windows it tries
+      # to install media components via an elevated path and hangs on
+      # hosted runners; macOS/Windows runners need just the browser.
       - name: Install Playwright chromium
-        run: npx playwright install --with-deps chromium
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            npx playwright install --with-deps chromium
+          else
+            npx playwright install chromium
+          fi
         working-directory: ui
       - name: Playwright e2e
         run: npm run e2e
