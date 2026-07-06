@@ -134,6 +134,7 @@ class _Worker:
                 self._pending.pop(task_id, None)
                 raise
             except (ConnectionError, OSError) as e:  # write into a dead pipe
+                await self._reap()
                 raise WorkerCrash(self._death_message()) from e
 
     async def _pump_protocol(self) -> None:
@@ -174,8 +175,12 @@ class _Worker:
                     )
                 else:
                     future.set_result(msg.get("outputs"))
-        # EOF: the process died (or exited at close) — crash any waiters
+        # EOF: the process died (or exited at close) — crash any waiters.
+        # Reap FIRST: on the Windows Proactor loop the pipe EOF races
+        # ahead of exit-status collection, and `returncode` would still
+        # read None ("exit code unknown") without the wait.
         self.dead = True
+        await self._reap()
         error = WorkerCrash(self._death_message())
         if self._ready is not None and not self._ready.done():
             self._ready.set_exception(error)
@@ -183,6 +188,15 @@ class _Worker:
             if not future.done():
                 future.set_exception(WorkerCrash(self._death_message()))
         self._pending.clear()
+
+    async def _reap(self) -> None:
+        """Collect the exit status so `_death_message` can report it.
+        Bounded: a process that closed stdout yet lives on (possible,
+        pathological) must not hang the reader — report unknown then."""
+        if self._proc is None or self._proc.returncode is not None:
+            return
+        with suppress(TimeoutError):
+            await asyncio.wait_for(self._proc.wait(), _GRACE_S)
 
     async def _pump_stderr(self) -> None:
         # raw fd-1/fd-2 writers land here (EC28) → log events + crash tail

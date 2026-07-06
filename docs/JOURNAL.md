@@ -22,6 +22,11 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   root-frame only; runtime recursion = budget backstop (E007 gates).
 - Next: S4 — server + UI canvas (or first release from the CLI-only
   product per PRODUCT.md; S1–S3 is shippable).
+- [Update, same day: Windows CI caught a Proactor race — pipe EOF
+  lands before exit-status collection, so crash messages read "exit
+  code unknown". Fixed: the protocol reader reaps (`proc.wait()`,
+  bounded) before composing the death message. This is exactly the
+  class of bug the worker-first order + 3-OS matrix existed to catch.]
 
 ## 2026-07-06 — S3/M4 guards + flagship retry example
 
