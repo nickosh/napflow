@@ -754,6 +754,18 @@ def check_flow(
     return _FlowCheck(loaded, _SurfaceResolver(workspace)).run()
 
 
+def node_surfaces(
+    model: FlowFile, flow_dir: Path, workspace: Workspace | None = None
+) -> dict[str, PortSurface | None]:
+    """Port surface per node id — the canvas needs these to draw
+    handles and D11 type coloring, and it must NOT derive them itself:
+    python ports come from AST (EC14, never imports user code), flow
+    ports from the referenced target's Start/End. None = unknowable
+    (broken reference; E008 is reported by the checks, not here)."""
+    resolver = _SurfaceResolver(workspace)
+    return {node.id: resolver.surface(node, flow_dir) for node in model.nodes}
+
+
 def check_workspace(workspace: Workspace) -> list[CheckDiagnostic]:
     """`napf check`: every discovered flow, the closure of referenced
     flows (FR-308), reference-DAG validation (E007), env coverage (W105)."""

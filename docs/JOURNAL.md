@@ -4,6 +4,25 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-06 — S4/M3 read-only canvas
+
+- Done: `checker.node_surfaces` public + flow-detail `ports` payload
+  (AST python ports stay server-side, EC14; `null` = broken ref);
+  canvas renders real flows — layout: coords + BFS fallback, labeled
+  D11-colored handles, required markers, E/W badges, flow list with
+  `main:` default + pathname deep links (SPA), read-only inspector,
+  diagnostics panel; broken flows show E-codes instead of a canvas.
+  19 pytest server tests, 5 Vitest, 8 Playwright (incl. W103 badge +
+  E004 error-view against generated fixture flows). Screenshot-checked.
+- Decided (WM pin): `ports` shape in the flow-detail payload; wired-
+  but-undeclared ports get "any" handles (merge growth, null surfaces)
+  so edges never orphan visually.
+- Next: S4/M4 — editing + write path (connect rules E004, node
+  add/delete, config forms + Monaco, Start/End port editing, save via
+  server-side canonical serializer, golden canvas-diff test, FS watch).
+
+## 2026-07-06 — S4/M2 UI scaffold + wheel walking skeleton
+
 ## 2026-07-06 — S4/M2 UI scaffold + wheel walking skeleton
 
 - Done: `ui/` (Vite 8 + React 19 + TS 6 + Zustand + @xyflow/react 12;

@@ -1,25 +1,71 @@
-import { Background, Controls, ReactFlow, type Node } from "@xyflow/react";
-import { useEffect } from "react";
+import { Background, Controls, ReactFlow } from "@xyflow/react";
+import { useEffect, useMemo } from "react";
 
 import "@xyflow/react/dist/style.css";
 
+import DiagnosticsPanel from "./components/DiagnosticsPanel";
+import FlowList from "./components/FlowList";
+import FlowNode from "./components/FlowNode";
+import Inspector from "./components/Inspector";
+import { toGraph } from "./graph";
 import { useAppStore } from "./store";
 
-// S4/M2 walking skeleton: one canvas node per discovered flow, fed by
-// the real API — proves static serving + REST + xyflow render in one
-// screen. The real canvas (nodes/edges of ONE flow) replaces this at
-// S4/M3.
+const nodeTypes = { napflow: FlowNode };
+
+function Canvas() {
+  const { detail, detailError, selectNode } = useAppStore();
+
+  const graph = useMemo(
+    () => (detail !== null ? toGraph(detail) : null),
+    [detail],
+  );
+
+  if (detailError !== null) {
+    // broken flow: no canvas to draw — the E-codes ARE the view
+    return (
+      <div style={{ flex: 1, padding: "1rem", overflowY: "auto" }}>
+        <p data-testid="detail-error" style={{ color: "#c62828" }}>
+          {detailError.message}
+        </p>
+        <ul data-testid="detail-error-diagnostics" style={{ fontSize: 13 }}>
+          {detailError.diagnostics.map((d, i) => (
+            <li key={i}>
+              <strong>{d.code}</strong> {d.message}{" "}
+              <em style={{ color: "#888" }}>({d.hint})</em>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  if (detail === null || graph === null) {
+    return <div style={{ flex: 1 }} data-testid="canvas" />;
+  }
+  return (
+    <div style={{ flex: 1, minWidth: 0 }} data-testid="canvas">
+      <ReactFlow
+        key={detail.identity} // remount per flow: fresh fitView
+        nodes={graph.nodes}
+        edges={graph.edges}
+        nodeTypes={nodeTypes}
+        fitView
+        nodesDraggable={false} // read-only until S4/M4
+        nodesConnectable={false}
+        onNodeClick={(_event, node) => selectNode(node.id)}
+        onPaneClick={() => selectNode(null)}
+      >
+        <Background />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+    </div>
+  );
+}
+
 export default function App() {
-  const { workspace, flows, error, load } = useAppStore();
+  const { workspace, error, detail, load } = useAppStore();
   useEffect(() => {
     void load();
   }, [load]);
-
-  const nodes: Node[] = flows.map((flow, index) => ({
-    id: flow.identity,
-    position: { x: 40, y: 40 + index * 80 },
-    data: { label: flow.valid ? flow.identity : `${flow.identity} (invalid)` },
-  }));
 
   return (
     <div
@@ -52,12 +98,12 @@ export default function App() {
           </span>
         )}
       </header>
-      <div style={{ flex: 1 }} data-testid="canvas">
-        <ReactFlow nodes={nodes} edges={[]} fitView>
-          <Background />
-          <Controls />
-        </ReactFlow>
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <FlowList />
+        <Canvas />
+        <Inspector />
       </div>
+      <DiagnosticsPanel diagnostics={detail?.diagnostics ?? []} />
     </div>
   );
 }

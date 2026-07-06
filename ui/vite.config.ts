@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 // Build output goes straight into the server package: the wheel
 // force-includes that directory (NFR-03, pyproject `artifacts`), so a
@@ -16,5 +16,8 @@ export default defineConfig({
       "/api": "http://127.0.0.1:6273",
       "/ws": { target: "ws://127.0.0.1:6273", ws: true },
     },
+  },
+  test: {
+    include: ["src/**/*.test.ts"], // e2e/ belongs to Playwright
   },
 });

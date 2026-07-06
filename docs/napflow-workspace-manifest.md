@@ -218,7 +218,11 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
 - **REST** (JSON): `GET /api/workspace` (manifest summary + profiles +
   version) · `GET /api/flows` (structured `napf list`; unloadable
   flows appear `valid: false`) · `GET /api/flows/<identity>` (catch-all
-  path; model dump + closure diagnostics; 404 unknown) ·
+  path; model dump + closure diagnostics + per-node port surfaces
+  `ports: {node: {inputs, outputs, required_inputs, growable} | null}`
+  — the canvas draws handles/colors from these (D11) and never derives
+  them itself: python ports are AST-parsed server-side (EC14), `null`
+  = unknowable broken reference; 404 unknown) ·
   `POST /api/runs` `{flow, env?, inputs?}` → 202 `{run_id, flow,
   state, log, warnings, notes}` (gate failures: 404 `flow_not_found`,
   else 400 with `{error, message, diagnostics}`) ·

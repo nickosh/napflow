@@ -127,6 +127,28 @@ def test_flow_detail_returns_model_and_diagnostics(tmp_path):
     with_client(ws, scenario)
 
 
+def test_flow_detail_ports_include_ast_derived_python_surface(tmp_path):
+    """The canvas draws handles from `ports` (D11) — the python node's
+    inputs come from AST-parsing nodes.py server-side (EC14)."""
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        response = await client.get("/api/flows/flows/smoke")
+        ports = (await response.json())["ports"]
+        python = ports["summarize"]
+        assert python["inputs"] == {"users": "any"}
+        assert python["outputs"] == {"summary": "any", "error": "object"}
+        assert python["required_inputs"] == ["users"]
+        start = ports["start"]
+        assert start["inputs"] == {}
+        assert "out" in start["outputs"]
+        end = ports["end"]
+        assert set(end["inputs"]) == {"summary", "failed_check", "python_error"}
+        assert end["required_inputs"] == ["summary"]
+
+    with_client(ws, scenario)
+
+
 def test_run_smoke_flow_to_passed_with_replay(tmp_path):
     ws = make_scaffold_ws(tmp_path)
 

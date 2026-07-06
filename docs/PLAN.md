@@ -204,10 +204,16 @@ harness lands M2, suite grows M3–M6).
       release.yml bundle gate; Playwright harness (`e2e/serve.mjs`
       scaffolds a fresh `napf init` workspace) + 2 smokes. (NFR-03;
       FR-806/1001 complete)
-- [ ] **M3 — read-only canvas**: flow list, `main:` opens by default,
-      nodes/edges/layout render, soft port-type coloring (D11),
-      read-only node inspector, E/W diagnostics surfaced on canvas.
-      (FR-1002 render half; FR-1006 check half)
+- [x] **M3 — read-only canvas** (landed 2026-07-06): flow-detail API
+      grew per-node port surfaces (`checker.node_surfaces`, AST-derived
+      python ports server-side, EC14); `ui/src/graph.ts` pure mapping
+      (layout: coords, BFS-column fallback, handles grown from wired
+      edges for merge/null surfaces) + custom node (labeled D11-colored
+      handles, required markers, E/W badges), flow-list sidebar with
+      `main:` default + pathname deep links, read-only inspector,
+      diagnostics panel; E-code flows render diagnostics instead of a
+      canvas. Vitest (5) + Playwright grown to 8. (FR-1002 render half;
+      FR-1006 check half)
 - [ ] **M4 — editing + write path**: connect rules (E004 enforced at
       connect time), node add/delete, config forms + Monaco for python,
       Start-port key-value + End required-flag editing, save through

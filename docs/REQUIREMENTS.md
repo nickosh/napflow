@@ -116,11 +116,11 @@ Stages (from CLAUDE.md build order — each independently useful):
 ## FR-10xx — Server & UI (S4)
 
 - [x] FR-1001 BlackSheep server is a thin adapter over core: serves static UI bundle, REST for flows/runs, WebSocket for live events; core never imports it. (D03/D04) — `napflow/server` at S4/M1 (REST/WS over `core/runprep.py`; import-linter forbids core→server and server→cli); static bundle real at S4/M2, 2026-07-06
-- [ ] FR-1002 Canvas (@xyflow/react): render/edit nodes+edges; single-edge-input enforcement on connect; output fan-out; soft port-type coloring + W102 hints. (FS, D11)
+- [ ] FR-1002 Canvas (@xyflow/react): render/edit nodes+edges; single-edge-input enforcement on connect; output fan-out; soft port-type coloring + W102 hints. (FS, D11) — RENDER half landed S4/M3 2026-07-06 (`ui/src/graph.ts` layout+BFS-fallback, labeled colored handles from server-side port surfaces, read-only inspector; Vitest `graph.test.ts` + Playwright `canvas.spec.ts`); EDIT half (connect rules, W102 hints) is S4/M4
 - [ ] FR-1003 Canvas writes flow.yaml through the shared canonical serializer; layout changes touch only the `layout:` block. (YP)
 - [ ] FR-1004 Filesystem watch: external change → reload or prompt (last-write-wins). (FS)
 - [ ] FR-1005 Run on canvas with live event overlay; run history browser replays any JSONL (dangling `request_started` tolerated). (D13, EC20)
-- [ ] FR-1006 Start ports editable as key-value list; End required flags editable; check errors/warnings (E/W codes) surfaced on canvas. (FS)
+- [ ] FR-1006 Start ports editable as key-value list; End required flags editable; check errors/warnings (E/W codes) surfaced on canvas. (FS) — CHECK half landed S4/M3 2026-07-06 (W-badges on nodes + diagnostics panel; E-code flows render their diagnostics instead of a canvas — Playwright W103/E004 tests); port editing is S4/M4
 - [ ] FR-1007 Subflow UX: drill-in navigation, "used in N places", clone-to-new-flow action; ghost-wires for cross-node template references. (FS, D09)
 
 ## NFR — Non-functional requirements

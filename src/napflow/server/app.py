@@ -17,7 +17,7 @@ from blacksheep.server.responses import json as json_response
 from blacksheep.server.routing import Router
 
 import napflow
-from napflow.core.checker import CheckDiagnostic
+from napflow.core.checker import CheckDiagnostic, node_surfaces
 from napflow.core.events import encode_record
 from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import EndNode, StartNode
@@ -180,11 +180,29 @@ def build_app(workspace: Workspace) -> Application:
             prepared = prepare_run(workspace, identity)
         except RunPrepError as e:
             return _prep_error(e, root)
+        surfaces = node_surfaces(
+            prepared.loaded.model, root / Path(identity), workspace
+        )
         return json_response(
             {
                 "identity": prepared.identity,
                 "flow": prepared.loaded.model.model_dump(mode="json", by_alias=True),
                 "diagnostics": [_diag_payload(d, root) for d in prepared.diagnostics],
+                # canvas handle/coloring data (D11) — python ports are
+                # AST-derived server-side (EC14), never in the UI
+                "ports": {
+                    node_id: (
+                        None
+                        if surface is None
+                        else {
+                            "inputs": surface.inputs,
+                            "outputs": surface.outputs,
+                            "required_inputs": sorted(surface.required_inputs),
+                            "growable": surface.growable,
+                        }
+                    )
+                    for node_id, surface in surfaces.items()
+                },
             }
         )
 

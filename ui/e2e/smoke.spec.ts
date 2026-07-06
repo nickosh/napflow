@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 // data from the REST API, xyflow canvas rendering. The suite grows
 // per milestone from here (owner call, PLAN S4).
 
-test("served bundle renders the canvas with real workspace data", async ({
+test("served bundle renders the app with real workspace data", async ({
   page,
 }) => {
   await page.goto("/");
@@ -13,15 +13,18 @@ test("served bundle renders the canvas with real workspace data", async ({
   await expect(page.getByTestId("workspace-name")).toContainText("napf-e2e");
   // the canvas is a real xyflow instance…
   await expect(page.locator(".react-flow")).toBeVisible();
-  // …showing one node per flow discovered by the real `napf init`
+  // …and the sidebar lists every flow discovered by the real `napf init`
   for (const identity of ["flows/main", "flows/example", "flows/smoke"]) {
-    await expect(page.getByText(identity)).toBeVisible();
+    await expect(page.getByRole("button", { name: identity })).toBeVisible();
   }
 });
 
-test("unknown client-side routes fall back to the app (SPA)", async ({
+test("unknown client-side routes still serve the app (SPA)", async ({
   page,
 }) => {
-  await page.goto("/flows/some/future/route");
-  await expect(page.locator(".react-flow")).toBeVisible();
+  await page.goto("/flows/does/not/exist");
+  // the SPA fallback serves index.html; the app loads and reports the
+  // unknown flow instead of a browser-level 404
+  await expect(page.getByTestId("workspace-name")).toContainText("napf-e2e");
+  await expect(page.getByTestId("detail-error")).toBeVisible();
 });
