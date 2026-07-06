@@ -59,9 +59,7 @@ class PreparedRun:
     notes: list[str]  # operator-facing, e.g. missing default profile
 
 
-def prepare_run(
-    workspace: Workspace, flow: str, env: str | None = None
-) -> PreparedRun:
+def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> PreparedRun:
     """LOAD + CHECK + ENV (EN §2): E-codes block, warnings proceed. The
     gate covers the entry flow plus its reference closure (E007) — a
     broken subflow blocks like a broken entry. An explicit `env` must
@@ -78,9 +76,7 @@ def prepare_run(
     try:
         loaded = load_flow(file)
     except LoadError as e:
-        raise RunPrepError(
-            "load", str(e), diagnostics_from_load_error(e)
-        ) from e
+        raise RunPrepError("load", str(e), diagnostics_from_load_error(e)) from e
     diagnostics = check_run_closure(loaded, identity, workspace)
     if any(d.severity == "error" for d in diagnostics):
         raise RunPrepError("check", f"{identity}: check errors", diagnostics)

@@ -308,9 +308,7 @@ def test_ws_frames_are_the_jsonl_lines_verbatim(tmp_path):
     async def scenario(client):
         started = await start_run(client, "flows/smoke")
         frames = []
-        async with client.websocket_connect(
-            f"/ws/runs/{started['run_id']}"
-        ) as sock:
+        async with client.websocket_connect(f"/ws/runs/{started['run_id']}") as sock:
             while True:
                 frame = await sock.receive_text()
                 frames.append(frame)
@@ -331,9 +329,7 @@ def test_ws_replays_finished_runs_from_the_jsonl(tmp_path):
         started = await start_run(client, "flows/smoke")
         await wait_finished(client, started["run_id"])
         frames = []
-        async with client.websocket_connect(
-            f"/ws/runs/{started['run_id']}"
-        ) as sock:
+        async with client.websocket_connect(f"/ws/runs/{started['run_id']}") as sock:
             while True:
                 message = await sock.receive()
                 if message["type"] == "websocket.close":

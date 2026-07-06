@@ -184,9 +184,7 @@ def build_app(workspace: Workspace) -> Application:
             {
                 "identity": prepared.identity,
                 "flow": prepared.loaded.model.model_dump(mode="json", by_alias=True),
-                "diagnostics": [
-                    _diag_payload(d, root) for d in prepared.diagnostics
-                ],
+                "diagnostics": [_diag_payload(d, root) for d in prepared.diagnostics],
             }
         )
 
