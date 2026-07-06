@@ -27,6 +27,15 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   code unknown". Fixed: the protocol reader reaps (`proc.wait()`,
   bounded) before composing the death message. This is exactly the
   class of bug the worker-first order + 3-OS matrix existed to catch.]
+- [Update 2: compat-job post-mortem. The NFR-10 job was born broken —
+  test_architecture.py's module-level import-linter import breaks
+  collection in the dev-less venv. It never had a green run: S2/M2–M5
+  were pushed as ONE batch, so the job (added at M4) first executed at
+  CI run #10 and failed there; the 2026-07-05 NFR-10 tick was
+  premature (amended in REQUIREMENTS). Fixed via pytest.importorskip;
+  run #19 = all four legs green. Lesson: batched pushes mean a
+  mid-batch CI change is never tested standalone — verify job-level
+  results, not just the run badge, when ticking CI-backed NFRs.]
 
 ## 2026-07-06 — S3/M4 guards + flagship retry example
 
