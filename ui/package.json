@@ -5,7 +5,7 @@
   "description": "napflow canvas UI — dev-time only; ships as static files inside the napflow wheel (NFR-03)",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "vite",

@@ -43,7 +43,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8.2.0
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24 # active LTS; engines floor stays >=22.12 (Vite 8)
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - name: Install project
