@@ -1,8 +1,9 @@
 # napflow — Edge Cases: Resolution Ledger
 
-All 37 cases logged to date are **resolved**: EC01–EC23 from the
+All 41 cases logged to date are **resolved**: EC01–EC23 from the
 2026-06-14 spec review, EC24–EC37 from the 2026-07-02 finalization and
-senior-review rounds. This ledger records what each case was and where
+senior-review rounds, EC38–EC41 from S4 implementation (server + UI
+canvas). This ledger records what each case was and where
 its resolution now lives; the full original problem analyses for
 EC01–EC23 are preserved in `archive/EDGE_CASES.md`. New edge cases found
 during implementation should be appended here with the same format.
@@ -50,6 +51,10 @@ statement).
 | EC35 | Trust model undocumented: running a workspace executes its `nodes.py`; Jinja sandbox ≠ security boundary; sync render can stall the loop (2026-07-02 review) | doc: engine §11 *Security & trust model* — flows are code, review like code; localhost-only server; accepted risks stated. |
 | EC36 | Bundle of small underspecs: `.env` dialect; same-node firing overlap; `parallel` loop `results` ordering; Start `default:` scope; python optional-vs-required params under AST (2026-07-02 review) | doc: dotenv-style dialect, no interpolation (manifest §2); async firings may overlap, sync serialized (engine §4); `results` index-ordered (engine §5, schema); Start defaults see env/run at BIND (engine §6, schema); literal defaults = optional (schema). |
 | EC37 | `{{ }}` always renders strings — structured bodies impossible (`body:` would emit Python-repr'd dicts, not JSON) (2026-07-02 review) | ADR **D25**: a config value that is exactly one `{{ expr }}` evaluates natively; mixed content renders to string; field schema type applies post-evaluation. Engine §6, schema *Templating*. |
+| EC38 | Write endpoints take a flow identity as a path tail — a crafted identity (`..`, absolute path, drive-letter colon) could write outside the workspace (S4/M4) | fix: `_safe_identity` guard rejects them with 400 before any filesystem touch (`server/app.py`); `test_write_endpoints_reject_path_escapes`. Manifest *Server surface*. |
+| EC39 | Flow-detail GET 400'd on check E-codes — a mid-edit flow (e.g. transient E004) locked the canvas, so the editor couldn't fix its own in-progress state; broke the M3 e2e when changed (S4/M4) | fix: check diagnostics never 400 the detail endpoint (flows stay editable, E-codes render as diagnostics); only unloadable files 400; E-codes still gate *runs*. Manifest *Server surface*. |
+| EC40 | Rejecting a nodes.py save on syntax errors would hold code hostage over a missing colon — no way to save work-in-progress (S4/M4) | doc: PUT `/api/code/*` always saves (last-write-wins); the syntax error is AST-detected and reported in the response + inline in the editor, never blocks. Manifest *Server surface*. |
+| EC41 | An edge wired to a port the node's surface doesn't declare (merge growth, broken python ref ⇒ `null` surface) would orphan visually on the canvas (S4/M3) | fix: the canvas grows an `any`-typed handle for wired-but-undeclared ports — edges never dangle; the checker still owns correctness. Manifest *Server surface* (`ports` payload pin). |
 
 Related watch items (not defects): see *Known open risks* in
 `DECISIONS.md` — notably W103 chattiness and D18 `required: false`

@@ -365,6 +365,29 @@ browser-input fragility); keeping the plain textarea (no highlighting
 was the one real complaint). Revisit only if nodes.py editing grows
 LSP/multi-file ambitions.
 
+## D28 — Browser e2e: chromium-only, always against the built bundle
+
+(Decided 2026-07-06 at S4/M2 as a journal note; promoted to a D-entry
+2026-07-08, owner-confirmed.) Two pins for the Playwright suite:
+
+1. **Chromium only in v1.** `napf ui` opens the user's DEFAULT browser
+   (D26-adjacent owner call), so no single engine mirrors reality —
+   pinning three engines × 3 OS would triple e2e cost for a canvas UI
+   built on standard DOM/contenteditable APIs (D27 chose CodeMirror
+   partly for exactly that cross-browser input robustness). Chosen:
+   chromium on all three OS. Revisit after the v1 release — extend to
+   firefox/webkit if real cross-browser reports appear.
+2. **Always the wheel-user's path.** e2e serves the BUILT bundle
+   through the real server (`e2e/serve.mjs` scaffolds a fresh
+   `napf init` workspace); never `vite dev`. What CI proves is what a
+   `uv tool install napflow && napf ui` user gets — dev-server-only
+   breakage (missing static route, stale bundle, base-path issues)
+   cannot slip through.
+
+Rejected: full browser matrix (cost without a matching promise — v1
+never claims per-engine support); e2e against vite dev (faster
+iteration but tests a code path no user runs).
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.

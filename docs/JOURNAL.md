@@ -4,6 +4,22 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-08 — S4 consistency audit: code clean, docs synced
+
+- Done: full S4/M1–M4 audit — all planned deliverables incl. the five
+  M4 leftovers verified present, wired, and test-backed (305 pytest +
+  8 Vitest + 22 Playwright green locally; CI 28877584927 all 7 jobs
+  green). Code needed nothing; docs did: AGENTS.md stack line
+  Monaco→CodeMirror 6, yaml-profile.md rewritten (no canvas emitter —
+  the UI PUTs JSON, the server emits; FR-1003), README status prose
+  unstuck from S1, FR-203 annotation, D23 consequences.
+- Decided: **D28** — e2e chromium-only in v1 + always the built bundle
+  through the real server (promoted from the S4/M2 journal note,
+  owner-confirmed); EDGE_CASES ledger is live during implementation —
+  **EC38–EC41** recorded (path-traversal guard, E-codes don't 400 the
+  detail GET, broken nodes.py still saves, undeclared-port handles).
+- Next: unchanged — S4/M5 run on canvas + history (FR-1005).
+
 ## 2026-07-08 — S4/M4 leftovers closed + CI unbroken
 
 - Done: all five M4 leftovers — code editor upgrade (CodeMirror 6, see
