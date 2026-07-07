@@ -1,0 +1,22 @@
+# Project-local Codex settings adapted from .claude/settings.json.
+# Loaded only after Codex trusts this repository.
+
+default_permissions = "napflow_workspace"
+
+[permissions.napflow_workspace.filesystem]
+":minimal" = "read"
+":tmpdir" = "write"
+":slash_tmp" = "write"
+
+[permissions.napflow_workspace.filesystem.":workspace_roots"]
+"." = "write"
+
+[permissions.napflow_workspace.network]
+enabled = true
+mode = "limited"
+
+[permissions.napflow_workspace.network.domains]
+"registry.npmjs.org" = "allow"
+"pypi.org" = "allow"
+"files.pythonhosted.org" = "allow"
+"pythonhosted.org" = "allow"
