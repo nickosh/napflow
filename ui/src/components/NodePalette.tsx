@@ -1,11 +1,11 @@
 import { useState } from "react";
 
-import { NODE_TYPES } from "../forms";
+import { NODE_TYPES, PALETTE_DRAG_TYPE } from "../forms";
 import { useAppStore } from "../store";
 
 // Add-node control: a small overlay button opening the v1 catalog.
-// (Drag-from-palette is polish for later; click-to-add is testable and
-// keyboard-friendly.)
+// Click adds below the graph (keyboard-friendly); dragging an entry
+// onto the canvas adds at the drop position.
 export default function NodePalette() {
   const addNode = useAppStore((s) => s.addNode);
   const [open, setOpen] = useState(false);
@@ -45,6 +45,12 @@ export default function NodePalette() {
             <button
               key={type}
               data-testid={`palette-${type}`}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(PALETTE_DRAG_TYPE, type);
+                e.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragEnd={() => setOpen(false)}
               onClick={() => {
                 addNode(type);
                 setOpen(false);
@@ -56,7 +62,7 @@ export default function NodePalette() {
                 padding: "4px 14px",
                 border: "none",
                 background: "transparent",
-                cursor: "pointer",
+                cursor: "grab",
                 fontSize: 13,
                 fontFamily: "inherit",
               }}

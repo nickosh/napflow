@@ -54,6 +54,48 @@ test("adding a node from the palette persists it", async ({ page }) => {
   expect(model.flow.layout.log).toBeDefined();
 });
 
+test("dragging a type from the palette adds it at the drop point", async ({
+  page,
+}) => {
+  await page.goto("/flows/main");
+  await page.getByTestId("add-node").click();
+  // HTML5 dnd: Playwright mouse moves don't carry dataTransfer, so
+  // dispatch the drag events by hand with a shared store
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await page
+    .getByTestId("palette-note")
+    .dispatchEvent("dragstart", { dataTransfer });
+  const pane = page.locator(".react-flow__pane");
+  const box = (await pane.boundingBox())!;
+  const at = { x: box.x + box.width - 80, y: box.y + box.height - 60 };
+  await pane.dispatchEvent("dragover", {
+    dataTransfer,
+    clientX: at.x,
+    clientY: at.y,
+  });
+  await pane.dispatchEvent("drop", {
+    dataTransfer,
+    clientX: at.x,
+    clientY: at.y,
+  });
+
+  await expect(page.getByTestId("node-note")).toBeVisible();
+  await waitSaved(page);
+  const model = await flowModel(page, "flows/main");
+  expect(
+    model.flow.nodes.some(
+      (n: { id: string; type: string }) => n.id === "note" && n.type === "note",
+    ),
+  ).toBeTruthy();
+  expect(model.flow.layout.note).toBeDefined();
+
+  // cleanup: this suite is serial over one workspace — later tests
+  // assert exact edge/node sets on flows/main
+  await page.getByTestId("node-note").click();
+  await page.getByTestId("delete-node").click();
+  await waitSaved(page);
+});
+
 test("config form edits a node's config and autosaves", async ({ page }) => {
   await page.goto("/flows/main");
   await page.getByTestId("node-log").click();
@@ -106,6 +148,81 @@ test("deleting a node removes it and its edges", async ({ page }) => {
   ).toBeFalsy();
 });
 
+test("assert checks edit as structured rows", async ({ page }) => {
+  await page.goto("/flows/smoke");
+  await page.getByTestId("node-verify").click();
+  // smoke ships two expr checks; edit the first one's value: 0 → 5
+  await expect(page.getByTestId("check-expr-0")).toHaveValue(
+    "trigger.value.total",
+  );
+  await page.getByTestId("check-value-0").fill("5");
+  await page.getByTestId("check-value-0").blur();
+  await waitSaved(page);
+
+  let model = await flowModel(page, "flows/smoke");
+  let verify = model.flow.nodes.find((n: { id: string }) => n.id === "verify");
+  expect(verify.config.checks[0]).toEqual({
+    kind: "expr",
+    expr: "trigger.value.total",
+    op: "gt",
+    value: 5, // numeric text commits as a number, not "5"
+  });
+
+  // add a status check row, then remove it again
+  await page.getByTestId("check-add").click();
+  await page.getByTestId("check-kind-2").selectOption("status");
+  await waitSaved(page);
+  model = await flowModel(page, "flows/smoke");
+  verify = model.flow.nodes.find((n: { id: string }) => n.id === "verify");
+  expect(verify.config.checks[2]).toEqual({ kind: "status", equals: 200 });
+
+  await page.getByTestId("check-remove-2").click();
+  await page.getByTestId("check-value-0").fill("0");
+  await page.getByTestId("check-value-0").blur();
+  await waitSaved(page);
+  model = await flowModel(page, "flows/smoke");
+  verify = model.flow.nodes.find((n: { id: string }) => n.id === "verify");
+  expect(verify.config.checks).toHaveLength(2);
+  expect(verify.config.checks[0].value).toBe(0);
+});
+
+test("switch cases edit as structured rows", async ({ page }) => {
+  await page.goto("/flows/main");
+  await page.getByTestId("add-node").click();
+  await page.getByTestId("palette-switch").click();
+  await expect(page.getByTestId("node-switch")).toBeVisible();
+  await page.getByTestId("node-switch").click();
+
+  await page.getByTestId("config-expr").fill("trigger.value.state");
+  await page.getByTestId("case-name-0").fill("ready");
+  await page.getByTestId("case-equals-0").fill("READY");
+  await page.getByTestId("case-equals-0").blur();
+  await page.getByTestId("case-add").click();
+  await page.getByTestId("case-name-1").fill("count");
+  await page.getByTestId("case-equals-1").fill("3");
+  await page.getByTestId("case-equals-1").blur();
+  await waitSaved(page);
+
+  const model = await flowModel(page, "flows/main");
+  const sw = model.flow.nodes.find((n: { id: string }) => n.id === "switch");
+  expect(sw.config).toEqual({
+    expr: "trigger.value.state",
+    cases: [
+      { name: "ready", equals: "READY" }, // bare word stays a string
+      { name: "count", equals: 3 }, // numeric text commits native
+    ],
+  });
+  // the last case row can't be removed (model min_length=1)
+  await expect(page.getByTestId("case-remove-1")).toBeEnabled();
+  await expect(page.getByTestId("case-remove-0")).toBeEnabled();
+  await page.getByTestId("case-remove-1").click();
+  await expect(page.getByTestId("case-remove-0")).toBeDisabled();
+
+  // cleanup for the serial suite
+  await page.getByTestId("delete-node").click();
+  await waitSaved(page);
+});
+
 test("start/end port editors edit flow inputs and outputs (FR-1006)", async ({
   page,
 }) => {
@@ -130,16 +247,59 @@ test("start/end port editors edit flow inputs and outputs (FR-1006)", async ({
   expect(end.config.ports).toEqual([{ name: "done", required: false }]);
 });
 
+test("start-port defaults save with the declared type, not as strings", async ({
+  page,
+}) => {
+  await page.goto("/flows/main");
+  await page.getByTestId("node-start").click();
+
+  // the previous test left port 0 (greeting: string); add a number port
+  await page.getByTestId("start-port-add").click();
+  await page.getByTestId("start-port-name-1").fill("retries");
+  await page.getByTestId("start-port-type-1").selectOption("number");
+  const cell = page.getByTestId("start-port-default-1");
+
+  // a non-numeric default stays local (red border), never saves
+  await cell.fill("not-a-number");
+  await cell.blur();
+  await expect(cell).toHaveCSS("border-color", "rgb(198, 40, 40)");
+
+  await cell.fill("42");
+  await cell.blur();
+  await waitSaved(page);
+
+  const model = await flowModel(page, "flows/main");
+  const start = model.flow.nodes.find(
+    (n: { type: string }) => n.type === "start",
+  );
+  expect(start.config.ports[1]).toEqual({
+    name: "retries",
+    type: "number",
+    default: 42, // native number in the YAML, not "42"
+  });
+
+  // cleanup for the serial suite
+  await page.getByTestId("start-port-remove-1").click();
+  await waitSaved(page);
+});
+
 test("nodes.py editor round-trips code and reports syntax errors", async ({
   page,
 }) => {
   await page.goto("/flows/smoke");
   await page.getByTestId("open-code").click();
+  // CodeMirror pane (bundled, no CDN): .cm-content is a real
+  // contenteditable, so plain keyboard input drives it
   const editor = page.getByTestId("code-text");
-  await expect(editor).toHaveValue(/def summarize/);
+  await expect(editor).toContainText("def summarize", { timeout: 15_000 });
+  const retype = async (code: string) => {
+    await editor.locator(".cm-content").click();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText(code);
+  };
 
   // break it: still SAVES (last-write-wins), error surfaces inline
-  await editor.fill("def broken(:\n");
+  await retype("def broken(:\n");
   await expect(page.getByTestId("code-save-status")).toHaveAttribute(
     "data-state",
     "clean",
@@ -150,11 +310,42 @@ test("nodes.py editor round-trips code and reports syntax errors", async ({
   expect((await broken.json()).syntax_error).not.toBeNull();
 
   // fix it back
-  await editor.fill("def summarize(users):\n    return {'n': len(users)}\n");
+  await retype("def summarize(users):\n    return {'n': len(users)}\n");
   await expect(page.getByTestId("code-syntax-error")).toHaveCount(0, {
     timeout: 10_000,
   });
   await page.getByTestId("code-close").click();
+});
+
+test("dragging a mismatched wire shows the live W102 hint (never blocks)", async ({
+  page,
+}) => {
+  // flows/hint has a subflow whose `count` input is number-typed;
+  // start.out is object — hovering it mid-drag must raise the hint
+  await page.goto("/flows/hint");
+  const source = page
+    .getByTestId("node-start")
+    .locator(".react-flow__handle-right");
+  const target = page
+    .getByTestId("node-sub")
+    .locator('[data-handleid="count"]');
+  await source.hover();
+  await page.mouse.down();
+  await target.hover();
+  await expect(page.getByTestId("connect-hint")).toContainText("W102");
+  await expect(page.getByTestId("connect-hint")).toContainText("number");
+
+  // soft types: releasing still CONNECTS, and the checker agrees post-save
+  await page.mouse.up();
+  await waitSaved(page);
+  const model = await flowModel(page, "flows/hint");
+  expect(model.flow.edges).toContainEqual({
+    from: "start.out",
+    to: "sub.count",
+  });
+  expect(
+    model.diagnostics.some((d: { code: string }) => d.code === "W102"),
+  ).toBeTruthy();
 });
 
 test("external file change while clean live-reloads the canvas", async ({

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FlowDetail } from "./api";
 import { PORT_TYPE_COLORS } from "./colors";
-import { freshNodeId, toGraph } from "./graph";
+import { freshNodeId, toGraph, typeMismatch } from "./graph";
 
 function detail(overrides: Partial<FlowDetail> = {}): FlowDetail {
   // shaped like flows/smoke from `napf init` (fixture→python→assert)
@@ -154,6 +154,19 @@ describe("toGraph", () => {
     expect(summarize.data.warnings).toBe(1);
     expect(summarize.data.errors).toBe(1);
     expect(nodes.find((n) => n.id === "users")!.data.warnings).toBe(0);
+  });
+});
+
+describe("typeMismatch", () => {
+  it("flags only two known, differing types (W102 semantics)", () => {
+    expect(typeMismatch("string", "number")).toBe(true);
+    expect(typeMismatch("string", "string")).toBe(false);
+    // `any` on either end is compatible with everything (D11)
+    expect(typeMismatch("any", "number")).toBe(false);
+    expect(typeMismatch("object", "any")).toBe(false);
+    // undefined = undeclared = any
+    expect(typeMismatch(undefined, "number")).toBe(false);
+    expect(typeMismatch("list", undefined)).toBe(false);
   });
 });
 

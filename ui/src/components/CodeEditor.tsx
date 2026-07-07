@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   ConflictError,
@@ -12,8 +12,9 @@ import {
 // canvas; a syntax error is reported inline but SAVES anyway (the
 // server is last-write-wins — code is never held hostage).
 //
-// The editing surface is a monospace textarea for now; Monaco drops in
-// here (bundled, no CDN — NFR) once the dependency is vendored.
+// The editing surface is CodeMirror 6, bundled into the wheel's static
+// assets (no CDN) and lazy-loaded so the canvas doesn't pay for it.
+const CodePane = lazy(() => import("./CodeMirrorPane"));
 
 const AUTOSAVE_MS = 1000;
 
@@ -152,23 +153,17 @@ export default function CodeEditor({
       {code === null ? (
         <p style={{ padding: "1rem", color: "#888", fontSize: 13 }}>loading…</p>
       ) : (
-        <textarea
-          data-testid="code-text"
-          value={code}
-          onChange={(e) => onEdit(e.target.value)}
-          spellCheck={false}
-          style={{
-            flex: 1,
-            resize: "none",
-            border: "none",
-            outline: "none",
-            padding: "0.75rem 1rem",
-            fontSize: 13,
-            fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
-            lineHeight: 1.5,
-            tabSize: 4,
-          }}
-        />
+        <div data-testid="code-text" style={{ flex: 1, minHeight: 0 }}>
+          <Suspense
+            fallback={
+              <p style={{ padding: "1rem", color: "#888", fontSize: 13 }}>
+                loading…
+              </p>
+            }
+          >
+            <CodePane value={code} onChange={onEdit} />
+          </Suspense>
+        </div>
       )}
     </div>
   );

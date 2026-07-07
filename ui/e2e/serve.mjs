@@ -35,7 +35,9 @@ edges:
   - {from: "start.out", to: "req.trigger"}
   - {from: "req.response", to: "end.done"}
 `;
-// flows/broken — E004: two edges into one input; loads, fails check
+// flows/broken — E004: two edges into one input; loads, fails check.
+// Since the M4 pin, check E-codes still render an editable canvas —
+// only unloadable files get the error view (flows/unloadable below).
 const BROKEN_FLOW = `schema: "napflow/v1"
 flow: {name: "broken"}
 nodes:
@@ -48,9 +50,42 @@ edges:
   - {from: "start.out", to: "end.out"}
   - {from: "extra.out", to: "end.out"}
 `;
+// flows/unloadable — E002 load failure (unknown node type): no model
+// to render, so the detail GET 400s and the UI shows E-codes instead
+const UNLOADABLE_FLOW = `schema: "napflow/v1"
+flow: {name: "unloadable"}
+nodes:
+  - {id: "start", type: "no_such_type", config: {}}
+edges: []
+`;
+// flows/typed + flows/hint — the live W102 connect hint needs a TYPED
+// input to hover: flow-node inputs inherit the target's start-port
+// types (number here; the default keeps the port optional, no E005)
+const TYPED_FLOW = `schema: "napflow/v1"
+flow: {name: "typed"}
+nodes:
+  - id: "start"
+    type: "start"
+    config: {ports: [{name: "count", type: "number", default: 1}]}
+  - {id: "end", type: "end", config: {ports: [{name: "done"}]}}
+edges:
+  - {from: "start.out", to: "end.done"}
+`;
+const HINT_FLOW = `schema: "napflow/v1"
+flow: {name: "hint"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "sub", type: "flow", config: {flow: "flows/typed"}}
+  - {id: "end", type: "end", config: {ports: [{name: "done"}]}}
+edges:
+  - {from: "start.out", to: "end.done"}
+`;
 for (const [name, content] of [
   ["warn", WARN_FLOW],
   ["broken", BROKEN_FLOW],
+  ["unloadable", UNLOADABLE_FLOW],
+  ["typed", TYPED_FLOW],
+  ["hint", HINT_FLOW],
 ]) {
   mkdirSync(join(workspace, "flows", name));
   writeFileSync(join(workspace, "flows", name, "flow.yaml"), content, "utf-8");

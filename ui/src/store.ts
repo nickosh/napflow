@@ -50,7 +50,7 @@ type AppState = {
   connectEdge: (from: string, to: string) => void;
   deleteEdges: (edges: { from: string; to: string }[]) => void;
   deleteNode: (id: string) => void;
-  addNode: (type: string) => void;
+  addNode: (type: string, position?: [number, number]) => void;
   updateNodeConfig: (id: string, config: Record<string, unknown>) => void;
   setInteracting: (interacting: boolean) => void;
   resolveConflict: (how: "reload" | "overwrite") => Promise<void>;
@@ -284,21 +284,25 @@ export const useAppStore = create<AppState>((set, get) => {
       if (selectedNode === id) set({ selectedNode: null });
     },
 
-    addNode: (type) => {
+    addNode: (type, position) => {
       edit(
         (flow) => {
           const id = freshNodeId(flow, type);
           const node: FlowModelNode = { id, type, config: defaultConfig(type) };
-          const placed = Object.values(flow.layout ?? {});
-          // drop below the current graph, not on top of it
-          const y =
-            placed.length > 0
-              ? Math.max(...placed.map(([, py]) => py)) + 130
-              : 40;
+          let at = position;
+          if (at === undefined) {
+            const placed = Object.values(flow.layout ?? {});
+            // click-to-add: drop below the current graph, not on top
+            const y =
+              placed.length > 0
+                ? Math.max(...placed.map(([, py]) => py)) + 130
+                : 40;
+            at = [40, y];
+          }
           return {
             ...flow,
             nodes: [...flow.nodes, node],
-            layout: { ...(flow.layout ?? {}), [id]: [40, y] },
+            layout: { ...(flow.layout ?? {}), [id]: at },
           };
         },
         { rebuild: true },

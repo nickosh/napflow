@@ -339,6 +339,30 @@ already exercised on macOS. Rejected: keeping the "Linux via CI" hedge
 (understates what the CI matrix already proves and undersells to the
 audience most likely to run napflow headless).
 
+## D27 — CodeMirror 6 is the nodes.py editing surface (not Monaco)
+
+(2026-07-08, owner-prompted investigation during the M4-leftovers
+session.) The M4 plan said "Monaco, bundled, no CDN". Both were built
+and measured behind the identical `/api/code` GET/PUT+etag contract.
+Monaco 0.55: ~73MB in node_modules, a ~3.6MB minified core chunk +
+python monarch + a worker chunk + a codicon webfont in the wheel, and
+its new EditContext input needed a compat flag plus a
+`window.__napfEditor` test seam because synthetic keyboard events don't
+reach its hidden input — friction that matters when `napf ui` opens the
+user's DEFAULT browser, not a pinned Chromium. CodeMirror 6
+(`codemirror` + `@codemirror/lang-python`): ~2.8MB in node_modules, one
+~458KB lazy chunk (~153KB gz), no worker, no webfont, and a
+contenteditable input that plain keyboard events drive — the e2e needs
+no seam. Feature needs for a whole-file single-language pane
+(highlighting, gutter, bracket-match, undo) are fully covered by
+`basicSetup`. Chosen: CodeMirror 6 via a hand-rolled ~60-line React
+wrapper (`CodeMirrorPane.tsx`; no @uiw/react-codemirror — the wrapper
+is trivial and third-party wrapper churn is real). Rejected: Monaco (an
+IDE chassis for a one-file-one-language pane; ~8× the shipped bytes,
+browser-input fragility); keeping the plain textarea (no highlighting
+was the one real complaint). Revisit only if nodes.py editing grows
+LSP/multi-file ambitions.
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.

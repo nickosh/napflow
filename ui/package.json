@@ -15,7 +15,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@codemirror/lang-python": "^6.2.1",
     "@xyflow/react": "^12.11.1",
+    "codemirror": "^6.0.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "zustand": "^5.0.14"

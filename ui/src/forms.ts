@@ -1,9 +1,7 @@
 // Hand-rolled per-type config form descriptors (owner fork 2026-07-06:
 // explicit descriptors, not JSON-Schema-driven). One entry per node
-// type in the v1 catalog (flow-schema spec); structured sub-lists
-// (checks, cases) edit as JSON — good enough until they earn dedicated
-// editors. start/end are NOT here: their port lists get dedicated
-// editors (FR-1006).
+// type in the v1 catalog (flow-schema spec). start/end are NOT here:
+// their port lists get dedicated editors (FR-1006).
 
 export type FieldKind =
   | "string" // one-line text
@@ -12,7 +10,9 @@ export type FieldKind =
   | "boolean"
   | "select"
   | "json" // any JSON value, edited as text
-  | "function"; // python function name — options come from detail.functions
+  | "function" // python function name — options come from detail.functions
+  | "checks" // assert.checks row editor (StructuredRows)
+  | "cases"; // switch.cases row editor (StructuredRows)
 
 export type FieldDescriptor = {
   key: string;
@@ -40,23 +40,13 @@ export const CONFIG_FORMS: Record<string, FieldDescriptor[]> = {
     { key: "outputs", label: "outputs", kind: "json", placeholder: '["summary"]' },
   ],
   assert: [
-    {
-      key: "checks",
-      label: "checks",
-      kind: "json",
-      placeholder: '[{"kind": "status", "equals": 200}]',
-    },
+    { key: "checks", label: "checks", kind: "checks" },
     { key: "mode", label: "mode", kind: "select", options: ["report_all", "fail_fast"] },
   ],
   condition: [{ key: "expr", label: "expr", kind: "string" }],
   switch: [
     { key: "expr", label: "expr", kind: "string" },
-    {
-      key: "cases",
-      label: "cases",
-      kind: "json",
-      placeholder: '[{"name": "ready", "equals": "READY"}]',
-    },
+    { key: "cases", label: "cases", kind: "cases" },
   ],
   loop: [
     { key: "over", label: "over", kind: "string", placeholder: "trigger.value.items" },
@@ -94,6 +84,9 @@ export const CONFIG_FORMS: Record<string, FieldDescriptor[]> = {
   ],
   note: [{ key: "text", label: "text", kind: "text" }],
 };
+
+/** dataTransfer key for palette→canvas drags (drag-from-palette). */
+export const PALETTE_DRAG_TYPE = "application/x-napflow-node-type";
 
 /** Node types the palette offers (spec node catalog order). */
 export const NODE_TYPES = [

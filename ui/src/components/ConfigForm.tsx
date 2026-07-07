@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { CONFIG_FORMS, type FieldDescriptor } from "../forms";
 import { useAppStore } from "../store";
+import { CasesEditor, ChecksEditor } from "./StructuredRows";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -173,6 +174,10 @@ function Field({
           onCommit={onChange}
         />
       );
+    case "checks":
+      return <ChecksEditor checks={value} onChange={onChange} />;
+    case "cases":
+      return <CasesEditor cases={value} onChange={onChange} />;
   }
 }
 
@@ -202,18 +207,35 @@ export default function ConfigForm({
 
   return (
     <div data-testid="config-form">
-      {fields.map((field) => (
-        <label key={field.key} style={labelStyle}>
-          {field.label}
-          {field.help && <em style={{ marginLeft: 6 }}>({field.help})</em>}
+      {fields.map((field) => {
+        const body = (
           <Field
             field={field}
             value={config[field.key]}
             functions={functions}
             onChange={(value) => setField(field.key, value)}
           />
-        </label>
-      ))}
+        );
+        const caption = (
+          <>
+            {field.label}
+            {field.help && <em style={{ marginLeft: 6 }}>({field.help})</em>}
+          </>
+        );
+        // row editors hold many controls — a <label> would misdirect
+        // clicks to whichever control happens to come first
+        return field.kind === "checks" || field.kind === "cases" ? (
+          <div key={field.key}>
+            <span style={labelStyle}>{caption}</span>
+            {body}
+          </div>
+        ) : (
+          <label key={field.key} style={labelStyle}>
+            {caption}
+            {body}
+          </label>
+        );
+      })}
     </div>
   );
 }

@@ -2,8 +2,10 @@ import {
   Background,
   Controls,
   ReactFlow,
+  ReactFlowProvider,
   applyEdgeChanges,
   applyNodeChanges,
+  useReactFlow,
   type Connection,
   type Edge,
   type EdgeChange,
@@ -14,12 +16,14 @@ import { useCallback, useEffect, useState } from "react";
 import "@xyflow/react/dist/style.css";
 
 import CodeEditor from "./components/CodeEditor";
+import ConnectHint from "./components/ConnectHint";
 import DiagnosticsPanel from "./components/DiagnosticsPanel";
 import FlowList from "./components/FlowList";
 import FlowNode from "./components/FlowNode";
 import Inspector from "./components/Inspector";
 import NodePalette from "./components/NodePalette";
 import SaveStatus from "./components/SaveStatus";
+import { PALETTE_DRAG_TYPE } from "./forms";
 import { toGraph, type CanvasNode } from "./graph";
 import { ETAG_POLL_MS, useAppStore } from "./store";
 
@@ -35,8 +39,10 @@ function Canvas() {
     connectEdge,
     deleteEdges,
     deleteNode,
+    addNode,
     setInteracting,
   } = useAppStore();
+  const { screenToFlowPosition } = useReactFlow();
 
   // xyflow holds interactive state (drag positions, selection); the
   // store's model stays authoritative — graphVersion bumps rebuild
@@ -78,6 +84,27 @@ function Canvas() {
       if (gone.length > 0) deleteEdges(gone);
     },
     [deleteEdges],
+  );
+
+  const onDragOver = useCallback((event: React.DragEvent) => {
+    if (event.dataTransfer.types.includes(PALETTE_DRAG_TYPE)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }, []);
+
+  const onDrop = useCallback(
+    (event: React.DragEvent) => {
+      const type = event.dataTransfer.getData(PALETTE_DRAG_TYPE);
+      if (type === "") return;
+      event.preventDefault();
+      const at = screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      addNode(type, [Math.round(at.x), Math.round(at.y)]);
+    },
+    [addNode, screenToFlowPosition],
   );
 
   const onConnect = useCallback(
@@ -136,10 +163,13 @@ function Canvas() {
         }}
         onNodeClick={(_event, node) => selectNode(node.id)}
         onPaneClick={() => selectNode(null)}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
         deleteKeyCode={["Backspace", "Delete"]}
       >
         <Background />
         <Controls />
+        <ConnectHint />
       </ReactFlow>
       <NodePalette />
     </div>
@@ -209,7 +239,9 @@ export default function App() {
       </header>
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <FlowList />
-        <Canvas />
+        <ReactFlowProvider>
+          <Canvas />
+        </ReactFlowProvider>
         <Inspector />
       </div>
       <DiagnosticsPanel diagnostics={detail?.diagnostics ?? []} />

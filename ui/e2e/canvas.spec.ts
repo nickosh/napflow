@@ -47,12 +47,21 @@ test("check warnings surface on the canvas (W103 badge + panel)", async ({
   await expect(page.getByTestId("diagnostics")).toContainText("W103");
 });
 
-test("a flow with check errors shows its E-codes instead of a canvas", async ({
+test("a flow with check errors stays editable: canvas + E-codes (M4 pin)", async ({
   page,
 }) => {
   await page.goto("/flows/broken");
+  // the canvas still renders — mid-edit invalid flows must stay editable
+  await expect(page.getByTestId("node-start")).toBeVisible();
+  await expect(page.getByTestId("diagnostics")).toContainText("E004");
+});
+
+test("an unloadable flow shows its E-codes instead of a canvas", async ({
+  page,
+}) => {
+  await page.goto("/flows/unloadable");
   await expect(page.getByTestId("detail-error-diagnostics")).toContainText(
-    "E004",
+    "E002",
   );
   await expect(page.locator(".react-flow")).toHaveCount(0);
 });

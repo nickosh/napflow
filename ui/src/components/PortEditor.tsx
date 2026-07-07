@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import { useAppStore } from "../store";
 
 // FR-1006 edit half: Start ports as a key-value list (name/type/
@@ -18,6 +20,106 @@ const cellInput: React.CSSProperties = {
 
 type StartPort = { name: string; type?: string; default?: unknown };
 type EndPort = { name: string; required?: boolean };
+
+/** Parse the default cell's text per the port's declared type
+ * (M4 leftover: the cell wrote strings only). Returns {ok:false} when
+ * the text doesn't fit the type — the cell stays local and turns red. */
+function parseDefault(
+  text: string,
+  type: string,
+): { ok: true; value: unknown } | { ok: false } {
+  switch (type) {
+    case "string":
+      return { ok: true, value: text };
+    case "number": {
+      const n = Number(text.trim());
+      return text.trim() !== "" && Number.isFinite(n)
+        ? { ok: true, value: n }
+        : { ok: false };
+    }
+    case "boolean":
+      return text === "true" || text === "false"
+        ? { ok: true, value: text === "true" }
+        : { ok: false };
+    case "object":
+    case "list": {
+      try {
+        const value: unknown = JSON.parse(text);
+        const isList = Array.isArray(value);
+        const fits = type === "list" ? isList : typeof value === "object" && value !== null && !isList;
+        return fits ? { ok: true, value } : { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    }
+    default: {
+      // any: JSON when it parses ({"a":1}, 42, true), else the raw text
+      try {
+        return { ok: true, value: JSON.parse(text) };
+      } catch {
+        return { ok: true, value: text };
+      }
+    }
+  }
+}
+
+function showDefault(value: unknown): string {
+  if (value === undefined) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/** Type-aware default cell: local text state, committed on blur; a
+ * value that doesn't parse for the declared type stays local (red
+ * border) — the model never sees it. Empty = no default (required). */
+function DefaultCell({
+  port,
+  index,
+  onCommit,
+}: {
+  port: StartPort;
+  index: number;
+  onCommit: (value: unknown | undefined) => void;
+}) {
+  const type = port.type ?? "any";
+  const shown = showDefault(port.default);
+  const [text, setText] = useState(shown);
+  const [bad, setBad] = useState(false);
+  useEffect(() => {
+    setText(shown);
+    setBad(false);
+    // re-sync when the model value OR the declared type changes (a
+    // type switch re-validates the same text on next blur)
+  }, [shown, type]);
+
+  return (
+    <input
+      data-testid={`start-port-default-${index}`}
+      style={{
+        ...cellInput,
+        flex: 2,
+        borderColor: bad ? "#c62828" : "#ccc",
+      }}
+      value={text}
+      placeholder="(required)"
+      title={`default value (${type}); empty = required at bind`}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        if (text === "") {
+          setBad(false);
+          onCommit(undefined); // absent default = required input
+          return;
+        }
+        const parsed = parseDefault(text, type);
+        if (parsed.ok) {
+          setBad(false);
+          onCommit(parsed.value);
+        } else {
+          setBad(true); // stays local until it fits the type
+        }
+      }}
+    />
+  );
+}
 
 function usePorts(nodeId: string): {
   ports: Record<string, unknown>[];
@@ -80,17 +182,10 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
               </option>
             ))}
           </select>
-          <input
-            data-testid={`start-port-default-${index}`}
-            style={{ ...cellInput, flex: 2 }}
-            value={port.default === undefined ? "" : String(port.default)}
-            placeholder="(required)"
-            title="default value; empty = required at bind"
-            onChange={(e) =>
-              update(index, {
-                default: e.target.value === "" ? undefined : e.target.value,
-              })
-            }
+          <DefaultCell
+            port={port}
+            index={index}
+            onCommit={(value) => update(index, { default: value })}
           />
           <button
             data-testid={`start-port-remove-${index}`}

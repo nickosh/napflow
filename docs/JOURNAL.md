@@ -4,6 +4,26 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-08 — S4/M4 leftovers closed + CI unbroken
+
+- Done: all five M4 leftovers — code editor upgrade (CodeMirror 6, see
+  Decided), drag-from-palette (drop at `screenToFlowPosition`),
+  structured row editors for assert checks / switch cases
+  (`StructuredRows.tsx`, native-typed value cells), type-aware
+  Start-port defaults (red-border local-only on mismatch), live W102
+  connect hint (`ConnectHint.tsx` via `useConnection`, soft/never
+  blocks). Also fixed the 3-OS `ui e2e` CI red: the M3 canvas spec
+  predated the M4 "check E-codes don't 400" pin — split into
+  editable-with-E-codes + unloadable-shows-error-view (new fixture).
+  22 Playwright (7 new) + 8 Vitest (1 new) green locally; 305 pytest.
+- Decided: **D27** — CodeMirror 6 over Monaco for nodes.py (built and
+  measured BOTH: ~458KB lazy chunk vs ~3.6MB+worker+font; Monaco's
+  EditContext input needed a test seam + compat flag, CM6's
+  contenteditable needs nothing — that fragility matters in the
+  default-browser, not-Chromium-pinned world).
+- Next: S4/M5 — run on canvas + history (FR-1005) over the M1 WS;
+  verify this push's job-level CI results first (NFR-10 lesson).
+
 ## 2026-07-07 — S4/M4 editing + write path
 
 - Done: `merge_flow_document` (surgical ruamel merge — no-op saves

@@ -110,6 +110,18 @@ function handlesFor(
   return { inputs: [...inputs.values()], outputs: [...outputs.values()] };
 }
 
+/** W102 semantics for the live connect hint (D11 soft types): two
+ * KNOWN types that differ look wrong — hint, never block. `any` on
+ * either end is compatible with everything. */
+export function typeMismatch(
+  a: string | undefined,
+  b: string | undefined,
+): boolean {
+  const ta = a ?? "any";
+  const tb = b ?? "any";
+  return ta !== "any" && tb !== "any" && ta !== tb;
+}
+
 /** A unique node id for the palette: type, type2, type3, ... (E011). */
 export function freshNodeId(flow: FlowModel, type: string): string {
   const taken = new Set(flow.nodes.map((n) => n.id));

@@ -367,7 +367,7 @@ def build_app(workspace: Workspace) -> Application:
 
     @router.get("/api/code/*")
     async def get_code(request: Request) -> Response:
-        """The flow's nodes.py for the Monaco editor — whole-file
+        """The flow's nodes.py for the code editor — whole-file
         read/write (owner fork, 2026-07-06)."""
         identity = _safe_identity(request.route_values["tail"])
         if identity is None:
