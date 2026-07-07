@@ -264,8 +264,10 @@ Meta-rationale: a serialization format is load-bearing and costly to
 migrate; novelty is a cost here, not a feature. Boring-but-ubiquitous
 wins, and YAML's danger is fully containable by construction.
 
-**Consequences.** Canvas and CLI must both emit through the shared
-serializer (a divergent emitter silently reintroduces noisy diffs); a
+**Consequences.** Every write — canvas or CLI — must reach disk through
+the shared serializer (a divergent emitter silently reintroduces noisy
+diffs; since S4/M4 this is structural — the canvas PUTs model JSON and
+the server emits, so the UI has no YAML emitter to diverge); a
 round-trip golden test (`emit → parse → emit` byte-identical,
 `parse(emit(x))` deep-equals `x`) guards the clean-diff promise in CI.
 Revisit if HUML reaches ~1.0 with maintained Python + JS parsers, or if

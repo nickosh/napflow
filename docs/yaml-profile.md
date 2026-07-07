@@ -10,8 +10,10 @@ type coercion, indentation ambiguity, anchors/aliases, arbitrary-object
 loading) cannot bite. Five rules, all load-bearing:
 
 1. Read with a **safe loader only**.
-2. Emit through **one shared canonical serializer** per ecosystem — no
-   ad-hoc `yaml.dump`/`stringify` anywhere.
+2. Emit through **the one shared canonical serializer** — no ad-hoc
+   `yaml.dump`/`stringify` anywhere. Since S4/M4 there is exactly one
+   emitter, Python-side (`core/loader.py`): the canvas never touches
+   YAML — it PUTs model JSON and the server merges + emits (FR-1003).
 3. **Force double-quoted style for string scalars only** — ints, floats,
    bools, null stay bare so they keep their type.
 4. **Validate the parsed structure against JSON Schema** (Draft 2020-12) —
@@ -24,13 +26,14 @@ loading) cannot bite. Five rules, all load-bearing:
 Note: YAML examples inside the docs are hand-written for readability and
 do not show the force-quoted style; files *emitted by napflow* always do.
 
-## Reading — both ecosystems
+## Reading
 
-- **Python (engine/CLI):** `YAML(typ='safe')` for pure loads; ruamel
-  round-trip mode only where preserving a human's comments on re-write
-  matters. Never PyYAML `yaml.load` without `SafeLoader`.
-- **JS/TS (canvas):** `js-yaml` v4 `load()` is safe by default (the unsafe
-  loader was removed in v4) — fine as-is.
+- **Python (engine/CLI/server):** `YAML(typ='safe')` for pure loads;
+  ruamel round-trip mode only where preserving a human's comments on
+  re-write matters. Never PyYAML `yaml.load` without `SafeLoader`.
+- **JS/TS (canvas):** does not parse YAML at all — the flow-detail API
+  serves the validated model as JSON. (If a client-side YAML read ever
+  becomes necessary: `js-yaml` v4 `load()` is safe by default.)
 
 ## Canonical emit — Python, ruamel.yaml
 
@@ -60,24 +63,14 @@ multiline text carries none of the implicit-coercion risk the quoting
 rule exists to prevent. Python implementation: `core/loader.py`
 (`emit_document` / `save_document` — the one shared serializer).
 
-## Canonical emit — canvas, js-yaml
+## Canvas emit — there is none (amended at S4/M4, 2026-07-07)
 
-```js
-import yaml from 'js-yaml';
-
-const text = yaml.dump(flow, {
-  forceQuotes: true,   // quotes strings only; numbers/bools stay bare
-  quotingType: '"',
-  noRefs: true,        // never emit anchors/aliases
-  lineWidth: -1,       // never wrap scalars
-  indent: 2,
-  sortKeys: false,     // preserve the fixed schema key order (below)
-});
-```
-
-Alternative (eemeli `yaml`): `stringify(flow, { defaultStringType:
-'QUOTE_DOUBLE', defaultKeyType: 'PLAIN', lineWidth: 0,
-aliasDuplicateObjects: false })`.
+The originally planned client-side js-yaml emitter was never built and
+is now ruled out by design: canvas saves go through
+`PUT /api/flows/*` as model JSON, and the server applies them via
+`loader.merge_flow_document` + `save_document` — the same serializer as
+the CLI, by construction rather than by keeping two emitters in sync
+(FR-1003). The UI has no YAML dependency.
 
 ## Write path — the document is the single write source (EC29)
 
@@ -92,12 +85,12 @@ diagnostic points at file:line (engine spec §8).
 
 ## Key order & determinism
 
-Determinism comes from the *emitter*, applied identically on both sides:
-the canvas and the loader always build node/edge objects in a fixed
-schema-defined field order (`id`, `type`, `config`, …; edges `from`,
-`to`) and the serializer preserves it (`sortKeys: false`). Readable *and*
-stable. (Fallback if this ever proves fragile: `sortKeys: true` —
-deterministic but reads worse in review.)
+Determinism comes from the *emitter*: the loader builds node/edge
+objects in a fixed schema-defined field order (`id`, `type`, `config`,
+…; edges `from`, `to`) and the serializer preserves it. Canvas saves
+inherit this automatically — `merge_flow_document` mutates the loaded
+document in place, so key order is preserved for existing entries and
+schema-ordered for new ones. Readable *and* stable.
 
 File conventions: LF + UTF-8 + single trailing newline; `layout:`
 quarantined at the bottom of the file.
@@ -107,9 +100,11 @@ quarantined at the bottom of the file.
 Parse, then validate the resulting structure against JSON Schema
 (Draft 2020-12): Pydantic in Python (amended at M2: the models ARE the
 schema — the exported document is generated from them, so a separate
-`jsonschema` pass could never catch more), `ajv` against the exported
-schema in JS. The schema carries the port/config types — the half that
-makes the force-quote rule safe.
+`jsonschema` pass could never catch more). Canvas writes are validated
+by the same Pydantic models server-side before the merge
+(`validate_flow_payload`) — no JS-side schema validation needed. The
+schema carries the port/config types — the half that makes the
+force-quote rule safe.
 
 ## Lint — W107 (hand-edited files only)
 
@@ -121,8 +116,9 @@ types as `string` and (b) matches YAML's implicit-resolver danger set:
 - numbers: leading-zero ints, `0x…`, `0o…`, floats, sexagesimal `\d+:\d+(:\d+)?`
 - date/time-ish ISO tokens
 
-Because the canvas force-quotes everything, this can only ever fire on
-hand-edited files — exactly the gap. Non-failing (W-class).
+Because every napflow-written file goes through the force-quoting
+serializer, this can only ever fire on hand-edited files — exactly the
+gap. Non-failing (W-class).
 
 ## Round-trip golden test (CI)
 
@@ -136,8 +132,9 @@ into `.gitattributes` so line endings stay clean cross-platform.
 
 ## Consequences
 
-- The canvas and the CLI must both emit through the shared serializer; a
-  divergent emitter silently reintroduces noisy diffs.
+- Every write — canvas or CLI — must reach disk through the one shared
+  Python serializer; a divergent emitter silently reintroduces noisy
+  diffs. (Since S4/M4 this is structural: the UI cannot emit YAML.)
 - Revisit the format choice if HUML reaches ~1.0 with maintained
   Python + JS parsers, or if hand-editing proves rare enough that JSON5's
   simpler canonicalization wins (D23).

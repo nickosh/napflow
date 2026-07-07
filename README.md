@@ -8,10 +8,12 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: pre-alpha.** Stage S1 is complete — the file format, validator,
-and CLI (`napf init` / `list` / `check`) work end to end on macOS,
-Windows, and Linux. The execution engine (`napf run`) is in progress;
-the visual canvas comes after. See [docs/PLAN.md](docs/PLAN.md).
+**Status: pre-alpha.** Stages S1–S3 are complete — the file format,
+validator, CLI, and headless engine (`napf init` / `list` / `check` /
+`run`, full node catalog) work end to end on macOS, Windows, and Linux.
+The S4 visual canvas is being built milestone by milestone: editing and
+saving flows on the canvas works; run-on-canvas and subflow navigation
+are next. See [docs/PLAN.md](docs/PLAN.md).
 
 ## Why
 
