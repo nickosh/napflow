@@ -152,11 +152,20 @@ export default function RunPanel() {
     openRunPanel,
   } = useAppStore();
   const listRef = useRef<HTMLDivElement>(null);
+  // terminal-style tail following: stick to the bottom only while the
+  // user IS at the bottom — scrolling up to inspect an earlier event
+  // pauses following, scrolling back down resumes it. No toggle.
+  const followRef = useRef(true);
   const recordCount = runView?.records.length ?? 0;
+
+  // a fresh run (or replay) starts back at the tail
+  useEffect(() => {
+    followRef.current = true;
+  }, [runId]);
 
   // follow the live tail (replays render settled, no need to chase)
   useEffect(() => {
-    if (runLive && listRef.current !== null) {
+    if (runLive && followRef.current && listRef.current !== null) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [runLive, recordCount]);
@@ -295,6 +304,12 @@ export default function RunPanel() {
       </header>
       <div
         ref={listRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          // 40px of slack: "near the bottom" counts as at the bottom
+          followRef.current =
+            el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
         style={{ flex: 1, overflowY: "auto", padding: "0.3rem 1rem" }}
       >
         {tab === "history" ? (
