@@ -4,6 +4,22 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-08 — S4/M5 run on canvas + history
+
+- Done: RUN MODE over the M1 WS — `runview.ts` reducer (events →
+  node/edge/log overlay; 14 Vitest incl. EC20 → `incomplete`),
+  breathing/flash nodes + travelling-dot wires (`RunEdge`), live log
+  values on log nodes, run controls (env dropdown + hybrid inputs
+  popover), bottom run panel (event stream w/ expandable full wire
+  detail, abort, node-click filter), history tab replaying any JSONL.
+  5 Playwright e2e (27 total); server untouched — M1's surface held.
+- Decided: **D29** (owner fork) — run mode LOCKS editing and animates
+  from real events only; root-frame scope (containers pulse for their
+  subtree; per-container child-frame attribution needs an engine event
+  change → M6 if wanted); server-run reports stay deferred.
+- Next: S4/M6 — subflow UX + stage close (0.1.0.dev4); verify this
+  push's job-level CI first (NFR-10 lesson).
+
 ## 2026-07-08 — S4 consistency audit: code clean, docs synced
 
 - Done: full S4/M1–M4 audit — all planned deliverables incl. the five

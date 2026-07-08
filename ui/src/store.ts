@@ -3,20 +3,34 @@ import { create } from "zustand";
 import {
   ApiError,
   ConflictError,
+  abortRun as apiAbortRun,
+  startRun as apiStartRun,
   fetchEtags,
   fetchFlowDetail,
   fetchFlows,
+  fetchRunEvents,
   fetchWorkspace,
+  listRuns,
+  openRunSocket,
   putFlow,
   type Diagnostic,
   type FlowDetail,
   type FlowModel,
   type FlowModelNode,
   type FlowSummary,
+  type RunListEntry,
   type WorkspaceInfo,
 } from "./api";
 import { defaultConfig } from "./forms";
 import { freshNodeId } from "./graph";
+import {
+  applyRecord,
+  emptyRunView,
+  finalizeIncomplete,
+  reduceRun,
+  type RunRecord,
+  type RunView,
+} from "./runview";
 
 export type DetailError = {
   message: string;
@@ -55,6 +69,21 @@ type AppState = {
   setInteracting: (interacting: boolean) => void;
   resolveConflict: (how: "reload" | "overwrite") => Promise<void>;
   pollEtags: () => Promise<void>;
+  // run on canvas (S4/M5, FR-1005) — runView !== null is RUN MODE:
+  // the canvas locks editing and animates off the event stream
+  runView: RunView | null;
+  runId: string | null;
+  runLive: boolean; // a WebSocket is attached (live run, not replay)
+  runPanelTab: "events" | "history" | null; // null = panel closed
+  runHistory: RunListEntry[] | null;
+  runEnv: string | null; // selected env profile for the next run
+  runNotice: string | null; // start/abort failures, shown by controls
+  setRunEnv: (env: string | null) => void;
+  startRun: (inputs: Record<string, unknown>) => Promise<void>;
+  abortRun: () => Promise<void>;
+  exitRun: () => void;
+  openRunPanel: (tab: "events" | "history") => void;
+  openHistoryRun: (runId: string) => Promise<void>;
 };
 
 function identityFromPath(pathname: string): string | null {
@@ -69,6 +98,29 @@ function splitRef(ref: string): [string, string] {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+// ---- live run socket (module-level: one run watched at a time) ------
+// Records are batched per animation-ish tick: fast flows emit hundreds
+// of events/s and a set() per record would thrash React.
+let runSocket: WebSocket | null = null;
+let pendingRecords: RunRecord[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+const FLUSH_MS = 16;
+
+function closeRunSocket() {
+  if (runSocket !== null) {
+    runSocket.onmessage = null;
+    runSocket.onclose = null;
+    runSocket.onerror = null;
+    runSocket.close();
+    runSocket = null;
+  }
+  pendingRecords = [];
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+}
+
 export const useAppStore = create<AppState>((set, get) => {
   /** Replace detail.flow (immutably at the top level — React re-renders
    * off object identity), mark dirty, kick the autosave timer. */
@@ -76,8 +128,9 @@ export const useAppStore = create<AppState>((set, get) => {
     mutate: (flow: FlowModel) => FlowModel,
     opts?: { rebuild?: boolean },
   ) {
-    const { detail } = get();
+    const { detail, runView } = get();
     if (detail === null) return;
+    if (runView !== null) return; // run mode locks editing (owner fork)
     const flow = mutate(detail.flow);
     set({
       detail: { ...detail, flow },
@@ -160,6 +213,67 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
+  function flushRecords() {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    const view = get().runView;
+    if (view === null || pendingRecords.length === 0) {
+      pendingRecords = [];
+      return;
+    }
+    for (const record of pendingRecords) applyRecord(view, record);
+    pendingRecords = [];
+    // per-node/edge entries were replaced immutably inside — the outer
+    // clone re-renders subscribers of the view itself
+    set({ runView: { ...view } });
+  }
+
+  function watchRun(runId: string) {
+    closeRunSocket();
+    let sawFinished = false;
+    const socket = openRunSocket(runId);
+    runSocket = socket;
+    socket.onmessage = (msg) => {
+      try {
+        const record = JSON.parse(msg.data as string) as RunRecord;
+        if (record.event === "run_finished") sawFinished = true;
+        pendingRecords.push(record);
+        if (flushTimer === null) {
+          flushTimer = setTimeout(flushRecords, FLUSH_MS);
+        }
+      } catch {
+        // garbled frame — the JSONL on disk stays the durable record
+      }
+    };
+    socket.onclose = () => {
+      if (runSocket !== socket) return; // superseded or intentional
+      runSocket = null;
+      flushRecords();
+      const view = get().runView;
+      if (view !== null && !sawFinished) {
+        // the socket died mid-run (server gone) — settle the overlay
+        finalizeIncomplete(view);
+        set({ runView: { ...view }, runLive: false });
+      } else {
+        set({ runLive: false });
+      }
+    };
+    socket.onerror = () => socket.close();
+  }
+
+  async function refreshHistory() {
+    const identity = get().selectedFlow;
+    if (identity === null) return;
+    try {
+      const runs = await listRuns(identity);
+      if (get().selectedFlow === identity) set({ runHistory: runs });
+    } catch {
+      if (get().selectedFlow === identity) set({ runHistory: [] });
+    }
+  }
+
   return {
     workspace: null,
     flows: [],
@@ -173,6 +287,13 @@ export const useAppStore = create<AppState>((set, get) => {
     saveDiagnostics: [],
     graphVersion: 0,
     interacting: false,
+    runView: null,
+    runId: null,
+    runLive: false,
+    runPanelTab: null,
+    runHistory: null,
+    runEnv: null,
+    runNotice: null,
 
     load: async () => {
       try {
@@ -180,7 +301,7 @@ export const useAppStore = create<AppState>((set, get) => {
           fetchWorkspace(),
           fetchFlows(),
         ]);
-        set({ workspace, flows, error: null });
+        set({ workspace, flows, error: null, runEnv: workspace.env_default });
         // deep link wins (SPA fallback serves index for /flows/...);
         // otherwise the manifest's `main:` flow opens by default (WM)
         const fromPath = identityFromPath(window.location.pathname);
@@ -199,12 +320,19 @@ export const useAppStore = create<AppState>((set, get) => {
 
     openFlow: async (identity, opts) => {
       if (saveTimer !== null) clearTimeout(saveTimer);
+      closeRunSocket(); // a run view belongs to its flow
       set({
         selectedFlow: identity,
         selectedNode: null,
         saveState: "clean",
         saveError: null,
         saveDiagnostics: [],
+        runView: null,
+        runId: null,
+        runLive: false,
+        runPanelTab: null,
+        runHistory: null,
+        runNotice: null,
       });
       if (opts?.push !== false && window.location.pathname !== `/${identity}`) {
         window.history.pushState(null, "", `/${identity}`);
@@ -353,6 +481,94 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       } catch {
         // flow may have been deleted externally — the next open will 404
+      }
+    },
+
+    setRunEnv: (env) => set({ runEnv: env }),
+
+    startRun: async (inputs) => {
+      const { detail, runLive } = get();
+      if (detail === null || runLive) return;
+      // the run gate reads the FILE — flush any pending autosave first
+      if (saveTimer !== null) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      if (get().saveState === "dirty") await save();
+      if (get().saveState !== "clean") {
+        set({ runNotice: "flow not saved yet — resolve the save first" });
+        return;
+      }
+      set({ runNotice: null });
+      try {
+        const started = await apiStartRun(
+          detail.identity,
+          get().runEnv,
+          inputs,
+        );
+        set({
+          runView: emptyRunView(),
+          runId: started.run_id,
+          runLive: true,
+          runPanelTab: "events",
+          selectedNode: null,
+        });
+        watchRun(started.run_id);
+      } catch (e) {
+        // gate failures carry check diagnostics — surface the first
+        const message =
+          e instanceof ApiError && e.diagnostics.length > 0
+            ? `${e.message} — ${e.diagnostics[0].code}: ${e.diagnostics[0].message}`
+            : e instanceof Error
+              ? e.message
+              : String(e);
+        set({ runNotice: message });
+      }
+    },
+
+    abortRun: async () => {
+      const { runId, runLive } = get();
+      if (runId === null || !runLive) return;
+      try {
+        await apiAbortRun(runId);
+        // state flips via the stream's run_finished (aborted)
+      } catch {
+        // finished in the meantime — the stream already said so
+      }
+    },
+
+    exitRun: () => {
+      closeRunSocket(); // the run keeps going server-side; Abort stops it
+      set({
+        runView: null,
+        runId: null,
+        runLive: false,
+        runPanelTab: null,
+        runNotice: null,
+      });
+    },
+
+    openRunPanel: (tab) => {
+      set({ runPanelTab: tab });
+      if (tab === "history") void refreshHistory();
+    },
+
+    openHistoryRun: async (runId) => {
+      const { detail } = get();
+      if (detail === null) return;
+      closeRunSocket();
+      try {
+        const events = await fetchRunEvents(runId, detail.identity);
+        set({
+          runView: reduceRun(events as RunRecord[]),
+          runId,
+          runLive: false,
+          runPanelTab: "events",
+          runNotice: null,
+          selectedNode: null,
+        });
+      } catch (e) {
+        set({ runNotice: e instanceof Error ? e.message : String(e) });
       }
     },
   };

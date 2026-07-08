@@ -216,3 +216,77 @@ export function putCode(
 export function fetchEtags(identity: string): Promise<Etags> {
   return getJson<Etags>(`/api/etags/${identity}`);
 }
+
+// ---- runs (S4/M5, FR-1005) ------------------------------------------
+
+export type StartedRun = {
+  run_id: string;
+  flow: string;
+  state: string;
+  log: string;
+  warnings: Diagnostic[];
+  notes: string[];
+};
+
+export type RunListEntry = {
+  run_id: string;
+  state: string; // passed|failed|error|aborted|running|incomplete
+};
+
+export async function startRun(
+  flow: string,
+  env: string | null,
+  inputs: Record<string, unknown>,
+): Promise<StartedRun> {
+  const response = await fetch("/api/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ flow, ...(env !== null ? { env } : {}), inputs }),
+  });
+  if (!response.ok) {
+    let message = `run failed to start: HTTP ${response.status}`;
+    let diagnostics: Diagnostic[] = [];
+    try {
+      const body = (await response.json()) as {
+        message?: string;
+        diagnostics?: Diagnostic[];
+      };
+      if (body.message) message = body.message;
+      diagnostics = body.diagnostics ?? [];
+    } catch {
+      // non-JSON error body — keep the generic message
+    }
+    throw new ApiError(message, response.status, diagnostics);
+  }
+  return (await response.json()) as StartedRun;
+}
+
+export async function listRuns(flow: string): Promise<RunListEntry[]> {
+  const payload = await getJson<{ runs: RunListEntry[] }>(
+    `/api/runs?flow=${encodeURIComponent(flow)}`,
+  );
+  return payload.runs;
+}
+
+/** Replay = re-read the JSONL (D13). `flow` locates runs this server
+ * process didn't start (history from an earlier `napf ui`/`napf run`). */
+export async function fetchRunEvents(
+  runId: string,
+  flow: string,
+): Promise<Record<string, unknown>[]> {
+  const payload = await getJson<{ events: Record<string, unknown>[] }>(
+    `/api/runs/${runId}/events?flow=${encodeURIComponent(flow)}`,
+  );
+  return payload.events;
+}
+
+export async function abortRun(runId: string): Promise<void> {
+  await fetch(`/api/runs/${runId}/abort`, { method: "POST" });
+}
+
+/** Live tail: text frames are the JSONL lines verbatim (buffered
+ * prefix, then stream; normal close after run_finished). */
+export function openRunSocket(runId: string): WebSocket {
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return new WebSocket(`${scheme}://${window.location.host}/ws/runs/${runId}`);
+}

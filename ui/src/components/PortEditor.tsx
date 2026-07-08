@@ -23,8 +23,9 @@ type EndPort = { name: string; required?: boolean };
 
 /** Parse the default cell's text per the port's declared type
  * (M4 leftover: the cell wrote strings only). Returns {ok:false} when
- * the text doesn't fit the type — the cell stays local and turns red. */
-function parseDefault(
+ * the text doesn't fit the type — the cell stays local and turns red.
+ * Also the parser behind the run-inputs popover (S4/M5). */
+export function parseDefault(
   text: string,
   type: string,
 ): { ok: true; value: unknown } | { ok: false } {

@@ -2,6 +2,16 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 
 import { portColor } from "../colors";
 import type { CanvasNode, PortHandle } from "../graph";
+import { preview, type NodeRunState } from "../runview";
+import { useAppStore } from "../store";
+
+// run-mode outcome colors (assert green/red, error routing red,
+// EC13: a completed request is "ok" whatever the status code)
+const OUTCOME_COLOR: Record<string, string> = {
+  ok: "#2e7d32",
+  failed: "#c62828",
+  error: "#b71c1c",
+};
 
 const handleStyle = (type: string) => ({
   background: portColor(type),
@@ -72,19 +82,50 @@ function Badge({
   );
 }
 
+/** Border/effects for the run overlay; edit-mode look when `run` is
+ * undefined (not in run mode) and idle when null (untouched so far). */
+function runStyle(
+  run: NodeRunState | null | undefined,
+  selected: boolean | undefined,
+): React.CSSProperties {
+  if (run == null) {
+    return { border: selected ? "2px solid #1565c0" : "1px solid #bbb" };
+  }
+  if (run.outcome === "skipped") {
+    return { border: "1px dashed #bbb", opacity: 0.45 };
+  }
+  const color = run.active ? "#1565c0" : OUTCOME_COLOR[run.outcome];
+  return { border: color ? `2px solid ${color}` : "1px solid #bbb" };
+}
+
 export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
+  // undefined = not in run mode; null = run mode, node untouched yet.
+  // Entries are replaced immutably per event, so only touched nodes
+  // re-render during a live stream.
+  const run = useAppStore((s) =>
+    s.runView === null ? undefined : (s.runView.nodes[data.nodeId] ?? null),
+  );
   return (
     <div
       data-testid={`node-${data.nodeId}`}
+      data-run-status={
+        run == null ? undefined : run.active ? "active" : run.outcome
+      }
+      className={run?.active ? "napf-node-active" : undefined}
       style={{
+        position: "relative",
         background: "#fff",
-        border: selected ? "2px solid #1565c0" : "1px solid #bbb",
         borderRadius: 6,
         minWidth: 130,
         boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
         fontFamily: "system-ui, sans-serif",
+        ...runStyle(run, selected),
       }}
     >
+      {run != null && run.lastSeq >= 0 && (
+        // one-shot flash per event touching this node — remount replays
+        <div key={run.lastSeq} className="napf-node-flash" />
+      )}
       <div
         style={{
           padding: "4px 10px",
@@ -98,6 +139,28 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
         <span style={{ fontSize: 10, color: "#888" }}>{data.nodeType}</span>
         <Badge count={data.errors} color="#c62828" testId="node-errors" />
         <Badge count={data.warnings} color="#ef6c00" testId="node-warnings" />
+        {run != null && run.firings > 1 && (
+          <span
+            data-testid="node-firings"
+            style={{ fontSize: 10, color: "#1565c0", fontWeight: 600 }}
+          >
+            ×{run.firings}
+          </span>
+        )}
+        {run?.guard && (
+          <span
+            data-testid="node-guard"
+            style={{
+              background: "#ef6c00",
+              color: "#fff",
+              borderRadius: 8,
+              fontSize: 10,
+              padding: "0 6px",
+            }}
+          >
+            {run.guard}
+          </span>
+        )}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <div style={{ padding: "3px 0", flex: 1 }}>
@@ -111,6 +174,17 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
           ))}
         </div>
       </div>
+      {run?.log && (
+        // log nodes come alive during a run: latest logged value
+        <div
+          className="napf-node-log"
+          data-testid="node-log-value"
+          title={preview(run.log.value, 500)}
+        >
+          {run.log.count > 1 ? `[${run.log.count}] ` : ""}
+          {preview(run.log.value, 42)}
+        </div>
+      )}
     </div>
   );
 }

@@ -388,6 +388,45 @@ Rejected: full browser matrix (cost without a matching promise — v1
 never claims per-engine support); e2e against vite dev (faster
 iteration but tests a code path no user runs).
 
+## D29 — Run on canvas is a locked, live-animated RUN MODE
+
+(2026-07-08, owner fork at S4/M5 kickoff.) Starting a run (or opening
+a history replay) switches the canvas into a distinct run mode rather
+than overlaying status on an editable canvas:
+
+- **Editing locks** (drag/connect/delete/palette/inspector give way)
+  until the view is exited; node clicks filter the event stream
+  instead. Rationale: the owner wants the canvas to "become alive" —
+  a surface that animates AND edits at once shows stale overlays the
+  moment a wire moves, and the frictionless-autosave model would
+  persist mid-run edits that the running engine never sees.
+- **The animation is driven by real events, never simulated**: nodes
+  pulse from `node_fired` until their `message_emitted`, wires replay
+  a travelling dot per message (edge key = the `from→to` refs carried
+  verbatim by `message_emitted`), log nodes render their latest `log`
+  value live, outcomes settle from `assert_result`/`request_*`/
+  `python_error`, and `nodes_never_fired` dims as skipped.
+- **Root-frame scope (v1)**: the overlay animates the canvas being
+  viewed from its own frame (`f-0`); container flow/loop nodes pulse
+  for the duration of their subtree, child-frame events appear in the
+  event stream labeled with their frame path but paint no inner nodes.
+  Frame ids don't encode their container node, so per-container
+  attribution needs an engine event change — deferred to M6 drill-in
+  if it proves wanted.
+- **Inputs via hybrid popover**: Run fires immediately when the flow
+  declares no Start ports; otherwise a popover opens prefilled with
+  the declared defaults (same typed parsing as the Start-port editor —
+  `napf run -i` parity). Env profile is a persistent header dropdown.
+- **Run reports stay a `napf run`/CI concern** (the "revisit at S4/M5"
+  from the WM server-surface pin resolves to: still deferred — the
+  canvas has full wire detail live plus the JSONL history browser;
+  junit/json reports serve CI pipelines, not canvas sessions).
+
+Rejected: editable canvas with a status overlay (stale-overlay
+problem above); a run "dialog" every time (friction on input-less
+flows); simulating animation timing client-side (the WebSocket already
+delivers real timing — anything else would lie).
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.

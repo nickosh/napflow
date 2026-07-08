@@ -80,16 +80,71 @@ nodes:
 edges:
   - {from: "start.out", to: "end.done"}
 `;
+// flows/failcase — the run e2e's workhorse (S4/M5, FR-1005), fully
+// offline: FAILS with the default input (100 < 5 is false), PASSES
+// when the run popover overrides threshold to 3; the log node feeds
+// the live-value display. Checks clean (0 warnings).
+const FAILCASE_FLOW = `schema: "napflow/v1"
+flow: {name: "failcase"}
+nodes:
+  - id: "start"
+    type: "start"
+    config: {ports: [{name: "threshold", type: "number", default: 100}]}
+  - {id: "echo", type: "log", config: {label: "threshold"}}
+  - id: "verify"
+    type: "assert"
+    config: {checks: [{kind: "expr", expr: "trigger.value", op: "lt", value: 5}]}
+  - id: "end"
+    type: "end"
+    config: {ports: [{name: "ok", required: false}, {name: "not_ok", required: false}]}
+edges:
+  - {from: "start.threshold", to: "echo.in"}
+  - {from: "echo.out", to: "verify.in"}
+  - {from: "verify.passed", to: "end.ok"}
+  - {from: "verify.failed", to: "end.not_ok"}
+`;
+// flows/slow — a 30s delay so the abort e2e has something running to
+// abort (delay is exempt from the max_seconds default, D24)
+const SLOW_FLOW = `schema: "napflow/v1"
+flow: {name: "slow"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "wait", type: "delay", config: {seconds: 30}}
+  - {id: "end", type: "end", config: {ports: [{name: "done", required: false}]}}
+edges:
+  - {from: "start.out", to: "wait.in"}
+  - {from: "wait.out", to: "end.done"}
+`;
 for (const [name, content] of [
   ["warn", WARN_FLOW],
   ["broken", BROKEN_FLOW],
   ["unloadable", UNLOADABLE_FLOW],
   ["typed", TYPED_FLOW],
   ["hint", HINT_FLOW],
+  ["failcase", FAILCASE_FLOW],
+  ["slow", SLOW_FLOW],
 ]) {
   mkdirSync(join(workspace, "flows", name));
   writeFileSync(join(workspace, "flows", name, "flow.yaml"), content, "utf-8");
 }
+
+// a truncated JSONL — a run that died mid-request (abort/crash). The
+// history browser must list it `incomplete` and replay it without
+// choking on the dangling request_started (EC20). The 1970 stem sorts
+// it after (below) any real runs the specs start.
+const DANGLING_RUN_ID = "19700101-000000-ec20aa";
+const danglingDir = join(workspace, ".napflow", "runs", "flows", "failcase");
+mkdirSync(danglingDir, { recursive: true });
+writeFileSync(
+  join(danglingDir, `${DANGLING_RUN_ID}.jsonl`),
+  [
+    `{"event":"run_started","run_id":"${DANGLING_RUN_ID}","ts":"1970-01-01T00:00:00.000Z","seq":1,"flow":"flows/failcase","env_name":null,"inputs":{},"engine_version":"0.0.0"}`,
+    `{"event":"node_fired","run_id":"${DANGLING_RUN_ID}","frame":"f-0","node":"echo","ts":"1970-01-01T00:00:00.001Z","seq":2,"firing_no":1}`,
+    `{"event":"request_started","run_id":"${DANGLING_RUN_ID}","frame":"f-0","node":"echo","ts":"1970-01-01T00:00:00.002Z","seq":3,"method":"GET","url":"http://127.0.0.1:1/never","headers":{},"body_preview":null,"attempt":1}`,
+    "",
+  ].join("\n"),
+  "utf-8",
+);
 
 const server = spawn(
   "uv",

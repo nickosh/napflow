@@ -177,6 +177,7 @@ export function toGraph(detail: FlowDetail): {
       // the model refs ARE the identity (edges match by (from,to) in
       // the merge) — deletion maps back through this id
       id: `${edge.from}→${edge.to}`,
+      type: "napflow", // RunEdge: plain wire that animates in run mode
       source,
       sourceHandle,
       target,

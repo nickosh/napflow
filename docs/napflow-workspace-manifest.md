@@ -272,8 +272,9 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   drop at run end (JSONL is the durable record), finished summaries
   capped at 32. Server shutdown aborts running flows (clean JSONL
   prefix, EC20). Reports (`defaults.run.report`) are NOT written for
-  server runs in v1 — they stay a `napf run`/CI concern (revisit at
-  S4/M5 if canvas users want them).
+  server runs in v1 — they stay a `napf run`/CI concern (revisited at
+  S4/M5: still deferred, D29 — the canvas gets full wire detail live
+  over the WebSocket plus the JSONL history browser).
 - **Static UI**: the pre-built bundle ships inside the wheel and is
   served at `/` with an SPA fallback (S4/M2, NFR-03); until it exists,
   `/` is a plain placeholder page.

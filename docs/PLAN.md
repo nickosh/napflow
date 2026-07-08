@@ -259,10 +259,22 @@ harness lands M2, suite grows M3–M6).
       don't 400" pin (split into editable-with-E-codes +
       unloadable-shows-error-view against a new fixture), which had
       all three `ui e2e` CI legs red since the M4 push.
-- [ ] **M5 — run on canvas + history**: run button + live event overlay
-      over the M1 WebSocket, per-node status + full wire detail, run
-      history browser replays any JSONL (EC20 dangling
-      `request_started` tolerated). (FR-1005)
+- [x] **M5 — run on canvas + history** (landed 2026-07-08): RUN MODE
+      (D29, owner fork) — editing locks, the canvas animates off the
+      M1 WebSocket (JSONL lines verbatim): `runview.ts` pure reducer
+      (records → per-node status/firing counts, per-edge travel
+      pulses, live log values; root-frame scope, child frames roll up
+      to their container node), breathing/flash node animations +
+      travelling-dot wires (`RunEdge`), run controls with env dropdown
+      + hybrid inputs popover (immediate when no Start ports,
+      prefilled typed popover otherwise), bottom run panel (state
+      chip, live assert tallies, event stream with expandable full
+      wire detail, abort, node-click filtering), history tab replaying
+      any JSONL incl. `napf run`'s (EC20 dangling `request_started` →
+      `incomplete`, settled). 14 Vitest reducer tests + 5 Playwright
+      e2e (live pass, fail + live log, input override flips outcome,
+      abort mid-delay, history replay + EC20). Server untouched — the
+      M1 surface carried the whole milestone. (FR-1005)
 - [ ] **M6 — subflow UX + stage close**: drill-in navigation, "used in
       N places", clone-to-new-flow, ghost-wires for cross-node template
       references; 3-OS DoD sweep; version 0.1.0.dev4. (FR-1007)

@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 
 import "@xyflow/react/dist/style.css";
+import "./run.css";
 
 import CodeEditor from "./components/CodeEditor";
 import ConnectHint from "./components/ConnectHint";
@@ -22,12 +23,16 @@ import FlowList from "./components/FlowList";
 import FlowNode from "./components/FlowNode";
 import Inspector from "./components/Inspector";
 import NodePalette from "./components/NodePalette";
+import RunControls from "./components/RunControls";
+import RunEdge from "./components/RunEdge";
+import RunPanel from "./components/RunPanel";
 import SaveStatus from "./components/SaveStatus";
 import { PALETTE_DRAG_TYPE } from "./forms";
 import { toGraph, type CanvasNode } from "./graph";
 import { ETAG_POLL_MS, useAppStore } from "./store";
 
 const nodeTypes = { napflow: FlowNode };
+const edgeTypes = { napflow: RunEdge };
 
 function Canvas() {
   const {
@@ -42,6 +47,9 @@ function Canvas() {
     addNode,
     setInteracting,
   } = useAppStore();
+  // run mode (S4/M5): the canvas locks editing and animates instead —
+  // clicks still select (they filter the event stream)
+  const inRunMode = useAppStore((s) => s.runView !== null);
   const { screenToFlowPosition } = useReactFlow();
 
   // xyflow holds interactive state (drag positions, selection); the
@@ -152,7 +160,10 @@ function Canvas() {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         fitView
+        nodesDraggable={!inRunMode}
+        nodesConnectable={!inRunMode}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
@@ -163,21 +174,23 @@ function Canvas() {
         }}
         onNodeClick={(_event, node) => selectNode(node.id)}
         onPaneClick={() => selectNode(null)}
-        onDragOver={onDragOver}
-        onDrop={onDrop}
-        deleteKeyCode={["Backspace", "Delete"]}
+        onDragOver={inRunMode ? undefined : onDragOver}
+        onDrop={inRunMode ? undefined : onDrop}
+        deleteKeyCode={inRunMode ? null : ["Backspace", "Delete"]}
       >
         <Background />
         <Controls />
         <ConnectHint />
       </ReactFlow>
-      <NodePalette />
+      {!inRunMode && <NodePalette />}
     </div>
   );
 }
 
 export default function App() {
   const { workspace, error, detail, load, pollEtags } = useAppStore();
+  const inRunMode = useAppStore((s) => s.runView !== null);
+  const runPanelOpen = useAppStore((s) => s.runPanelTab !== null);
   const [codeOpen, setCodeOpen] = useState(false);
 
   useEffect(() => {
@@ -221,6 +234,7 @@ export default function App() {
           </span>
         )}
         <span style={{ flex: 1 }} />
+        <RunControls />
         {detail && (
           <button
             data-testid="open-code"
@@ -242,9 +256,15 @@ export default function App() {
         <ReactFlowProvider>
           <Canvas />
         </ReactFlowProvider>
-        <Inspector />
+        {/* run mode: the inspector's edit forms give way to the run
+            panel; node clicks filter the event stream instead */}
+        {!inRunMode && <Inspector />}
       </div>
-      <DiagnosticsPanel diagnostics={detail?.diagnostics ?? []} />
+      {runPanelOpen ? (
+        <RunPanel />
+      ) : (
+        <DiagnosticsPanel diagnostics={detail?.diagnostics ?? []} />
+      )}
       {codeOpen && detail && (
         <CodeEditor
           identity={detail.identity}
