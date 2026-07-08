@@ -4,13 +4,16 @@ import { expect, test } from "@playwright/test";
 // server executes the flow, events stream over the WebSocket, the
 // overlay repaints from them. Specs assert the STATE driving the
 // animations (data-run-status, chips, live log text) — the keyframes
-// on top are cosmetic. flows/smoke passes offline out of the box;
-// flows/failcase (serve.mjs) fails on defaults, passes on threshold=3.
+// on top are cosmetic. Flows RUN here are owned by this spec only
+// (parallel spec files share the workspace; editing.spec mutates
+// flows/smoke, so we run its pristine copy flows/passcase instead):
+// passcase passes offline out of the box; flows/failcase fails on
+// defaults, passes on threshold=3; flows/slow aborts mid-delay.
 
 test("live run: passed overlay, wire detail, run mode locks editing", async ({
   page,
 }) => {
-  await page.goto("/flows/smoke");
+  await page.goto("/flows/passcase");
   await expect(page.getByTestId("node-verify")).toBeVisible();
   // editing surfaces are up before the run
   await expect(page.getByTestId("add-node")).toBeVisible();

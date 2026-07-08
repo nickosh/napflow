@@ -17,6 +17,13 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   pure UI) + **Post-v0.1.0 backlog R1–R4** (scrubber, pause/step,
   breakpoints, opt-in payload capture); RELEASING: dev4 → manual
   testing → v0.1.0 promotion, then feature branches + PRs only.
+- Fixed the 3-OS `ui e2e` CI red from the M5 push: run.spec ran
+  flows/smoke while editing.spec (parallel worker, shared workspace)
+  rewrites its nodes.py with a non-original summarize — deterministic
+  on 2-core CI, masked locally. Lesson: spec files share ONE
+  workspace; a spec that RUNS a flow must own it exclusively
+  (flows/passcase copy) + mutating specs restore what they break.
+  Reproduce CI ordering with `--workers=1` before pushing e2e.
 - Next: M5.5, then M6 + stage close (0.1.0.dev4).
 
 ## 2026-07-08 — S4/M5 run on canvas + history

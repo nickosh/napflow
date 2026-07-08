@@ -3,7 +3,7 @@
 // serve it with the real server + the BUILT bundle. Cross-platform —
 // no shell-isms (NFR-02 applies to tooling too).
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -19,6 +19,17 @@ const init = spawnSync(
 if (init.status !== 0) {
   process.exit(init.status ?? 1);
 }
+
+// flows/passcase — a verbatim copy of the scaffolded flows/smoke
+// (flow.yaml + nodes.py; the fixture file is shared read-only) for the
+// run e2e's PASSING live run. Spec FILES run in parallel workers
+// against this ONE workspace, and editing.spec mutates flows/smoke
+// (assert values, nodes.py) — running smoke from run.spec raced that
+// and failed on 2-core CI runners (all 3 OS, 2026-07-08): specs that
+// RUN a flow must own it exclusively.
+cpSync(join(workspace, "flows", "smoke"), join(workspace, "flows", "passcase"), {
+  recursive: true,
+});
 
 // two extra flows the diagnostics e2e needs (FR-1006 check half):
 // flows/warn — warning-only: W103, the request's error port is

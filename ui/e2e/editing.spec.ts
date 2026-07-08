@@ -286,6 +286,16 @@ test("start-port defaults save with the declared type, not as strings", async ({
 test("nodes.py editor round-trips code and reports syntax errors", async ({
   page,
 }) => {
+  // this test MUTATES flows/smoke's nodes.py — capture the scaffolded
+  // original and restore it at the end (the "fix it back" retype below
+  // is NOT the original summarize; leaving it breaks anyone who RUNS
+  // smoke later — the 2026-07-08 CI red)
+  const originalCode = (
+    (await (await page.request.get("/api/code/flows/smoke")).json()) as {
+      code: string;
+    }
+  ).code;
+
   await page.goto("/flows/smoke");
   await page.getByTestId("open-code").click();
   // CodeMirror pane (bundled, no CDN): .cm-content is a real
@@ -315,6 +325,12 @@ test("nodes.py editor round-trips code and reports syntax errors", async ({
     timeout: 10_000,
   });
   await page.getByTestId("code-close").click();
+
+  // restore the scaffolded original (last-write-wins force)
+  const restored = await page.request.put("/api/code/flows/smoke", {
+    data: { code: originalCode, force: true },
+  });
+  expect(restored.ok()).toBeTruthy();
 });
 
 test("dragging a mismatched wire shows the live W102 hint (never blocks)", async ({
