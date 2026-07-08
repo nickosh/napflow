@@ -129,6 +129,15 @@ CI** with assert-driven exit codes and full wire-level history.
   `msedge`/`chrome --app=<url>`, falling back to plain
   `webbrowser.open` — app-like feel with zero new deps; v1 always opens
   the default browser).
+- **v1.1 run debugging & replay** (adopted 2026-07-08, PLAN
+  "Post-v0.1.0 backlog", D29/D30): **timeline scrubber replay** —
+  slider + play over any run's JSONL, all canvas animations and data
+  following, never re-executing (D13 makes it a recording by
+  construction; pure frontend); **pause/resume + step** (pause-request
+  dispatch gate, paused time excluded from timeouts); **wire
+  breakpoints** (runtime holds set in the UI, never flow.yaml — D30);
+  **opt-in full-payload capture** (valve pattern lifting the 512-char
+  `value_preview` bound; defaults measured from real flows first).
 - **v2 direction**: codegen (flows → niquests clients + Pydantic
   models) — scoped to the *reducible subset*: linear chains and
   recognized patterns (retry cycles → `while` loops). Arbitrary cyclic,

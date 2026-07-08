@@ -4,6 +4,21 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-08 — M5 polish + run-debugging/replay plan adopted
+
+- Done: tail-follow scroll fix + explicit follow toggle (pressed
+  state, scroll releases, press re-engages; e2e in the abort spec).
+  Owner drove M5 and requested the debugging/replay feature set —
+  planned, not implemented.
+- Decided: **D30** (pause = dispatch gate w/ pause-epoch time
+  offsetting; breakpoints = runtime WIRE-holds, E004 makes wire ≡
+  input-port, never flow.yaml); PLAN grew **M5.5** (port painting,
+  wire/port click inspection, log append ring, run-mode inspector —
+  pure UI) + **Post-v0.1.0 backlog R1–R4** (scrubber, pause/step,
+  breakpoints, opt-in payload capture); RELEASING: dev4 → manual
+  testing → v0.1.0 promotion, then feature branches + PRs only.
+- Next: M5.5, then M6 + stage close (0.1.0.dev4).
+
 ## 2026-07-08 — S4/M5 run on canvas + history
 
 - Done: RUN MODE over the M1 WS — `runview.ts` reducer (events →

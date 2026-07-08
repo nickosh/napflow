@@ -11,10 +11,18 @@ Single source of truth: `version` in `pyproject.toml`
   completes a `PLAN.md` stage — S1 → `dev1`, S2 → `dev2`, S3 → `dev3`,
   S4 → `dev4`. Dev versions are checkpoints, not releases: no tags, no
   changelog regeneration required, nothing published.
-- **First real release: `v0.1.0`** when the shippable CLI-only product
-  (S1–S3 per PRODUCT.md) is done — S4 must not block it.
+- **First real release: `v0.1.0` promotes `dev4`** (owner calls
+  2026-07-06 + 2026-07-08; supersedes the original "after S1–S3"
+  option): S4 closes as the `0.1.0.dev4` checkpoint, a manual-testing
+  window runs on it, then the SAME scope ships as v0.1.0 through the
+  flow below — dev4 is the de facto release candidate, only
+  release-prep (version bump, changelog, docs ticks) lands between.
 - After 0.1.0: SemVer; breaking flow-format changes bump the
   `schema: napflow/vN` marker, not just the package version.
+- **Workflow flips at the v0.1.0 tag** (owner call 2026-07-08): no
+  more direct commits to `main` — feature branches + PRs (conventional
+  commits feed git-cliff), changelog regenerated per release. Per-PR
+  CI also closes the NFR-10 batch-push blind spot.
 
 ## Release flow (automated — `.github/workflows/release.yml`)
 

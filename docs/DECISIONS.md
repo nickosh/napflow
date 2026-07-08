@@ -427,6 +427,50 @@ problem above); a run "dialog" every time (friction on input-less
 flows); simulating animation timing client-side (the WebSocket already
 delivers real timing — anything else would lie).
 
+## D30 — Run debugging: pause is a dispatch gate; breakpoints are runtime wire-holds, never flow-file content
+
+(2026-07-08, owner-confirmed at the M5 planning session. Design
+pinned now so nothing lands in v1 that conflicts; implementation is
+post-v0.1.0 — PLAN "Post-v0.1.0 backlog" R2/R3.)
+
+**Pause = pause request, not freeze.** The engine cannot safely
+freeze a mid-flight HTTP request, a running python function, or a
+ticking delay — so pause gates the pump's DISPATCH: in-flight
+firings complete, queued deliveries hold, nothing new fires; run
+state `paused`; `run_paused`/`run_resumed` events; abort works while
+paused. Consequence that must be pinned with it: **paused time is
+excluded from timeout guards, `max_seconds`, and the run deadline**
+(the engine offsets its monotonic clocks by accumulated pause
+epochs) — otherwise pausing at a breakpoint trips every timeout in
+the flow.
+
+**Breakpoints anchor to message deliveries, i.e. wires.** The
+engine's atomic unit is a delivery along an edge, and E004 (single
+edge per input) makes a wire breakpoint and an input-port breakpoint
+THE SAME THING — one primitive, two UI affordances (click the wire
+or the input handle). The classic "break before or after the node?"
+question dissolves into edge-set sugar: before-node = all inbound
+wires, after-node = all outbound wires; v1 of the feature ships
+plain wire-holds (node-level sugar can come later). Semantics: a
+matching message is HELD before firing its target — the travelling
+dot stops mid-wire with the held value inspectable; **continue**
+releases all holds, **step** releases exactly one delivery. Pause is
+the same mechanism with "hold everything" instead of an edge set —
+which is why R3 rides R2's gate almost for free.
+
+**Runtime state, not file content.** Breakpoints are set in the UI
+and sent with the run request (plus pause/resume/step endpoints) —
+they NEVER live in flow.yaml. A committed breakpoint node would
+pollute the git-friendly diffs the format exists for, and headless
+`napf run`/CI would have to either hang on it or ignore it — both
+wrong. Scope at first landing: edges of the flow being run
+(root-frame; child-frame holds join the M6+ drill-in work).
+
+Rejected: a `breakpoint` node type (file pollution + CI ambiguity
+above); freeze-style pause (unimplementable without lying about
+in-flight work); breakpoints on nodes as the primitive (ambiguous
+before/after semantics that edges don't have).
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.

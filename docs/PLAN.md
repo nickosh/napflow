@@ -275,9 +275,69 @@ harness lands M2, suite grows M3–M6).
       e2e (live pass, fail + live log, input override flips outcome,
       abort mid-delay, history replay + EC20). Server untouched — the
       M1 surface carried the whole milestone. (FR-1005)
+- [ ] **M5.5 — run-mode inspection polish** (adopted 2026-07-08, owner
+      request after driving M5): small/medium follow-ups, all pure UI
+      over data the events already carry — no engine or server change:
+  - [ ] **Port traffic painting**: input/output handles that carried
+        data glow in run mode; tooltip shows the last value that
+        crossed (from `message_emitted` — `from_port`/`to_port` name
+        both ends; `value_preview` is the NATIVE value up to 512 chars
+        of compact JSON, truncated marker beyond).
+  - [ ] **Wire/port click → crossed messages**: selecting a wire (or a
+        port handle) in run mode lists the messages that traversed it
+        (value, ts, msg_id, count) — the wire-level twin of the
+        node-click event filter.
+  - [ ] **Log nodes append**: a capped ring (last ~50) per log node
+        instead of latest-only — the node shows newest + count, the
+        full accumulated list on click. The loop-debugging view.
+  - [ ] **Run-mode inspector**: the right panel returns during run
+        mode showing the selected node's run data (per-port last
+        values, log history, request summary, firing count) instead of
+        disappearing entirely.
 - [ ] **M6 — subflow UX + stage close**: drill-in navigation, "used in
       N places", clone-to-new-flow, ghost-wires for cross-node template
       references; 3-OS DoD sweep; version 0.1.0.dev4. (FR-1007)
+
+S4 → release path (owner call 2026-07-08): `0.1.0.dev4` at stage
+close, a manual-testing window on the dev4 checkpoint, then the SAME
+scope promotes to **v0.1.0** via the RELEASING flow (dev4 is the de
+facto release candidate; only release-prep lands between). From the
+v0.1.0 tag on, work moves to feature branches + PRs (see Working
+agreements).
+
+## Post-v0.1.0 backlog (adopted 2026-07-08 — run debugging & replay)
+
+Owner-requested during M5 planning; sequenced by risk and dependency.
+Each becomes a stage/milestone with FRs when scheduled —
+REQUIREMENTS.md stays a v1 checklist until then. Details: D29/D30 +
+PRODUCT roadmap.
+
+1. **R1 — timeline scrubber replay** (pure frontend, the flagship):
+   slider + play (real-time from event `ts` deltas, speed multipliers)
+   over any finished/historical JSONL — scrubbing folds a record
+   prefix through the existing `runview.ts` reducer, all animations
+   and port/log data follow. Never re-executes anything (D13: replay =
+   re-read). Perf: checkpoint snapshots every ~1k records so a
+   100k-event run scrubs smoothly.
+2. **R2 — pause/resume + step** (engine + server + UI, D30):
+   pause-request gates the pump's dispatch — in-flight firings
+   complete, queued deliveries hold, run state `paused`; paused time
+   excluded from timeout guards / `max_seconds` / run deadline
+   (monotonic clocks offset by pause epochs); `run_paused`/
+   `run_resumed` events; pause/resume/step endpoints + UI buttons.
+   Step = release exactly one held delivery.
+3. **R3 — wire breakpoints** (rides R2's gate, D30): runtime
+   breakpoints keyed by edge — hold a matching message BEFORE it fires
+   its target; the travelling dot stops mid-wire with the held value
+   inspectable. Set in the UI on wires/input handles (E004 makes them
+   the same thing), sent with the run request — NEVER stored in
+   flow.yaml (git-friendly files, headless CI unaffected).
+4. **R4 — opt-in full-payload capture** (engine, independent): a
+   per-run "record full payloads" flag lifting `value_preview`'s 512
+   chars via the capture-valve pattern (per-value + per-run caps,
+   truncated markers, like body capture). Defaults picked from
+   measuring real flows first (message budget 100k bounds the worst
+   case — exactly why it's opt-in).
 
 ## Working agreements
 
@@ -290,3 +350,8 @@ harness lands M2, suite grows M3–M6).
   `DECISIONS.md` (D26+).
 - Version bumps `0.1.0.devN` in the commit that completes a stage;
   releases are tag-driven (`RELEASING.md`, adopted 2026-07-05).
+- **From the v0.1.0 tag on** (owner call 2026-07-08): no direct
+  commits to `main` — feature branches + PRs, conventional commits
+  feed git-cliff per release. Side benefit: per-PR CI closes the
+  NFR-10 batch-push blind spot (every change gets its own CI run at
+  its own HEAD).
