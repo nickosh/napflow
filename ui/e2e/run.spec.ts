@@ -121,6 +121,16 @@ test("a live run pulses and can be aborted", async ({ page }) => {
   );
   await expect(page.getByTestId("abort-run")).toBeVisible();
 
+  // the follow toggle holds its pressed state; clicking releases and
+  // re-engages it (scroll-driven auto-release needs an overflowing
+  // list — covered by hand, the fixtures finish too small)
+  const follow = page.getByTestId("follow-toggle");
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+  await follow.click();
+  await expect(follow).toHaveAttribute("aria-pressed", "false");
+  await follow.click();
+  await expect(follow).toHaveAttribute("aria-pressed", "true");
+
   await page.getByTestId("abort-run").click();
   // run_finished(aborted) arrives over the same socket
   await expect(page.getByTestId("run-state")).toHaveAttribute(

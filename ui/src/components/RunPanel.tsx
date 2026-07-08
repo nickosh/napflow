@@ -152,23 +152,23 @@ export default function RunPanel() {
     openRunPanel,
   } = useAppStore();
   const listRef = useRef<HTMLDivElement>(null);
-  // terminal-style tail following: stick to the bottom only while the
-  // user IS at the bottom — scrolling up to inspect an earlier event
-  // pauses following, scrolling back down resumes it. No toggle.
-  const followRef = useRef(true);
+  // tail-following with an explicit toggle (owner fork): the button
+  // holds its pressed state; scrolling up auto-releases it, scrolling
+  // back to the bottom (or pressing it) re-engages
+  const [follow, setFollow] = useState(true);
   const recordCount = runView?.records.length ?? 0;
 
   // a fresh run (or replay) starts back at the tail
   useEffect(() => {
-    followRef.current = true;
+    setFollow(true);
   }, [runId]);
 
   // follow the live tail (replays render settled, no need to chase)
   useEffect(() => {
-    if (runLive && followRef.current && listRef.current !== null) {
+    if (runLive && follow && listRef.current !== null) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
-  }, [runLive, recordCount]);
+  }, [runLive, follow, recordCount]);
 
   if (runPanelTab === null) return null;
   const tab = runPanelTab;
@@ -270,6 +270,33 @@ export default function RunPanel() {
           </button>
         )}
         <span style={{ flex: 1 }} />
+        {runLive && tab === "events" && (
+          <button
+            data-testid="follow-toggle"
+            aria-pressed={follow}
+            title="follow the live event tail (scrolling up releases it)"
+            onClick={() => {
+              const next = !follow;
+              setFollow(next);
+              if (next && listRef.current !== null) {
+                listRef.current.scrollTop = listRef.current.scrollHeight;
+              }
+            }}
+            style={{
+              fontSize: 12,
+              padding: "2px 10px",
+              cursor: "pointer",
+              fontFamily: "inherit",
+              borderRadius: 3,
+              border: "1px solid #1565c0",
+              // pressed = held down: filled while following
+              background: follow ? "#1565c0" : "#fff",
+              color: follow ? "#fff" : "#1565c0",
+            }}
+          >
+            ⇣ follow
+          </button>
+        )}
         {runLive && (
           <button
             data-testid="abort-run"
@@ -307,8 +334,9 @@ export default function RunPanel() {
         onScroll={(e) => {
           const el = e.currentTarget;
           // 40px of slack: "near the bottom" counts as at the bottom
-          followRef.current =
+          const atBottom =
             el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          if (follow !== atBottom) setFollow(atBottom);
         }}
         style={{ flex: 1, overflowY: "auto", padding: "0.3rem 1rem" }}
       >
