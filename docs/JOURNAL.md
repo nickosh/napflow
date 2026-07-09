@@ -4,6 +4,15 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-09 — S4 stage close: 0.1.0.dev4
+
+- Done: version bumped in the stage-completing commit (RELEASING);
+  PLAN S4 header flipped. All S4 FRs (1001–1007) ticked with tests.
+- Next: owner pushes → 3-OS CI sweep confirms the DoD; then the
+  manual-testing window on the dev4 checkpoint, release-prep only, and
+  the v0.1.0 promotion (tag-driven, RELEASING). From the v0.1.0 tag:
+  feature branches + PRs.
+
 ## 2026-07-09 — S4/M6 subflow UX (FR-1007)
 
 - Done: ghost-wires (`templating.referenced_nodes` Jinja2-AST

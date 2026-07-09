@@ -169,7 +169,7 @@ flows/smoke` passes offline on a fresh `napf init` (M3, EC34);
 TR-1/4/5/6/8/10 green + TR-9's protocol-integrity half (the
 through-the-server half is S4's, per the S3 DoD note above).
 
-## S4 — server + UI canvas  ← current
+## S4 — server + UI canvas  ✅ done 2026-07-09 (0.1.0.dev4)
 
 FR-10xx; canvas edits keep golden diffs clean.
 DoD: `napf ui` end-to-end on macOS + Windows + Linux (incl. TR-9).
