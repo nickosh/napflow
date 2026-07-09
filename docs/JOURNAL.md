@@ -4,6 +4,19 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-10 — D32: the stdlib-only worker promise, pinned
+
+- Decided (owner): **D32** — python nodes run in the USER's
+  interpreter (FR-108) and the worker child stays stdlib-only forever;
+  the wire protocol stays stdlib-readable JSON lines. msgspec
+  evaluated and rejected for now (child side: breaks the promise;
+  parent side: unmeasured bottleneck — folded into NFR-08/R6 as a
+  pre-analyzed branch).
+- Noted (owner, future): explore napflow flows as citizens of other
+  frameworks — e.g. pytest integration over the importable engine
+  (`from napflow.core import run_flow`). No design yet; parked.
+- Next: unchanged — push + CI sweep, manual dev4 window.
+
 ## 2026-07-10 — NFR-08 resolution plan + R6
 
 - Decided (owner): NFR-08's unmeasured half ("overhead negligible vs

@@ -497,6 +497,41 @@ config edit the action exists to automate); a sidebar "duplicate flow"
 button (same endpoint, but no owner pull yet — trivial to add when
 asked).
 
+## D32 — The python-worker child is stdlib-only, forever: python nodes run in the USER's interpreter
+
+(2026-07-10, owner-confirmed after the FR-108 / msgspec discussion —
+"let's keep this promise for sure".)
+
+The promise: `python.interpreter` (napflow.yaml, FR-108) points python
+nodes at the USER's environment — their project venv, their packages,
+their models, their Python version — and the worker child
+(`core/worker_main.py`) is invoked by absolute path and imports
+NOTHING beyond the stdlib. The target interpreter does not need
+napflow installed, or anything else at all. This is what lets flow
+logic live in the same dependency world as the code under test (core
+promise #3, pytest-able there too) while napflow itself stays
+`uv tool install`-ed in its own isolated venv.
+
+Consequences pinned:
+- **The wire protocol stays newline-delimited JSON readable by bare
+  stdlib.** Any serialization speedup — msgspec was evaluated
+  2026-07-10 — may only ever land on the PARENT side
+  (`core/worker.py` / the event `encode_record` path, napflow's own
+  process) without changing the wire format; the child side is
+  untouchable. Rejected: msgspec/msgpack on both ends (forces a
+  compiled dep into every user interpreter — breaks this promise);
+  adopting msgspec parent-side NOW (unmeasured bottleneck — NFR-08/R6
+  measure first; JSON encode is microseconds against an expected
+  multi-millisecond pipe+scheduling round trip, and `core`'s
+  dependency posture is deliberately lean, NFR-10).
+- The child script's own syntax/stdlib usage sets the de facto Python
+  floor for user interpreters — keep it conservative; never assume
+  napflow's 3.12+ floor inside `worker_main.py`.
+- Known papercut, not a promise change: venv layouts differ per OS
+  (`.venv/bin/python` vs `.venv/Scripts/python.exe`) and napflow.yaml
+  is committed — a bin/Scripts fallback in `_resolve_interpreter` is a
+  fine future issue if mixed-OS teams hit it.
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.
