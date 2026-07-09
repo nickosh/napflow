@@ -365,6 +365,19 @@ PRODUCT roadmap.
    inference, edge rewriting, splitting nodes.py between folders, and
    fixing up cross-cut `{{ nodes.* }}` refs and set/get variables.
    NOT the same thing as D09's clone (which shipped at S4/M6).
+6. **R6 — performance guard suite** (adopted 2026-07-10, owner call):
+   a pytest-marked perf suite (`-m perf` or similar), EXCLUDED from CI
+   runs by default — perf assertions on shared hosted runners are
+   flake factories; run it manually / on demand. Contents: automate
+   the NFR-08 overhead measurement (per-firing scheduling cost +
+   python-worker pipe round-trip, computed from event `ts` deltas in
+   the run JSONL — the history already carries the data) with generous
+   ceilings, and a `max_concurrency` peak-bound assertion (run many
+   items with a small cap, count maximum concurrent iterations — the
+   semaphore makes the bound true by construction, but nothing counts
+   it today). Sequencing: the owner measures MANUALLY first during the
+   dev4 window (that measurement ticks NFR-08); R6 then turns the
+   method into a repeatable suite.
 
 ## Working agreements
 

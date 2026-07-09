@@ -4,6 +4,16 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-10 — NFR-08 resolution plan + R6
+
+- Decided (owner): NFR-08's unmeasured half ("overhead negligible vs
+  HTTP") gets a MANUAL measurement during the dev4 testing window —
+  that ticks the box; a pytest-marked perf suite, EXCLUDED from CI by
+  default, automates the method later → backlog **R6** (also gains a
+  `max_concurrency` peak-bound counting assertion — the semaphore
+  bound is true by construction but nothing counts it today).
+- Next: unchanged — push + CI sweep, manual window, v0.1.0 promotion.
+
 ## 2026-07-09 — dev4 wrap-up: README + checklist audit
 
 - Done: README refreshed for the RC state (status paragraph, `napf ui`
