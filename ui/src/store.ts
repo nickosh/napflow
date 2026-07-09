@@ -29,6 +29,7 @@ import {
   finalizeIncomplete,
   reduceRun,
   type RunRecord,
+  type RunTrafficSelection,
   type RunView,
 } from "./runview";
 
@@ -78,6 +79,10 @@ type AppState = {
   runHistory: RunListEntry[] | null;
   runEnv: string | null; // selected env profile for the next run
   runNotice: string | null; // start/abort failures, shown by controls
+  // M5.5: selected wire/port whose crossed messages the panel lists —
+  // mutually exclusive with selectedNode (one filter at a time)
+  runSelection: RunTrafficSelection | null;
+  selectRunTraffic: (sel: RunTrafficSelection | null) => void;
   setRunEnv: (env: string | null) => void;
   startRun: (inputs: Record<string, unknown>) => Promise<void>;
   abortRun: () => Promise<void>;
@@ -294,6 +299,7 @@ export const useAppStore = create<AppState>((set, get) => {
     runHistory: null,
     runEnv: null,
     runNotice: null,
+    runSelection: null,
 
     load: async () => {
       try {
@@ -333,6 +339,7 @@ export const useAppStore = create<AppState>((set, get) => {
         runPanelTab: null,
         runHistory: null,
         runNotice: null,
+        runSelection: null,
       });
       if (opts?.push !== false && window.location.pathname !== `/${identity}`) {
         window.history.pushState(null, "", `/${identity}`);
@@ -361,7 +368,12 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    selectNode: (id) => set({ selectedNode: id }),
+    selectNode: (id) => set({ selectedNode: id, runSelection: null }),
+
+    selectRunTraffic: (sel) => {
+      if (get().runView === null) return; // a run-mode surface only
+      set({ runSelection: sel, selectedNode: null });
+    },
 
     moveNode: (id, x, y) =>
       edit((flow) => ({
@@ -512,6 +524,7 @@ export const useAppStore = create<AppState>((set, get) => {
           runLive: true,
           runPanelTab: "events",
           selectedNode: null,
+          runSelection: null,
         });
         watchRun(started.run_id);
       } catch (e) {
@@ -545,6 +558,7 @@ export const useAppStore = create<AppState>((set, get) => {
         runLive: false,
         runPanelTab: null,
         runNotice: null,
+        runSelection: null,
       });
     },
 
@@ -566,6 +580,7 @@ export const useAppStore = create<AppState>((set, get) => {
           runPanelTab: "events",
           runNotice: null,
           selectedNode: null,
+          runSelection: null,
         });
       } catch (e) {
         set({ runNotice: e instanceof Error ? e.message : String(e) });

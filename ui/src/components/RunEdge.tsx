@@ -17,6 +17,7 @@ export default function RunEdge({
   targetPosition,
   style,
   markerEnd,
+  selected,
 }: EdgeProps) {
   // undefined = not in run mode; null = run mode, wire never fired
   const pulse = useAppStore((s) =>
@@ -31,12 +32,13 @@ export default function RunEdge({
     targetPosition,
   });
 
+  // selected in run mode = its crossed messages are listed (M5.5)
   const edgeStyle =
     pulse === undefined
       ? style
       : pulse === null
-        ? { ...style, opacity: 0.3 }
-        : { ...style, strokeWidth: 2.5 };
+        ? { ...style, opacity: selected ? 0.6 : 0.3 }
+        : { ...style, strokeWidth: selected ? 3.5 : 2.5 };
 
   return (
     <>

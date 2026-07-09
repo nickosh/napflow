@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ROOT_FRAME, summarize, type RunRecord } from "../runview";
+import {
+  ROOT_FRAME,
+  matchesTraffic,
+  preview,
+  summarize,
+  trafficLabel,
+  type RunRecord,
+} from "../runview";
 import { useAppStore } from "../store";
 
 const STATE_COLORS: Record<string, string> = {
@@ -99,6 +106,64 @@ function EventRow({ record }: { record: RunRecord }) {
   );
 }
 
+/** One crossed message on the selected wire/port (M5.5): value, ts,
+ * msg_id — expandable to the full record like the event stream. */
+function MessageRow({ record }: { record: RunRecord }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li
+      data-testid="run-message"
+      style={{ borderBottom: "1px solid #f0f0f0" }}
+    >
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: "flex",
+          gap: 8,
+          padding: "1px 0",
+          cursor: "pointer",
+          alignItems: "baseline",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span style={{ color: "#aaa", minWidth: 84, fontVariantNumeric: "tabular-nums" }}>
+          {clock(record.ts)}
+        </span>
+        <span style={{ color: "#888", minWidth: 90, fontFamily: "ui-monospace, monospace" }}>
+          {String(record.msg_id ?? "—")}
+        </span>
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            color: "#333",
+            fontFamily: "ui-monospace, monospace",
+          }}
+        >
+          {preview(record.value_preview, 200)}
+        </span>
+      </div>
+      {open && (
+        <pre
+          data-testid="run-message-detail"
+          style={{
+            margin: "2px 0 6px 92px",
+            padding: "6px 8px",
+            background: "#f7f7f7",
+            borderRadius: 4,
+            maxHeight: 300,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+          }}
+        >
+          {JSON.stringify(record, null, 2)}
+        </pre>
+      )}
+    </li>
+  );
+}
+
 function HistoryTab() {
   const { runHistory, runId, openHistoryRun } = useAppStore();
   if (runHistory === null) {
@@ -147,6 +212,8 @@ export default function RunPanel() {
     runPanelTab,
     selectedNode,
     selectNode,
+    runSelection,
+    selectRunTraffic,
     abortRun,
     exitRun,
     openRunPanel,
@@ -180,6 +247,11 @@ export default function RunPanel() {
         ? runView.records
         : runView.records.filter((r) => r.node === selectedNode);
   const overflow = records.length - MAX_ROWS;
+  // M5.5: a selected wire/port swaps the stream for its message list
+  const messages =
+    runView === null || runSelection === null
+      ? []
+      : runView.records.filter((r) => matchesTraffic(r, runSelection));
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     fontSize: 12,
@@ -269,6 +341,25 @@ export default function RunPanel() {
             {selectedNode} ✕
           </button>
         )}
+        {runSelection !== null && (
+          <button
+            data-testid="traffic-filter"
+            title="showing the messages that crossed this wire/port — click to clear"
+            onClick={() => selectRunTraffic(null)}
+            style={{
+              fontSize: 11,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              borderRadius: 8,
+              border: "1px solid #1565c0",
+              color: "#1565c0",
+              background: "#e3f2fd",
+              padding: "0 8px",
+            }}
+          >
+            {trafficLabel(runSelection)} ×{messages.length} ✕
+          </button>
+        )}
         <span style={{ flex: 1 }} />
         {runLive && tab === "events" && (
           <button
@@ -342,6 +433,19 @@ export default function RunPanel() {
       >
         {tab === "history" ? (
           <HistoryTab />
+        ) : runSelection !== null ? (
+          <>
+            {messages.length === 0 && (
+              <p data-testid="traffic-empty" style={{ color: "#888", margin: "0.5rem 0" }}>
+                nothing crossed here in this run
+              </p>
+            )}
+            <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+              {messages.slice(-MAX_ROWS).map((record, index) => (
+                <MessageRow key={record.seq ?? `${index}`} record={record} />
+              ))}
+            </ul>
+          </>
         ) : (
           <>
             {overflow > 0 && (

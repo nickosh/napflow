@@ -66,6 +66,12 @@
   stroke-width: 3px;
 }
 
+/* a port handle that carried data in run mode (M5.5) — the tooltip on
+ * its label shows the last value that crossed */
+.napf-port-carried {
+  box-shadow: 0 0 6px 2px rgba(21, 101, 192, 0.6);
+}
+
 /* live log line on log nodes */
 .napf-node-log {
   border-top: 1px dashed #ccc;

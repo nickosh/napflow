@@ -20,7 +20,31 @@ export type RunRecord = {
 
 export const ROOT_FRAME = "f-0";
 
+/** log-node history kept per node (M5.5) — the loop-debugging view */
+export const LOG_RING = 50;
+
 export type NodeOutcome = "none" | "ok" | "failed" | "error" | "skipped";
+
+/** What crossed a port (M5.5): message_emitted names both ends, so
+ * every emission paints the source's output AND the target's input.
+ * `lastValue` is the event's value_preview — the NATIVE value up to
+ * 512 chars of compact JSON, truncated marker beyond (engine spec §7). */
+export type PortTraffic = {
+  count: number;
+  lastValue: unknown;
+  lastTs: string | null;
+};
+
+/** Last request exchange on a node (run-mode inspector summary). */
+export type RequestSummary = {
+  method: string | null;
+  url: string | null;
+  status: number | null;
+  sizeBytes: number | null;
+  totalMs: number | null;
+  attempt: number;
+  error: string | null;
+};
 
 export type NodeRunState = {
   firings: number;
@@ -30,8 +54,11 @@ export type NodeRunState = {
   guard: "exhausted" | "expired" | null;
   /** seq of the last event touching the node — restarts flash CSS */
   lastSeq: number;
-  /** latest log event on this node (log nodes render it live) */
-  log: { value: unknown; count: number } | null;
+  /** log ring, newest LAST, capped at LOG_RING; count = total seen */
+  log: { ring: unknown[]; count: number } | null;
+  /** per-port traffic, keyed `in:<port>` / `out:<port>` */
+  ports: Record<string, PortTraffic>;
+  request: RequestSummary | null;
 };
 
 /** Keyed by the canvas edge id (`from.port→to.node.port` — message_
@@ -70,13 +97,30 @@ export function emptyRunView(): RunView {
   };
 }
 
+// safe to share: `ports` is only ever REPLACED (withTraffic), never
+// mutated, so every fresh node aliasing the same {} is fine
 const FRESH_NODE: Omit<NodeRunState, "lastSeq"> = {
   firings: 0,
   active: false,
   outcome: "none",
   guard: null,
   log: null,
+  ports: {},
+  request: null,
 };
+
+function withTraffic(
+  ports: Record<string, PortTraffic>,
+  key: string,
+  value: unknown,
+  ts: string | null,
+): Record<string, PortTraffic> {
+  const prev = ports[key];
+  return {
+    ...ports,
+    [key]: { count: (prev?.count ?? 0) + 1, lastValue: value, lastTs: ts },
+  };
+}
 
 /** Node states are replaced, never mutated — React subscribers compare
  * by identity, so only the touched node re-renders per event. */
@@ -136,25 +180,71 @@ export function applyRecord(view: RunView, record: RunRecord): void {
       }
       break;
     case "request_started":
-      if (node) touch(view, node, seq, { active: true });
+      if (node) {
+        touch(view, node, seq, {
+          active: true,
+          request: {
+            method: (record.method as string) ?? null,
+            url: (record.url as string) ?? null,
+            status: null,
+            sizeBytes: null,
+            totalMs: null,
+            attempt: (record.attempt as number) ?? 1,
+            error: null,
+          },
+        });
+      }
       break;
     case "request_finished":
       // non-2xx is DATA (EC13) — any completed exchange is "ok"; the
       // flow's own asserts/conditions judge the status code
-      if (node) touch(view, node, seq, { outcome: "ok" });
+      if (node) {
+        const prev = view.nodes[node]?.request;
+        const timing = record.timing as Record<string, number> | undefined;
+        touch(view, node, seq, {
+          outcome: "ok",
+          request: {
+            method: prev?.method ?? null,
+            url: prev?.url ?? null,
+            status: (record.status as number) ?? null,
+            sizeBytes: (record.size_bytes as number) ?? null,
+            totalMs: timing?.total_ms ?? null,
+            attempt: (record.attempt as number) ?? prev?.attempt ?? 1,
+            error: null,
+          },
+        });
+      }
       break;
     case "request_failed":
-      if (node && record.will_retry !== true) {
-        touch(view, node, seq, { outcome: "error" });
+      if (node) {
+        const prev = view.nodes[node]?.request;
+        const request: RequestSummary = {
+          method: prev?.method ?? null,
+          url: prev?.url ?? null,
+          status: null,
+          sizeBytes: null,
+          totalMs: null,
+          attempt: (record.attempt as number) ?? prev?.attempt ?? 1,
+          error: `${record.error_kind}: ${record.message}`,
+        };
+        // a retrying request stays active — but its error is worth
+        // showing in the inspector while the next attempt runs
+        if (record.will_retry === true) {
+          touch(view, node, seq, { request });
+        } else {
+          touch(view, node, seq, { outcome: "error", request });
+        }
       }
       break;
     case "message_emitted": {
       const key = `${record.from_port}→${record.to_node}.${record.to_port}`;
       const prev = view.edges[key];
       view.edges[key] = { count: (prev?.count ?? 0) + 1, lastSeq: seq };
+      const ts = record.ts ?? null;
       if (node) {
         const prevNode = view.nodes[node];
-        const port = String(record.from_port ?? "").split(".").pop();
+        const fromRef = String(record.from_port ?? "");
+        const port = fromRef.slice(fromRef.indexOf(".") + 1);
         // `error` is THE reserved error-port name (E012); an emission
         // there means this firing errored, whatever came before
         const outcome: NodeOutcome =
@@ -163,7 +253,32 @@ export function applyRecord(view: RunView, record: RunRecord): void {
             : prevNode?.outcome === "failed" || prevNode?.outcome === "error"
               ? prevNode.outcome
               : "ok";
-        touch(view, node, seq, { active: false, outcome });
+        touch(view, node, seq, {
+          active: false,
+          outcome,
+          ports: withTraffic(
+            prevNode?.ports ?? {},
+            `out:${port}`,
+            record.value_preview,
+            ts,
+          ),
+        });
+      }
+      // the receiving end: paint the input port WITHOUT bumping
+      // lastSeq — arrival is not a firing, so no flash (M5.5 pin)
+      const toNode = record.to_node as string | undefined;
+      const toPort = record.to_port as string | undefined;
+      if (toNode && toPort) {
+        const prevTo = view.nodes[toNode] ?? { ...FRESH_NODE, lastSeq: -1 };
+        view.nodes[toNode] = {
+          ...prevTo,
+          ports: withTraffic(
+            prevTo.ports,
+            `in:${toPort}`,
+            record.value_preview,
+            ts,
+          ),
+        };
       }
       break;
     }
@@ -186,8 +301,11 @@ export function applyRecord(view: RunView, record: RunRecord): void {
       break;
     case "log":
       if (node) {
-        const count = (view.nodes[node]?.log?.count ?? 0) + 1;
-        touch(view, node, seq, { log: { value: record.value, count } });
+        const prev = view.nodes[node]?.log;
+        const ring = [...(prev?.ring ?? []), record.value].slice(-LOG_RING);
+        touch(view, node, seq, {
+          log: { ring, count: (prev?.count ?? 0) + 1 },
+        });
       }
       break;
     case "guard_tripped":
@@ -270,4 +388,39 @@ export function preview(value: unknown, max = 80): string {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   if (text === undefined) return "";
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// ---- crossed-messages selection (M5.5) ------------------------------
+// Clicking a wire — or a port handle, which E004 makes the same thing
+// on the input side — lists the messages that traversed it: the
+// wire-level twin of the node-click event filter.
+
+export type RunTrafficSelection =
+  | { kind: "edge"; from: string; to: string }
+  | { kind: "port"; node: string; port: string; side: "input" | "output" };
+
+/** Does this record belong to the selected wire/port's message list?
+ * Root-frame only — same scope pin as the canvas overlay. */
+export function matchesTraffic(
+  record: RunRecord,
+  sel: RunTrafficSelection,
+): boolean {
+  if (record.event !== "message_emitted" || record.frame !== ROOT_FRAME) {
+    return false;
+  }
+  if (sel.kind === "edge") {
+    return (
+      record.from_port === sel.from &&
+      `${record.to_node}.${record.to_port}` === sel.to
+    );
+  }
+  return sel.side === "output"
+    ? record.from_port === `${sel.node}.${sel.port}`
+    : record.to_node === sel.node && record.to_port === sel.port;
+}
+
+export function trafficLabel(sel: RunTrafficSelection): string {
+  return sel.kind === "edge"
+    ? `${sel.from} → ${sel.to}`
+    : `${sel.node}.${sel.port}`;
 }

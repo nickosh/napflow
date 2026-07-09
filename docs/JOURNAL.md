@@ -4,6 +4,22 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-09 — S4/M5.5 run-mode inspection polish
+
+- Done: all four M5.5 items, pure UI over existing events — port
+  traffic painting (carried handles glow, tooltip = last
+  `value_preview`), wire/port click → crossed-messages list in the
+  run panel (`matchesTraffic`, the wire twin of the node filter), log
+  append ring (last 50, node shows newest+count), and `RunInspector`
+  (right panel returns in run mode: firings, request summary,
+  per-port last values, log history). 6 new Vitest (28) + extended
+  run e2e (27 total, green at `--workers=1` and parallel).
+- Decided (UI pins, in PLAN): arrivals paint the input port WITHOUT
+  flashing the node (not a firing); port click target = label+handle
+  only so the node's middle stays a node click; retry errors stay on
+  the request summary while the next attempt runs.
+- Next: M6 — subflow UX + stage close (0.1.0.dev4).
+
 ## 2026-07-08 — M5 polish + run-debugging/replay plan adopted
 
 - Done: tail-follow scroll fix + explicit follow toggle (pressed

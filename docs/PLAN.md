@@ -275,25 +275,36 @@ harness lands M2, suite grows M3–M6).
       e2e (live pass, fail + live log, input override flips outcome,
       abort mid-delay, history replay + EC20). Server untouched — the
       M1 surface carried the whole milestone. (FR-1005)
-- [ ] **M5.5 — run-mode inspection polish** (adopted 2026-07-08, owner
-      request after driving M5): small/medium follow-ups, all pure UI
-      over data the events already carry — no engine or server change:
-  - [ ] **Port traffic painting**: input/output handles that carried
+- [x] **M5.5 — run-mode inspection polish** (adopted 2026-07-08, owner
+      request after driving M5; landed 2026-07-09): small/medium
+      follow-ups, all pure UI over data the events already carry — no
+      engine or server change. Pins made while landing: an ARRIVAL
+      does not flash the target node (input-port paint skips the
+      lastSeq bump — arrival is not a firing); a port's click target
+      is the label + handle only, so a node's empty middle stays a
+      node click; retry errors stay visible on the request summary
+      while the next attempt runs. Tests: 6 new Vitest reducer cases
+      (`runview.test.ts` — port traffic both ends, ring cap, request
+      summary, matchesTraffic) + extended run e2e (`run.spec.ts`
+      passcase/failcase).
+  - [x] **Port traffic painting**: input/output handles that carried
         data glow in run mode; tooltip shows the last value that
         crossed (from `message_emitted` — `from_port`/`to_port` name
         both ends; `value_preview` is the NATIVE value up to 512 chars
         of compact JSON, truncated marker beyond).
-  - [ ] **Wire/port click → crossed messages**: selecting a wire (or a
+  - [x] **Wire/port click → crossed messages**: selecting a wire (or a
         port handle) in run mode lists the messages that traversed it
         (value, ts, msg_id, count) — the wire-level twin of the
         node-click event filter.
-  - [ ] **Log nodes append**: a capped ring (last ~50) per log node
-        instead of latest-only — the node shows newest + count, the
-        full accumulated list on click. The loop-debugging view.
-  - [ ] **Run-mode inspector**: the right panel returns during run
-        mode showing the selected node's run data (per-port last
-        values, log history, request summary, firing count) instead of
-        disappearing entirely.
+  - [x] **Log nodes append**: a capped ring (last 50, `LOG_RING`) per
+        log node instead of latest-only — the node shows newest +
+        count, the full accumulated list in the run inspector on
+        click. The loop-debugging view.
+  - [x] **Run-mode inspector**: the right panel returns during run
+        mode (`RunInspector.tsx`) showing the selected node's run data
+        (per-port last values, log history, request summary, firing
+        count) instead of disappearing entirely; no selection shows
+        the run summary.
 - [ ] **M6 — subflow UX + stage close**: drill-in navigation, "used in
       N places", clone-to-new-flow, ghost-wires for cross-node template
       references; 3-OS DoD sweep; version 0.1.0.dev4. (FR-1007)

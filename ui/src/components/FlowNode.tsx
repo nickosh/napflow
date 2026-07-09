@@ -2,7 +2,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 
 import { portColor } from "../colors";
 import type { CanvasNode, PortHandle } from "../graph";
-import { preview, type NodeRunState } from "../runview";
+import { preview, type NodeRunState, type PortTraffic } from "../runview";
 import { useAppStore } from "../store";
 
 // run-mode outcome colors (assert green/red, error routing red,
@@ -21,13 +21,36 @@ const handleStyle = (type: string) => ({
 });
 
 function PortRow({
+  nodeId,
   port,
   side,
+  traffic,
+  onSelect,
 }: {
+  nodeId: string;
   port: PortHandle;
   side: "input" | "output";
+  /** undefined = not in run mode; null = run mode, nothing crossed */
+  traffic: PortTraffic | null | undefined;
+  onSelect?: () => void;
 }) {
   const isInput = side === "input";
+  // M5.5 port traffic painting: a handle that carried data glows and
+  // its tooltip shows the last value that crossed (value_preview)
+  const title =
+    traffic != null
+      ? `${port.name} — last: ${preview(traffic.lastValue, 200)}${
+          traffic.count > 1 ? ` (×${traffic.count})` : ""
+        }`
+      : `${port.name}: ${port.type}`;
+  // the click target is the label + handle ONLY — the row's empty
+  // middle stays a node click (node clicks filter the event stream)
+  const select = onSelect
+    ? (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onSelect();
+      }
+    : undefined;
   return (
     <div
       style={{
@@ -43,9 +66,17 @@ function PortRow({
         id={port.name}
         type={isInput ? "target" : "source"}
         position={isInput ? Position.Left : Position.Right}
+        className={traffic != null ? "napf-port-carried" : undefined}
         style={handleStyle(port.type)}
+        onClick={select}
       />
-      <span title={`${port.name}: ${port.type}`}>
+      <span
+        data-testid={`port-${nodeId}-${side}-${port.name}`}
+        data-carried={traffic != null ? "true" : undefined}
+        title={title}
+        onClick={select}
+        style={{ cursor: select ? "pointer" : undefined }}
+      >
         {port.name}
         {port.required && isInput && (
           <span style={{ color: "#c62828" }}> *</span>
@@ -105,6 +136,10 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
   const run = useAppStore((s) =>
     s.runView === null ? undefined : (s.runView.nodes[data.nodeId] ?? null),
   );
+  const inRunMode = run !== undefined;
+  const selectRunTraffic = useAppStore((s) => s.selectRunTraffic);
+  const lastLog =
+    run?.log == null ? undefined : run.log.ring[run.log.ring.length - 1];
   return (
     <div
       data-testid={`node-${data.nodeId}`}
@@ -165,24 +200,63 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <div style={{ padding: "3px 0", flex: 1 }}>
           {data.inputs.map((port) => (
-            <PortRow key={port.name} port={port} side="input" />
+            <PortRow
+              key={port.name}
+              nodeId={data.nodeId}
+              port={port}
+              side="input"
+              traffic={
+                inRunMode ? (run?.ports[`in:${port.name}`] ?? null) : undefined
+              }
+              onSelect={
+                inRunMode
+                  ? () =>
+                      selectRunTraffic({
+                        kind: "port",
+                        node: data.nodeId,
+                        port: port.name,
+                        side: "input",
+                      })
+                  : undefined
+              }
+            />
           ))}
         </div>
         <div style={{ padding: "3px 0", flex: 1 }}>
           {data.outputs.map((port) => (
-            <PortRow key={port.name} port={port} side="output" />
+            <PortRow
+              key={port.name}
+              nodeId={data.nodeId}
+              port={port}
+              side="output"
+              traffic={
+                inRunMode ? (run?.ports[`out:${port.name}`] ?? null) : undefined
+              }
+              onSelect={
+                inRunMode
+                  ? () =>
+                      selectRunTraffic({
+                        kind: "port",
+                        node: data.nodeId,
+                        port: port.name,
+                        side: "output",
+                      })
+                  : undefined
+              }
+            />
           ))}
         </div>
       </div>
       {run?.log && (
-        // log nodes come alive during a run: latest logged value
+        // log nodes come alive during a run: newest logged value (the
+        // full ring shows in the run inspector on click)
         <div
           className="napf-node-log"
           data-testid="node-log-value"
-          title={preview(run.log.value, 500)}
+          title={preview(lastLog, 500)}
         >
           {run.log.count > 1 ? `[${run.log.count}] ` : ""}
-          {preview(run.log.value, 42)}
+          {preview(lastLog, 42)}
         </div>
       )}
     </div>

@@ -36,10 +36,12 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
   }
   await expect(page.getByTestId("run-asserts")).toContainText("2✓");
 
-  // run mode locks editing: palette and inspector give way
+  // run mode locks editing: the palette goes away and the edit
+  // inspector gives way to the RUN inspector (M5.5)
   await expect(page.getByTestId("open-code")).toBeVisible(); // header intact
   await expect(page.getByTestId("add-node")).toHaveCount(0);
   await expect(page.getByTestId("inspector")).toHaveCount(0);
+  await expect(page.getByTestId("run-inspector")).toBeVisible();
 
   // full wire detail: expand the assert_result event row
   const assertRow = page
@@ -50,9 +52,13 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
     '"passed": true',
   );
 
-  // node click filters the stream to that node's events
+  // node click filters the stream to that node's events AND fills the
+  // run inspector with the node's run data (M5.5)
   await page.getByTestId("node-verify").click();
   await expect(page.getByTestId("run-filter")).toContainText("verify");
+  await expect(page.getByTestId("run-inspector-status")).toContainText(
+    "fired ×1",
+  );
   for (const row of await page.getByTestId("run-event").all()) {
     await expect(row).toContainText("verify");
   }
@@ -86,6 +92,32 @@ test("failing run: red assert, live log value, travelled wires", async ({
   await expect(page.getByTestId("node-log-value")).toContainText("100");
   // wires that carried messages show their travel dots
   expect(await page.getByTestId("edge-dot").count()).toBeGreaterThan(0);
+
+  // M5.5 port traffic painting: the port that carried data is marked,
+  // its tooltip holds the last value that crossed
+  const echoOut = page.getByTestId("port-echo-output-out");
+  await expect(echoOut).toHaveAttribute("data-carried", "true");
+  await expect(echoOut).toHaveAttribute("title", /100/);
+
+  // M5.5 wire click → the messages that traversed it
+  await page
+    .locator('.react-flow__edge[data-id="echo.out→verify.in"]')
+    .click();
+  await expect(page.getByTestId("traffic-filter")).toContainText("echo.out");
+  await expect(page.getByTestId("run-message")).toHaveCount(1);
+  await expect(page.getByTestId("run-message")).toContainText("100");
+
+  // …and the port-handle twin of the same view (E004: same wire)
+  await page.getByTestId("port-verify-input-in").click();
+  await expect(page.getByTestId("traffic-filter")).toContainText("verify.in");
+  await expect(page.getByTestId("run-message")).toHaveCount(1);
+
+  // M5.5 run inspector: node click swaps the message list for the
+  // node's run data — log history included (the append ring)
+  await page.getByTestId("node-echo").click();
+  await expect(page.getByTestId("traffic-filter")).toHaveCount(0);
+  await expect(page.getByTestId("run-inspector-log")).toContainText("100");
+  await expect(page.getByTestId("run-inspector-port").first()).toBeVisible();
 
   await page.getByTestId("exit-run").click();
 });

@@ -25,6 +25,7 @@ import Inspector from "./components/Inspector";
 import NodePalette from "./components/NodePalette";
 import RunControls from "./components/RunControls";
 import RunEdge from "./components/RunEdge";
+import RunInspector from "./components/RunInspector";
 import RunPanel from "./components/RunPanel";
 import SaveStatus from "./components/SaveStatus";
 import { PALETTE_DRAG_TYPE } from "./forms";
@@ -46,6 +47,7 @@ function Canvas() {
     deleteNode,
     addNode,
     setInteracting,
+    selectRunTraffic,
   } = useAppStore();
   // run mode (S4/M5): the canvas locks editing and animates instead —
   // clicks still select (they filter the event stream)
@@ -173,6 +175,16 @@ function Canvas() {
           moveNode(node.id, Math.round(node.position.x), Math.round(node.position.y));
         }}
         onNodeClick={(_event, node) => selectNode(node.id)}
+        onEdgeClick={(_event, edge) => {
+          // run mode: a wire click lists its crossed messages (M5.5)
+          if (inRunMode && edge.data) {
+            selectRunTraffic({
+              kind: "edge",
+              from: String(edge.data.from),
+              to: String(edge.data.to),
+            });
+          }
+        }}
         onPaneClick={() => selectNode(null)}
         onDragOver={inRunMode ? undefined : onDragOver}
         onDrop={inRunMode ? undefined : onDrop}
@@ -256,9 +268,10 @@ export default function App() {
         <ReactFlowProvider>
           <Canvas />
         </ReactFlowProvider>
-        {/* run mode: the inspector's edit forms give way to the run
-            panel; node clicks filter the event stream instead */}
-        {!inRunMode && <Inspector />}
+        {/* run mode: the edit forms give way to the run inspector —
+            selected node's run data (M5.5); node clicks also filter
+            the event stream */}
+        {inRunMode ? <RunInspector /> : <Inspector />}
       </div>
       {runPanelOpen ? (
         <RunPanel />
