@@ -471,6 +471,32 @@ above); freeze-style pause (unimplementable without lying about
 in-flight work); breakpoints on nodes as the primitive (ambiguous
 before/after semantics that edges don't have).
 
+## D31 — Clone repoints the invoking node; "pack selection to new flow" is deferred (R5)
+
+(2026-07-09, owner-confirmed at the M6 planning session.)
+
+"Clone to new flow…" (D09) landed at S4/M6 with one semantic pin: the
+action lives on a flow/loop node, forks the TARGET's folder, and
+**repoints that one node at the clone** — the escape hatch from
+shared-reference semantics ("stop sharing, give me my own fork").
+Nothing else changes: the canvas keeps the same node and wires, other
+users of the original are untouched, and the original folder is never
+modified.
+
+The owner's first reading of the name — select nodes + wires on the
+canvas and PACK them into a new subflow (replaced by a single flow
+node, boundary wires becoming Start/End ports) — is a **different
+feature**: extract-to-subflow refactoring. It is deliberately deferred
+to the post-v0.1.0 backlog as **R5**, not squeezed into M6, because it
+needs its own design pass: boundary-port inference, edge rewriting,
+moving python functions between nodes.py files, and fixing up
+`{{ nodes.* }}` refs and set/get variables that cross the cut.
+
+Rejected for v1: clone-without-repoint (leaves the user doing the
+config edit the action exists to automate); a sidebar "duplicate flow"
+button (same endpoint, but no owner pull yet — trivial to add when
+asked).
+
 ## Known open risks (watch during implementation)
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.

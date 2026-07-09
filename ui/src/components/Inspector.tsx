@@ -1,14 +1,27 @@
+import { drillTarget } from "../graph";
 import { useAppStore } from "../store";
 import ConfigForm from "./ConfigForm";
 import { EndPortEditor, StartPortEditor } from "./PortEditor";
+import SubflowActions from "./SubflowActions";
 
 // S4/M4: the inspector edits — per-type config forms, Start/End port
 // editors (FR-1006), node delete. The store autosaves every change.
+// S4/M6 adds the subflow UX: drill-in/clone on flow & loop nodes, and
+// D09's "used in N places" on the flow header view.
 export default function Inspector() {
-  const { detail, selectedNode, deleteNode } = useAppStore();
+  const { detail, selectedNode, deleteNode, openFlow } = useAppStore();
   const node = detail?.flow.nodes.find((n) => n.id === selectedNode) ?? null;
   const diagnostics =
     detail?.diagnostics.filter((d) => d.node === selectedNode) ?? [];
+  const target =
+    node === null
+      ? null
+      : drillTarget({
+          nodeType: node.type,
+          config: (node.config ?? null) as Record<string, unknown> | null,
+        });
+  const usedBy = detail?.used_by ?? [];
+  const places = usedBy.reduce((n, u) => n + u.nodes.length, 0);
 
   return (
     <aside
@@ -31,6 +44,30 @@ export default function Inspector() {
             {detail?.flow.flow.description ??
               "Select a node to inspect its config."}
           </p>
+          {places > 0 && (
+            <div data-testid="used-by" style={{ marginTop: "0.5rem" }}>
+              <p style={{ margin: "0 0 0.25rem", color: "#666" }}>
+                used in {places} place{places === 1 ? "" : "s"}:
+              </p>
+              <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+                {usedBy.map((u) => (
+                  <li key={u.identity} style={{ marginBottom: 2 }}>
+                    <a
+                      data-testid={`used-by-${u.identity}`}
+                      href={`/${u.identity}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void openFlow(u.identity);
+                      }}
+                    >
+                      {u.identity}
+                    </a>{" "}
+                    <span style={{ color: "#888" }}>({u.nodes.join(", ")})</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -58,6 +95,14 @@ export default function Inspector() {
             )}
           </div>
           <p style={{ margin: "0 0 0.75rem", color: "#888" }}>{node.type}</p>
+          {target !== null && (
+            <SubflowActions
+              nodeId={node.id}
+              configKey={node.type === "flow" ? "flow" : "body"}
+              target={target}
+              config={(node.config ?? {}) as Record<string, unknown>}
+            />
+          )}
           {diagnostics.length > 0 && (
             <ul style={{ paddingLeft: "1.1rem", color: "#c62828" }}>
               {diagnostics.map((d, i) => (

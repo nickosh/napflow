@@ -651,6 +651,109 @@ def test_etags_poll_endpoint(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Subflow UX (S4/M6, FR-1007): detail refs/used_by + clone endpoint
+
+_PARENT_FLOW = """\
+schema: napflow/v1
+flow: {name: parent}
+nodes:
+  - {id: start, type: start}
+  - {id: sub, type: flow, config: {flow: flows/child}}
+  - {id: tail, type: log, config: {label: "saw {{ nodes.sub.done }}"}}
+  - {id: end, type: end, config: {ports: [{name: r, required: false}]}}
+edges:
+  - {from: start.out, to: sub.val}
+  - {from: sub.done, to: tail.in}
+  - {from: tail.out, to: end.r}
+"""
+
+_CHILD_FLOW = """\
+schema: napflow/v1
+flow: {name: child}
+nodes:
+  - {id: start, type: start, config: {ports: [{name: val, default: 1}]}}
+  - {id: end, type: end, config: {ports: [{name: done, required: false}]}}
+edges:
+  - {from: start.val, to: end.done}
+"""
+
+
+def _write_flow(ws: Workspace, identity: str, content: str) -> None:
+    directory = ws.root / identity
+    directory.mkdir(parents=True)
+    (directory / "flow.yaml").write_text(content, encoding="utf-8")
+
+
+def test_flow_detail_template_refs_and_used_by(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    _write_flow(ws, "flows/parent", _PARENT_FLOW)
+    _write_flow(ws, "flows/child", _CHILD_FLOW)
+
+    async def scenario(client):
+        parent = await _flow_detail(client, "flows/parent")
+        # ghost-wire data: tail's label reaches into sub's output
+        assert parent["template_refs"] == {"tail": ["sub"]}
+        assert parent["used_by"] == []
+
+        child = await _flow_detail(client, "flows/child")
+        assert child["template_refs"] == {}
+        assert child["used_by"] == [{"identity": "flows/parent", "nodes": ["sub"]}]
+
+    with_client(ws, scenario)
+
+
+def test_clone_flow_forks_the_folder(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        response = await client.post(
+            "/api/flows/clone",
+            content=JSONContent({"source": "flows/smoke", "dest": "flows/smoke_copy"}),
+        )
+        assert response.status == 201, await response.text()
+        assert (await response.json())["identity"] == "flows/smoke_copy"
+        # the FOLDER forks (D09): nodes.py travels with flow.yaml
+        assert (ws.root / "flows/smoke_copy/flow.yaml").is_file()
+        assert (ws.root / "flows/smoke_copy/nodes.py").is_file()
+        listed = await client.get("/api/flows")
+        identities = [f["identity"] for f in (await listed.json())["flows"]]
+        assert "flows/smoke_copy" in identities
+
+    with_client(ws, scenario)
+
+
+def test_clone_flow_rejections(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        async def clone(source, dest):
+            return await client.post(
+                "/api/flows/clone",
+                content=JSONContent({"source": source, "dest": dest}),
+            )
+
+        assert (await clone("flows/nope", "flows/copy")).status == 404
+        # dest collides with an existing folder: the second clone loses
+        assert (await clone("flows/smoke", "flows/copy")).status == 201
+        assert (await clone("flows/smoke", "flows/copy")).status == 409
+        # cloning onto the source itself is a bad request, not a collision
+        assert (await clone("flows/smoke", "flows/smoke")).status == 400
+        # dest outside flows.root would be invisible to discovery
+        assert (await clone("flows/smoke", "elsewhere/copy")).status == 400
+        # dest nested inside source would recurse the copy
+        assert (await clone("flows/smoke", "flows/smoke/inner")).status == 400
+        # identity escapes rejected on both ends
+        assert (await clone("../smoke", "flows/copy")).status == 400
+        assert (await clone("flows/smoke", "flows/../../out")).status == 400
+        bad_body = await client.post(
+            "/api/flows/clone", content=JSONContent({"source": "flows/smoke"})
+        )
+        assert bad_body.status == 400
+
+    with_client(ws, scenario)
+
+
+# --------------------------------------------------------------------------
 # WebSocket (D13: frames identical to JSONL lines)
 
 

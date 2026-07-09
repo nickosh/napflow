@@ -1,7 +1,12 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 
 import { portColor } from "../colors";
-import type { CanvasNode, PortHandle } from "../graph";
+import {
+  GHOST_SOURCE_HANDLE,
+  GHOST_TARGET_HANDLE,
+  type CanvasNode,
+  type PortHandle,
+} from "../graph";
 import { preview, type NodeRunState, type PortTraffic } from "../runview";
 import { useAppStore } from "../store";
 
@@ -160,6 +165,27 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
       {run != null && run.lastSeq >= 0 && (
         // one-shot flash per event touching this node — remount replays
         <div key={run.lastSeq} className="napf-node-flash" />
+      )}
+      {/* node-level anchors for ghost-wires (FR-1007) — invisible,
+          never connectable, and rendered only when a ghost edge needs
+          them (template references name nodes, not ports) */}
+      {data.ghostSource && (
+        <Handle
+          id={GHOST_SOURCE_HANDLE}
+          type="source"
+          position={Position.Right}
+          isConnectable={false}
+          style={{ opacity: 0, pointerEvents: "none", top: "50%" }}
+        />
+      )}
+      {data.ghostTarget && (
+        <Handle
+          id={GHOST_TARGET_HANDLE}
+          type="target"
+          position={Position.Left}
+          isConnectable={false}
+          style={{ opacity: 0, pointerEvents: "none", top: "50%" }}
+        />
       )}
       <div
         style={{

@@ -114,6 +114,44 @@ edges:
   - {from: "verify.passed", to: "end.ok"}
   - {from: "verify.failed", to: "end.not_ok"}
 `;
+// flows/parent + flows/child — the subflow e2e's pair (S4/M6, FR-1007):
+// drill-in, "used in N places", and the clone action. subflow.spec OWNS
+// both (the clone test repoints parent.sub) — no other spec may touch
+// them (the flows/smoke race lesson, 2026-07-08).
+const PARENT_FLOW = `schema: "napflow/v1"
+flow: {name: "parent"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "sub", type: "flow", config: {flow: "flows/child"}}
+  - {id: "end", type: "end", config: {ports: [{name: "done", required: false}]}}
+edges:
+  - {from: "start.out", to: "sub.val"}
+  - {from: "sub.done", to: "end.done"}
+`;
+const CHILD_FLOW = `schema: "napflow/v1"
+flow: {name: "child"}
+nodes:
+  - {id: "start", type: "start", config: {ports: [{name: "val", default: 1}]}}
+  - {id: "end", type: "end", config: {ports: [{name: "done", required: false}]}}
+edges:
+  - {from: "start.val", to: "end.done"}
+`;
+// flows/ghostcase — a cross-node template reference (two's label reads
+// one's output) renders as a ghost-wire; distinct from the real wires
+const GHOSTCASE_FLOW = `schema: "napflow/v1"
+flow: {name: "ghostcase"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "one", type: "log", config: {label: "one"}}
+  - id: "two"
+    type: "log"
+    config: {label: "saw {{ nodes.one.out }}"}
+  - {id: "end", type: "end", config: {ports: [{name: "done", required: false}]}}
+edges:
+  - {from: "start.out", to: "one.in"}
+  - {from: "start.out", to: "two.in"}
+  - {from: "two.out", to: "end.done"}
+`;
 // flows/slow — a 30s delay so the abort e2e has something running to
 // abort (delay is exempt from the max_seconds default, D24)
 const SLOW_FLOW = `schema: "napflow/v1"
@@ -133,6 +171,9 @@ for (const [name, content] of [
   ["typed", TYPED_FLOW],
   ["hint", HINT_FLOW],
   ["failcase", FAILCASE_FLOW],
+  ["parent", PARENT_FLOW],
+  ["child", CHILD_FLOW],
+  ["ghostcase", GHOSTCASE_FLOW],
   ["slow", SLOW_FLOW],
 ]) {
   mkdirSync(join(workspace, "flows", name));

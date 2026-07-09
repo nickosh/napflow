@@ -58,6 +58,10 @@ export type FlowModel = {
   layout?: Record<string, [number, number]> | null;
 };
 
+/** One "used in N places" entry (D09): a flow whose listed nodes
+ * reference this one. */
+export type UsedBy = { identity: string; nodes: string[] };
+
 export type FlowDetail = {
   identity: string;
   flow: FlowModel;
@@ -68,6 +72,9 @@ export type FlowDetail = {
   // nodes.py function names (AST-derived, EC14); null = missing/broken file
   functions: string[] | null;
   ports: Record<string, PortSurfacePayload>;
+  // subflow UX (S4/M6, FR-1007): ghost-wire refs per node + D09 usage
+  template_refs: Record<string, string[]>;
+  used_by: UsedBy[];
 };
 
 export type SavedFlow = {
@@ -259,6 +266,30 @@ export async function startRun(
     throw new ApiError(message, response.status, diagnostics);
   }
   return (await response.json()) as StartedRun;
+}
+
+/** D09's "Clone to new flow…": fork the source flow's folder to a new
+ * identity under flows.root. 409 = dest already exists. */
+export async function cloneFlow(
+  source: string,
+  dest: string,
+): Promise<{ identity: string }> {
+  const response = await fetch("/api/flows/clone", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, dest }),
+  });
+  if (!response.ok) {
+    let message = `clone failed: HTTP ${response.status}`;
+    try {
+      const body = (await response.json()) as { message?: string };
+      if (body.message) message = body.message;
+    } catch {
+      // non-JSON error body — keep the generic message
+    }
+    throw new ApiError(message, response.status, []);
+  }
+  return (await response.json()) as { identity: string };
 }
 
 export async function listRuns(flow: string): Promise<RunListEntry[]> {

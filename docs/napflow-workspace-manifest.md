@@ -263,6 +263,21 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   poll target; FR-1004's v1 shape is polling (~2s), not a native FS
   watcher: external change while the canvas is clean ⇒ silent reload;
   while dirty ⇒ the PUT's 409 raises the reload/overwrite prompt.
+- **Subflow UX** (S4/M6, FR-1007): the flow-detail payload also carries
+  `template_refs: {node: [node_ids]}` — cross-node `nodes.<id>`
+  references, AST-derived (the same Jinja2 parse E009 runs) from
+  `{{ }}`/`{% %}` config strings and bare expression fields, filtered
+  to ids that exist in the flow; the canvas draws these as ghost-wires
+  — and `used_by: [{identity, nodes}]` — flows whose flow/loop nodes
+  reference this one, D09's "used in N places" (a place = a
+  referencing node). `POST /api/flows/clone` `{source, dest}` → 201
+  `{identity}`: forks the flow FOLDER verbatim (flow.yaml + nodes.py +
+  anything else in it — D09's explicit "Clone to new flow…"). Guards:
+  both identities `_safe_identity`-checked (400), dest must sit under
+  `flows.root` (a clone discovery can't see would be invisible in the
+  sidebar and `napf list` — 400), must not be or nest inside the
+  source (400), and must not already exist (409 `dest_exists`);
+  unknown source 404.
 - **WebSocket** `/ws/runs/{run_id}`: text frames are the JSONL lines
   VERBATIM (one `encode_record` — identical by construction, D13).
   Live run: replay the buffered prefix, then stream; server closes

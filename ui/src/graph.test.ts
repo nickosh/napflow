@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { FlowDetail } from "./api";
 import { PORT_TYPE_COLORS } from "./colors";
-import { freshNodeId, toGraph, typeMismatch } from "./graph";
+import {
+  GHOST_SOURCE_HANDLE,
+  GHOST_TARGET_HANDLE,
+  drillTarget,
+  freshNodeId,
+  toGraph,
+  typeMismatch,
+} from "./graph";
 
 function detail(overrides: Partial<FlowDetail> = {}): FlowDetail {
   // shaped like flows/smoke from `napf init` (fixture→python→assert)
@@ -41,6 +48,8 @@ function detail(overrides: Partial<FlowDetail> = {}): FlowDetail {
       },
       end: { inputs: { summary: "any" }, outputs: {}, required_inputs: ["summary"], growable: false },
     },
+    template_refs: {},
+    used_by: [],
     ...overrides,
   };
 }
@@ -124,6 +133,34 @@ describe("toGraph", () => {
     });
   });
 
+  it("draws ghost-wires from template refs, view-only (FR-1007)", () => {
+    const d = detail({
+      template_refs: { summarize: ["users"] },
+    });
+    const { edges } = toGraph(d);
+    const ghost = edges.find((e) => e.id === "ghost:users→summarize")!;
+    expect(ghost).toMatchObject({
+      source: "users",
+      sourceHandle: GHOST_SOURCE_HANDLE,
+      target: "summarize",
+      targetHandle: GHOST_TARGET_HANDLE,
+      selectable: false,
+      deletable: false,
+    });
+    // no data: the deletion mapping and run-mode wire clicks skip it
+    expect(ghost.data).toBeUndefined();
+    expect(ghost.style?.strokeDasharray).toBeTruthy();
+  });
+
+  it("skips ghost refs to self and to locally-deleted nodes", () => {
+    const d = detail({
+      // `gone` was deleted locally; template_refs lag until refetch
+      template_refs: { summarize: ["summarize", "gone"], gone: ["users"] },
+    });
+    const { edges } = toGraph(d);
+    expect(edges.filter((e) => e.id.startsWith("ghost:"))).toEqual([]);
+  });
+
   it("attaches diagnostic counts to their nodes", () => {
     const d = detail({
       diagnostics: [
@@ -167,6 +204,25 @@ describe("typeMismatch", () => {
     // undefined = undeclared = any
     expect(typeMismatch(undefined, "number")).toBe(false);
     expect(typeMismatch("list", undefined)).toBe(false);
+  });
+});
+
+describe("drillTarget", () => {
+  it("resolves flow/loop references, statically-known only", () => {
+    expect(
+      drillTarget({ nodeType: "flow", config: { flow: "flows/login" } }),
+    ).toBe("flows/login");
+    expect(
+      drillTarget({ nodeType: "loop", config: { body: "flows/item" } }),
+    ).toBe("flows/item");
+    // templated targets resolve at run time — nothing to drill into
+    expect(
+      drillTarget({ nodeType: "flow", config: { flow: "{{ inputs.f }}" } }),
+    ).toBeNull();
+    expect(drillTarget({ nodeType: "flow", config: null })).toBeNull();
+    expect(
+      drillTarget({ nodeType: "request", config: { url: "http://x" } }),
+    ).toBeNull();
   });
 });
 

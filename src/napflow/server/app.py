@@ -10,6 +10,7 @@ semantics (gate, env, masking) via core/runprep.py.
 import ast
 import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,8 @@ from napflow.core.checker import (
     diagnostics_from_load_error,
     node_surfaces,
     python_functions,
+    template_refs,
+    used_by,
 )
 from napflow.core.events import encode_record
 from napflow.core.loader import (
@@ -299,6 +302,15 @@ def build_app(workspace: Workspace) -> Application:
                     )
                     for node_id, surface in surfaces.items()
                 },
+                # subflow UX (S4/M6, FR-1007): ghost-wire endpoints per
+                # node, and D09's "used in N places" for this flow
+                "template_refs": template_refs(loaded.model),
+                "used_by": [
+                    {"identity": flow_id, "nodes": node_ids}
+                    for flow_id, node_ids in sorted(
+                        used_by(workspace, identity).items()
+                    )
+                ],
             }
         )
 
@@ -448,6 +460,44 @@ def build_app(workspace: Workspace) -> Application:
                 "code_etag": _etag(flow_dir / "nodes.py"),
             }
         )
+
+    @router.post("/api/flows/clone")
+    async def clone_flow(request: Request) -> Response:
+        """D09's explicit "Clone to new flow…": fork the flow FOLDER
+        (flow.yaml + nodes.py + anything else in it) to a new identity.
+        The dest must live under flows.root — a clone discovery can't
+        see would be invisible in the sidebar and `napf list`."""
+        body = await _json_object(request)
+        if (
+            body is None
+            or not isinstance(body.get("source"), str)
+            or not isinstance(body.get("dest"), str)
+        ):
+            return _bad_request('body must be {"source": "flows/…", "dest": "flows/…"}')
+        source = _safe_identity(body["source"])
+        dest = _safe_identity(body["dest"])
+        if source is None or dest is None:
+            return _bad_request("flow identity escapes the workspace")
+        source_dir = root / Path(source)
+        dest_dir = root / Path(dest)
+        if not (source_dir / "flow.yaml").is_file():
+            return json_response(
+                {"error": "flow_not_found", "message": f"no flow at {source!r}"},
+                status=404,
+            )
+        if not dest_dir.is_relative_to(workspace.flows_root):
+            return _bad_request(
+                f"dest must live under {manifest.flows.root!r} to be discoverable"
+            )
+        if dest_dir == source_dir or dest_dir.is_relative_to(source_dir):
+            return _bad_request("dest must not be the source or inside it")
+        if dest_dir.exists():
+            return json_response(
+                {"error": "dest_exists", "message": f"{dest!r} already exists"},
+                status=409,
+            )
+        shutil.copytree(source_dir, dest_dir)
+        return json_response({"identity": dest}, status=201)
 
     @router.post("/api/runs")
     async def post_run(request: Request) -> Response:

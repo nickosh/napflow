@@ -58,6 +58,7 @@ type AppState = {
   graphVersion: number; // bump = Canvas rebuilds xyflow state from detail
   interacting: boolean; // a drag is live — hold off external reloads
   load: () => Promise<void>;
+  refreshFlows: () => Promise<void>;
   openFlow: (identity: string, opts?: { push?: boolean }) => Promise<void>;
   selectNode: (id: string | null) => void;
   // canvas edit actions — every one mutates detail.flow then autosaves
@@ -321,6 +322,15 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       } catch (e) {
         set({ error: e instanceof Error ? e.message : String(e) });
+      }
+    },
+
+    refreshFlows: async () => {
+      // sidebar-only refetch (a clone just landed a new folder)
+      try {
+        set({ flows: await fetchFlows() });
+      } catch {
+        // transient — the list simply stays as it was
       }
     },
 

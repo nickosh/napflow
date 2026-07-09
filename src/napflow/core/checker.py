@@ -37,6 +37,7 @@ from napflow.core.models import (
 from napflow.core.templating import (
     create_environment,
     expression_syntax_error,
+    referenced_nodes,
     template_syntax_error,
 )
 from napflow.core.workspace import EnvFileError, Workspace, parse_env_file
@@ -764,6 +765,57 @@ def node_surfaces(
     (broken reference; E008 is reported by the checks, not here)."""
     resolver = _SurfaceResolver(workspace)
     return {node.id: resolver.surface(node, flow_dir) for node in model.nodes}
+
+
+def template_refs(model: FlowFile) -> dict[str, list[str]]:
+    """Cross-node template references per node id (FR-1007): `nodes.<id>`
+    in `{{ }}`/`{% %}` config strings and in bare expression fields,
+    AST-derived like E009's parse. Only ids that exist in this flow
+    count, and nodes without references are omitted — the canvas draws
+    these as ghost-wires (flow-schema §Templating)."""
+    env = create_environment()
+    ids = {node.id for node in model.nodes}
+    out: dict[str, list[str]] = {}
+    for node in model.nodes:
+        config = node.model_dump(mode="json").get("config")
+        if not isinstance(config, dict):
+            continue
+        refs: set[str] = set()
+        for loc, value in _walk(config, ("config",)):
+            if not isinstance(value, str):
+                continue
+            if loc[-1] in _EXPR_FIELDS:
+                refs |= referenced_nodes(env, value, expression=True)
+            elif "{{" in value or "{%" in value:
+                refs |= referenced_nodes(env, value)
+        found = sorted(refs & ids)
+        if found:
+            out[node.id] = found
+    return out
+
+
+def used_by(workspace: Workspace, identity: str) -> dict[str, list[str]]:
+    """Flows whose flow/loop nodes reference `identity`, with the
+    referencing node ids — D09's "used in N places" (a place = a
+    referencing node). Discovered flows only; unloadable flows are
+    skipped (they carry their own E-codes)."""
+    users: dict[str, list[str]] = {}
+    for ref in workspace.discover_flows():
+        if ref.identity == identity:
+            continue  # a self-reference is E007's problem, not a "use"
+        try:
+            model = load_flow(ref.file).model
+        except LoadError:
+            continue
+        using = [
+            node.id
+            for node in model.nodes
+            if (isinstance(node, FlowNode) and node.config.flow == identity)
+            or (isinstance(node, LoopNode) and node.config.body == identity)
+        ]
+        if using:
+            users[ref.identity] = using
+    return users
 
 
 def python_functions(flow_dir: Path) -> list[str] | None:

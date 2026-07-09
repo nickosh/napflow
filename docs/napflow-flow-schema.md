@@ -437,6 +437,14 @@ the reference; explicit "Clone to new flow…" forks the folder; outer
 ports derived from target's Start/End; "used in N places" shown on
 drill-in; drill-in is pure navigation.
 
+UX pins (S4/M6): "Clone to new flow…" on a flow/loop node forks the
+TARGET's folder and repoints that one node at the clone — the escape
+hatch from shared-reference semantics; every other user of the original
+keeps it untouched (owner-confirmed 2026-07-09). Drill-in (double-click
+or the inspector) and clone need a statically-known target — a
+templated `flow:`/`body:` resolves at run time only, same rule as
+E007's static-DAG scan.
+
 **Implicit `error` port (D21):** every flow node exposes an `error`
 output that fires when the child frame ends `failed`/`error`, carrying a
 summary `{state, failed_asserts, unhandled_errors}` — so a parent can
@@ -478,7 +486,10 @@ variables are **not** a synchronization primitive.
 `{{ env.* }}`, `{{ inputs.* }}`, `{{ run.* }}`,
 `{{ nodes.<id>.<port>... }}` in any string config field, including
 `defaults.request` (which sees only `env`/`run` — see manifest).
-Cross-node template references render as ghost-wires.
+Cross-node template references render as ghost-wires — drawn node-to-
+node (references name nodes, not ports), dashed and view-only, for ids
+that exist in the flow (extraction is the same Jinja2 AST parse E009
+runs, so string literals never false-positive).
 
 Envelope asymmetry (EC12): `trigger` is the full `{value, meta}` envelope
 — reach into it as `trigger.value.…`; `nodes.<id>.<port>` is the

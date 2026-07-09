@@ -4,6 +4,23 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-09 — S4/M6 subflow UX (FR-1007)
+
+- Done: ghost-wires (`templating.referenced_nodes` Jinja2-AST
+  extraction → flow-detail `template_refs` → dashed view-only edges;
+  invisible anchors render only where needed — a stray handle broke
+  the E004 e2e's `.react-flow__handle-right` locator), drill-in
+  (double-click / inspector; `zoomOnDoubleClick` off), "used in N
+  places" (`used_by` server-side, links on the flow-header inspector),
+  clone-to-new-flow (`POST /api/flows/clone` folder fork + node
+  repoint, D31). 318 pytest + 31 Vitest + 32 Playwright green
+  (`subflow.spec.ts` owns flows/parent/child/ghostcase).
+- Decided: D31 (clone repoints the invoking node; the owner's "pack
+  selection to new flow" reading became backlog R5 — extract-to-
+  subflow is a different feature needing its own design pass).
+- Next: stage close — 0.1.0.dev4, 3-OS CI sweep, then the
+  manual-testing window and the v0.1.0 promotion path (RELEASING).
+
 ## 2026-07-09 — S4/M5.5 run-mode inspection polish
 
 - Done: all four M5.5 items, pure UI over existing events — port

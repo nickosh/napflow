@@ -13,6 +13,8 @@ from napflow.core.templating import (
     TemplateEvaluationError,
     TypeCoercionError,
     coerce_value,
+    create_environment,
+    referenced_nodes,
     stringify_native,
 )
 from napflow.core.workspace import layer_env
@@ -249,3 +251,45 @@ def test_layer_env_process_only_key_visible():
 def test_layer_env_defaults_to_os_environ(monkeypatch):
     monkeypatch.setenv("NAPFLOW_TEST_LAYER", "os")
     assert layer_env({})["NAPFLOW_TEST_LAYER"] == "os"
+
+
+# --------------------------------------------------------------------------
+# Ghost-wire extraction (S4/M6, FR-1007): `nodes.<id>` references
+
+
+@pytest.fixture
+def env():
+    return create_environment()
+
+
+def test_referenced_nodes_attribute_chain(env):
+    # only the base of the chain names a node — deeper attrs are payload
+    source = "{{ inputs.base }}/job/{{ nodes.create.response.body.id }}"
+    assert referenced_nodes(env, source) == {"create"}
+
+
+def test_referenced_nodes_subscript_form(env):
+    assert referenced_nodes(env, '{{ nodes["create"].response }}') == {"create"}
+
+
+def test_referenced_nodes_multiple_and_tags(env):
+    source = "{% if nodes.check.response %}{{ nodes.create.out }}{% endif %}"
+    assert referenced_nodes(env, source) == {"check", "create"}
+
+
+def test_referenced_nodes_expression_field(env):
+    expr = "nodes.create.response.body.state == trigger.value.state"
+    assert referenced_nodes(env, expr, expression=True) == {"create"}
+
+
+def test_referenced_nodes_ignores_other_names(env):
+    # `nodes` must be the context variable itself, not an attribute or
+    # a string literal that happens to contain "nodes."
+    source = "{{ trigger.value.nodes.x }} {{ 'nodes.y' }} {{ env.nodes }}"
+    assert referenced_nodes(env, source) == set()
+
+
+def test_referenced_nodes_syntax_error_is_empty(env):
+    # E009 owns reporting broken templates — extraction stays silent
+    assert referenced_nodes(env, "{{ nodes.create.") == set()
+    assert referenced_nodes(env, "nodes.create ==", expression=True) == set()

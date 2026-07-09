@@ -305,9 +305,18 @@ harness lands M2, suite grows M3–M6).
         (per-port last values, log history, request summary, firing
         count) instead of disappearing entirely; no selection shows
         the run summary.
-- [ ] **M6 — subflow UX + stage close**: drill-in navigation, "used in
-      N places", clone-to-new-flow, ghost-wires for cross-node template
-      references; 3-OS DoD sweep; version 0.1.0.dev4. (FR-1007)
+- [x] **M6 — subflow UX + stage close** (landed 2026-07-09): drill-in
+      (double-click / inspector button on flow+loop nodes; pure
+      navigation, popstate returns; statically-known targets only),
+      "used in N places" (`used_by` in the flow-detail payload, links
+      on the flow-header inspector), clone-to-new-flow
+      (`POST /api/flows/clone` folder fork + the invoking node
+      repoints to the clone — D31), ghost-wires
+      (`templating.referenced_nodes` Jinja2-AST extraction →
+      `template_refs` → dashed view-only edges with conditional
+      invisible anchors). Playwright grew `subflow.spec.ts` (owns
+      flows/parent+child+ghostcase). 3-OS DoD sweep + 0.1.0.dev4 in
+      the stage-close commit. (FR-1007)
 
 S4 → release path (owner call 2026-07-08): `0.1.0.dev4` at stage
 close, a manual-testing window on the dev4 checkpoint, then the SAME
@@ -349,6 +358,13 @@ PRODUCT roadmap.
    truncated markers, like body capture). Defaults picked from
    measuring real flows first (message budget 100k bounds the worst
    case — exactly why it's opt-in).
+5. **R5 — pack selection to new flow** (adopted 2026-07-09, D31):
+   extract-to-subflow refactoring — selected nodes + wires move into a
+   new flow folder, replaced by a single flow node, boundary wires
+   becoming Start/End ports. Needs its own design pass: boundary-port
+   inference, edge rewriting, splitting nodes.py between folders, and
+   fixing up cross-cut `{{ nodes.* }}` refs and set/get variables.
+   NOT the same thing as D09's clone (which shipped at S4/M6).
 
 ## Working agreements
 

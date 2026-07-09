@@ -29,7 +29,7 @@ import RunInspector from "./components/RunInspector";
 import RunPanel from "./components/RunPanel";
 import SaveStatus from "./components/SaveStatus";
 import { PALETTE_DRAG_TYPE } from "./forms";
-import { toGraph, type CanvasNode } from "./graph";
+import { drillTarget, toGraph, type CanvasNode } from "./graph";
 import { ETAG_POLL_MS, useAppStore } from "./store";
 
 const nodeTypes = { napflow: FlowNode };
@@ -48,6 +48,7 @@ function Canvas() {
     addNode,
     setInteracting,
     selectRunTraffic,
+    openFlow,
   } = useAppStore();
   // run mode (S4/M5): the canvas locks editing and animates instead —
   // clicks still select (they filter the event stream)
@@ -164,6 +165,7 @@ function Canvas() {
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
+        zoomOnDoubleClick={false} // double-click means drill-in (M6)
         nodesDraggable={!inRunMode}
         nodesConnectable={!inRunMode}
         onNodesChange={onNodesChange}
@@ -175,6 +177,12 @@ function Canvas() {
           moveNode(node.id, Math.round(node.position.x), Math.round(node.position.y));
         }}
         onNodeClick={(_event, node) => selectNode(node.id)}
+        onNodeDoubleClick={(_event, node) => {
+          // drill-in (FR-1007, D09): pure navigation into the
+          // referenced flow; browser back returns (popstate)
+          const target = drillTarget(node.data);
+          if (target !== null) void openFlow(target);
+        }}
         onEdgeClick={(_event, edge) => {
           // run mode: a wire click lists its crossed messages (M5.5)
           if (inRunMode && edge.data) {

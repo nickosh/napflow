@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from napflow.core.checker import check_workspace
+from napflow.core.checker import check_workspace, template_refs, used_by
 from napflow.core.workspace import load_workspace
 
 # --------------------------------------------------------------------------
@@ -496,3 +496,97 @@ def test_severity_split() -> None:
     e = CheckDiagnostic(code="E003", message="m", path=Path("f"), hint="h")
     w = CheckDiagnostic(code="W101", message="m", path=Path("f"), hint="h")
     assert e.severity == "error" and w.severity == "warning"
+
+
+# --------------------------------------------------------------------------
+# Subflow UX data (S4/M6, FR-1007): ghost-wire refs + "used in N places"
+
+
+def test_template_refs_templates_and_expr_fields(tmp_path: Path) -> None:
+    # the retry-example shape: check_job's url reaches back to create's
+    # output; is_ready's bare expr references check_job
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: create, type: request, config: {url: 'http://x/job'}}\n"
+        "  - id: check_job\n"
+        "    type: request\n"
+        "    config: {url: 'http://x/job/{{ nodes.create.response.body.id }}'}\n"
+        "  - id: is_ready\n"
+        "    type: condition\n"
+        "    config: {expr: \"nodes.check_job.response.body.state == 'done'\"}\n"
+        "  - {id: end, type: end, config: {ports: [{name: r, required: false}]}}\n",
+        "  - {from: start.out, to: create.trigger}\n"
+        "  - {from: create.response, to: check_job.trigger}\n"
+        "  - {from: check_job.response, to: is_ready.in}\n"
+        "  - {from: is_ready.true, to: end.r}\n",
+    )
+    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow})
+    refs = template_refs(ws.load_flow("flows/t").model)
+    assert refs == {"check_job": ["create"], "is_ready": ["check_job"]}
+
+
+def test_template_refs_unknown_ids_dropped(tmp_path: Path) -> None:
+    # `nodes.ghost` names no node in this flow — nothing to draw
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: l, type: log, config: {label: '{{ nodes.ghost.out }}'}}\n"
+        "  - {id: end, type: end, config: {ports: [{name: r, required: false}]}}\n",
+        "  - {from: start.out, to: l.in}\n  - {from: l.out, to: end.r}\n",
+    )
+    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow})
+    assert template_refs(ws.load_flow("flows/t").model) == {}
+
+
+PARENT_FLOW = """\
+schema: napflow/v1
+flow: {name: parent}
+nodes:
+  - {id: start, type: start}
+  - {id: sub, type: flow, config: {flow: flows/child}}
+  - {id: again, type: flow, config: {flow: flows/child}}
+  - id: each
+    type: loop
+    config: {body: flows/child, over: "[1, 2]"}
+  - {id: end, type: end, config: {ports: [{name: r, required: false}]}}
+edges:
+  - {from: start.out, to: sub.val}
+  - {from: sub.done, to: again.val}
+  - {from: again.done, to: each.trigger}
+  - {from: each.results, to: end.r}
+"""
+
+CHILD_FLOW = """\
+schema: napflow/v1
+flow: {name: child}
+nodes:
+  - id: start
+    type: start
+    config: {ports: [{name: val, default: 1}, {name: item, default: 0}]}
+  - {id: end, type: end, config: {ports: [{name: done, required: false}]}}
+edges:
+  - {from: start.val, to: end.done}
+"""
+
+
+def test_used_by_counts_referencing_nodes(tmp_path: Path) -> None:
+    ws = make_ws(
+        tmp_path,
+        {
+            "flows/parent/flow.yaml": PARENT_FLOW,
+            "flows/child/flow.yaml": CHILD_FLOW,
+        },
+    )
+    # flow nodes AND loop bodies count; node ids name the exact places
+    assert used_by(ws, "flows/child") == {"flows/parent": ["sub", "again", "each"]}
+    assert used_by(ws, "flows/parent") == {}
+
+
+def test_used_by_skips_unloadable_flows(tmp_path: Path) -> None:
+    ws = make_ws(
+        tmp_path,
+        {
+            "flows/child/flow.yaml": CHILD_FLOW,
+            "flows/broken/flow.yaml": "nodes: [unclosed\n",
+        },
+    )
+    assert used_by(ws, "flows/child") == {}

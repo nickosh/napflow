@@ -20,6 +20,11 @@ export type CanvasNodeData = {
   outputs: PortHandle[];
   errors: number;
   warnings: number;
+  // ghost-wire anchors (M6): rendered ONLY when a ghost edge needs
+  // them — a stray invisible handle would double up xyflow's
+  // .react-flow__handle-* classes on every node
+  ghostSource: boolean;
+  ghostTarget: boolean;
   [key: string]: unknown; // xyflow's Node data must be a Record
 };
 
@@ -122,6 +127,31 @@ export function typeMismatch(
   return ta !== "any" && tb !== "any" && ta !== tb;
 }
 
+// invisible node-level handles ghost-wires attach to (FlowNode renders
+// them; template references name nodes, not ports)
+export const GHOST_SOURCE_HANDLE = "__ghost_out";
+export const GHOST_TARGET_HANDLE = "__ghost_in";
+
+/** The flow a flow/loop node references, when it is statically known —
+ * drill-in and clone targets. Templated references resolve at run time
+ * only (same rule as E007's static-DAG scan), so they return null. */
+export function drillTarget(data: {
+  nodeType: string;
+  config: Record<string, unknown> | null;
+}): string | null {
+  const key =
+    data.nodeType === "flow"
+      ? "flow"
+      : data.nodeType === "loop"
+        ? "body"
+        : null;
+  if (key === null) return null;
+  const target = data.config?.[key];
+  return typeof target === "string" && target !== "" && !target.includes("{{")
+    ? target
+    : null;
+}
+
 /** A unique node id for the palette: type, type2, type3, ... (E011). */
 export function freshNodeId(flow: FlowModel, type: string): string {
   const taken = new Set(flow.nodes.map((n) => n.id));
@@ -143,6 +173,20 @@ export function toGraph(detail: FlowDetail): {
     }
   }
 
+  // ghost-wire pairs (FR-1007): cross-node template references, drawn
+  // from the referenced node to the reader. The model can drift ahead
+  // of template_refs between autosave refetches, so refs naming a
+  // locally-deleted node are skipped.
+  const nodeIds = new Set(detail.flow.nodes.map((n) => n.id));
+  const ghostPairs: { source: string; target: string }[] = [];
+  for (const [reader, refs] of Object.entries(detail.template_refs ?? {})) {
+    if (!nodeIds.has(reader)) continue;
+    for (const source of refs) {
+      if (source === reader || !nodeIds.has(source)) continue;
+      ghostPairs.push({ source, target: reader });
+    }
+  }
+
   const nodes: CanvasNode[] = detail.flow.nodes.map((node) => {
     const placed = detail.flow.layout?.[node.id];
     const diags = byNode.get(node.id) ?? [];
@@ -159,6 +203,8 @@ export function toGraph(detail: FlowDetail): {
         outputs,
         errors: diags.filter((d) => d.severity === "error").length,
         warnings: diags.filter((d) => d.severity === "warning").length,
+        ghostSource: ghostPairs.some((g) => g.source === node.id),
+        ghostTarget: ghostPairs.some((g) => g.target === node.id),
       },
     };
   });
@@ -187,5 +233,25 @@ export function toGraph(detail: FlowDetail): {
     };
   });
 
-  return { nodes, edges };
+  // view-only ghost edges — no `data`, so the deletion mapping and
+  // run-mode wire clicks never see them
+  const ghosts: Edge[] = ghostPairs.map(({ source, target }) => ({
+    id: `ghost:${source}→${target}`,
+    source,
+    sourceHandle: GHOST_SOURCE_HANDLE,
+    target,
+    targetHandle: GHOST_TARGET_HANDLE,
+    selectable: false,
+    deletable: false,
+    focusable: false,
+    className: "napf-ghost-edge",
+    style: {
+      stroke: "#9575cd",
+      strokeWidth: 1.2,
+      strokeDasharray: "6 4",
+      opacity: 0.55,
+    },
+  }));
+
+  return { nodes, edges: [...edges, ...ghosts] };
 }

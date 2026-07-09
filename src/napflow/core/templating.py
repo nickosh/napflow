@@ -30,6 +30,7 @@ from typing import Any
 
 from jinja2 import StrictUndefined, TemplateSyntaxError, UndefinedError, nodes
 from jinja2.nativetypes import NativeCodeGenerator
+from jinja2.parser import Parser
 from jinja2.runtime import Undefined
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -97,6 +98,36 @@ def expression_syntax_error(env: SandboxedEnvironment, expr: str) -> str | None:
     except TemplateSyntaxError as e:
         return e.message or "expression syntax error"
     return None
+
+
+def referenced_nodes(
+    env: SandboxedEnvironment, source: str, *, expression: bool = False
+) -> set[str]:
+    """Node ids referenced as `nodes.<id>` / `nodes["<id>"]` — the
+    ghost-wire extraction (flow-schema §Templating: cross-node template
+    references render as ghost-wires). Same AST parse E009 runs, so no
+    regex false-positives on string literals; a syntax error yields the
+    empty set (E009 owns reporting it)."""
+    tree: nodes.Node
+    try:
+        if expression:
+            # mirror compile_expression's parse — wrapping in `{{ }}`
+            # would misparse expressions containing `}}`
+            tree = Parser(env, source, state="variable").parse_expression()
+        else:
+            tree = env.parse(source)
+    except TemplateSyntaxError:
+        return set()
+    refs: set[str] = set()
+    for ref in tree.find_all((nodes.Getattr, nodes.Getitem)):
+        base = ref.node
+        if not (isinstance(base, nodes.Name) and base.name == "nodes"):
+            continue
+        if isinstance(ref, nodes.Getattr):
+            refs.add(ref.attr)
+        elif isinstance(ref.arg, nodes.Const) and isinstance(ref.arg.value, str):
+            refs.add(ref.arg.value)
+    return refs
 
 
 # --------------------------------------------------------------------------
