@@ -8,12 +8,12 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: pre-alpha.** Stages S1–S3 are complete — the file format,
-validator, CLI, and headless engine (`napf init` / `list` / `check` /
-`run`, full node catalog) work end to end on macOS, Windows, and Linux.
-The S4 visual canvas is being built milestone by milestone: editing and
-saving flows on the canvas works; run-on-canvas and subflow navigation
-are next. See [docs/PLAN.md](docs/PLAN.md).
+**Status: v0.1.0 release candidate.** All four planned stages are
+complete at checkpoint `0.1.0.dev4` — the file format, validator, CLI,
+headless engine (full node catalog), and the visual canvas (edit, run,
+inspect, history) work end to end on macOS, Windows, and Linux. A
+manual-testing pass is running on this checkpoint; the same scope then
+ships as the first tagged release. See [docs/PLAN.md](docs/PLAN.md).
 
 ## Why
 
@@ -38,7 +38,7 @@ are next. See [docs/PLAN.md](docs/PLAN.md).
 | `napf list`  | ✅     | discovered flows with their input/output ports |
 | `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with `file:line` diagnostics and CI exit codes |
 | `napf run`   | ✅     | headless engine — full node catalog incl. python worker, JSONL run history, exit codes 0/1/2/130 |
-| `napf ui`    | 🚧 S4  | local server (API + WebSocket + bundled UI) works; the canvas editor itself is being built milestone by milestone |
+| `napf ui`    | ✅     | visual canvas on localhost — edit flows (autosaved through the canonical serializer, clean diffs), edit `nodes.py` in-browser, run with live animated events + full request/response detail, replay any run from history, drill into subflows, clone shared flows |
 
 ## Try it
 
@@ -47,8 +47,9 @@ Not on PyPI yet — install from git (needs [uv](https://docs.astral.sh/uv/)):
 ```sh
 uv tool install git+https://github.com/nickosh/napflow
 napf init my-flows && cd my-flows
-napf list
 napf check
+napf run flows/smoke   # headless, offline demo flow
+napf ui                # opens the canvas in your browser
 ```
 
 ## What a flow looks like

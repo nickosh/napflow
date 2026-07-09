@@ -4,6 +4,20 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-09 — dev4 wrap-up: README + checklist audit
+
+- Done: README refreshed for the RC state (status paragraph, `napf ui`
+  ✅ row, try-it now runs `napf run flows/smoke` + `napf ui`); v1
+  checklist audited — NFR-05 and TR-7 ticked (oversights: every clause
+  had landed with tests), CHANGELOG left stale-by-design (regenerates
+  in the v0.1.0 release-prep commit, RELEASING).
+- Open: **NFR-08 is the single unticked v1 box** — "overhead
+  negligible vs HTTP" was never measured; candidate for the
+  manual-testing window.
+- Next: owner pushes + 3-OS CI sweep → manual testing on dev4 →
+  release-prep commit (version, `uvx git-cliff --tag v0.1.0`, ticks) →
+  tag v0.1.0 → PR-only workflow from there.
+
 ## 2026-07-09 — S4 stage close: 0.1.0.dev4
 
 - Done: version bumped in the stage-completing commit (RELEASING);
