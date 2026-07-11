@@ -4,6 +4,20 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-11 — release workflow: PyPI trusted publishing + dry-run
+
+- Done: `release.yml` restructured into build → pypi → github-release
+  jobs; automated tag↔version hard gate; `workflow_dispatch` dry-run
+  (build + checks, no publish); `v0.*` Releases auto-marked pre-release
+  (D33). RELEASING.md updated in the same commit.
+- Decided (owner): repo flips public AT the v0.1.0 tag; validation is
+  dry-run only (no TestPyPI rc) — first real publish is v0.1.0 itself.
+- Verified: `napflow` name free on PyPI as of today; trusted publishing
+  needs no repo-visibility change and no tokens.
+- Next: owner PyPI account + pending publisher (`napflow`/`nickosh`/
+  `release.yml`/env `pypi`), push + green dry-run, then release-prep
+  commit → flip public → tag v0.1.0.
+
 ## 2026-07-11 — first-working-version review → v0.2 plan
 
 - Decided (owner): ship v0.1.0 first as the private working milestone;
