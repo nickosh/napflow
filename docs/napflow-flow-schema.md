@@ -8,6 +8,12 @@ default-ceiling scope, run deadline (EC25–EC27, **D24**). Amended
 flagship example corrected (create step added), loop `results` ordering,
 Start-default scope, python optional-input rule (EC28–EC37).
 
+Compatibility note (D33, 2026-07-11): `schema: napflow/v1` remains an
+**experimental marker throughout the package v0.x series**. Breaking
+changes are expected before package v1.0 and v0.x migration support is
+best-effort. The marker becomes a stability/migration promise only when
+the package reaches v1.0.
+
 Changes from v0.3: End ports gain `required:` (default `true` — an
 unreached required port fails the run, **D18**); guard `exhausted`/`expired`
 reclassified as ordinary pass-through outputs, not error ports (**D19**);

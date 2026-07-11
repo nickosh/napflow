@@ -4,6 +4,23 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-11 — first-working-version review → v0.2 plan
+
+- Decided (owner): ship v0.1.0 first as the private working milestone;
+  all v0.x formats, including `napflow/v1`, remain experimental (D33).
+- Decided: v0.2 is the full-fidelity hardening/replay release—store large
+  content once as blobs, preserve raw local truth, redact CI/export,
+  compact runtime frames but reconstruct them from durable events
+  (D34–D36).
+- Decided: keep local security simple—loopback + Host/Origin and one
+  symlink-aware workspace boundary; no remote auth system (D37).
+- Planned: PLAN M0–M7 + FR-11xx/NFR-12–18/TR-11–22; EC09/EC10/EC22/
+  EC27/EC32/EC35/EC38 reopened and EC42–EC51 added. Several accepted
+  limitations now have explicit post-v0.2 closure conditions instead of
+  being called resolved.
+- Next: v0.1 release-prep/version/tag, then v0.2 M0 regression and format
+  baseline before implementation refactors.
+
 ## 2026-07-10 — D32: the stdlib-only worker promise, pinned
 
 - Decided (owner): **D32** — python nodes run in the USER's

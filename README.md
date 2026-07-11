@@ -8,12 +8,15 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: v0.1.0 release candidate.** All four planned stages are
-complete at checkpoint `0.1.0.dev4` — the file format, validator, CLI,
+**Status: v0.1.0 release candidate / developer preview.** All four
+planned stages are complete at checkpoint `0.1.0.dev4` — the file format, validator, CLI,
 headless engine (full node catalog), and the visual canvas (edit, run,
 inspect, history) work end to end on macOS, Windows, and Linux. A
 manual-testing pass is running on this checkpoint; the same scope then
-ships as the first tagged release. See [docs/PLAN.md](docs/PLAN.md).
+ships as the first tagged release. All `v0.x` formats—including the
+current `schema: napflow/v1` marker—are experimental and may change
+before v1.0. The accepted v0.2 full-fidelity/hardening plan is in
+[docs/PLAN.md](docs/PLAN.md) (D33–D37).
 
 ## Why
 
@@ -27,8 +30,9 @@ ships as the first tagged release. See [docs/PLAN.md](docs/PLAN.md).
    (`from napflow.core import ...`).
 4. **CI-first** — headless `napf run` with assert-driven exit codes is a
    first-class citizen, not an afterthought.
-5. **Full observability** — complete request/response detail (headers,
-   bodies, timing, retries) captured in run history.
+5. **Full observability** — request/response detail (headers, bodies,
+   timing, retries) captured in run history; v0.2 removes the remaining
+   destructive capture limits with store-once full-fidelity content.
 
 ## What works today
 
@@ -43,6 +47,11 @@ ships as the first tagged release. See [docs/PLAN.md](docs/PLAN.md).
 ## Try it
 
 Not on PyPI yet — install from git (needs [uv](https://docs.astral.sh/uv/)):
+
+> Known v0.1 source-install limitation: the UI bundle is generated and
+> gitignored, so a clean direct-Git build may serve the placeholder UI.
+> Tagged release artifacts build and include the UI; deterministic Git
+> installation is planned for v0.2 (FR-1113).
 
 ```sh
 uv tool install git+https://github.com/nickosh/napflow

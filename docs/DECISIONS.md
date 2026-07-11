@@ -2,8 +2,10 @@
 
 Why things are the way they are. Date format: 2026-06. D01–D17 decided
 during initial design (June 2026); D18–D22 in the 2026-06-14 edge-case
-review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02. Reversing any
-of these requires understanding the rationale first.
+review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02; D26–D32
+during v0.1 implementation; D33–D37 from the 2026-07-11 v0.2 design
+review. Reversing any of these requires understanding the rationale
+first.
 
 ## D01 — Build new instead of adopting existing tools
 No OSS project combines: node-based API flows + Python processing +
@@ -107,6 +109,14 @@ bodies always stored (valves: 10MB/body, 500MB/run per EC32; truncated
 markers) — explicit user requirement; partial capture rejected. Secrets masked at emission so
 history is shareable by construction (scope precisely defined in D22).
 Logs persisted too.
+
+**v0.2 amendment:** the v0.1 valve implementation does not satisfy the
+word “complete” and EC32 was reopened. D34 supersedes the storage half
+of this decision: large content is stored once as a full-fidelity blob,
+events reference it, and limits are explicit policy rather than silent
+information loss. D35 supersedes “shareable by construction”: the
+canonical local record preserves the real data; redaction belongs at
+presentation/export boundaries.
 
 ## D14 — Quiescence termination with sentinel
 Run ends when in-flight count hits zero; the decrement that reaches zero
@@ -217,6 +227,12 @@ functional output; `napf run flows/login | jq .token` is the documented
 contract, and masking it would break the pipe use case the CLI exists
 for. Pinned in the WM CLI section with a test
 (`test_stdout_unmasked_but_jsonl_masked`).
+
+**Superseded for v0.2 by D35.** This remains the description of v0.1
+behavior, not the target policy. The review found that recursively
+masking the whole event (including keys and protocol fields) can corrupt
+the replay schema, while irreversible masking of the only local record
+conflicts with the owner-prioritized observability promise.
 
 ## D23 — On-disk format is YAML, pinned to a safe, canonical profile
 YAML stays the serialization format for flows and the manifest — but
@@ -430,8 +446,8 @@ delivers real timing — anything else would lie).
 ## D30 — Run debugging: pause is a dispatch gate; breakpoints are runtime wire-holds, never flow-file content
 
 (2026-07-08, owner-confirmed at the M5 planning session. Design
-pinned now so nothing lands in v1 that conflicts; implementation is
-post-v0.1.0 — PLAN "Post-v0.1.0 backlog" R2/R3.)
+pinned now so nothing lands that conflicts; implementation is
+explicitly after v0.2 — PLAN "Explicitly after v0.2" items 1–2.)
 
 **Pause = pause request, not freeze.** The engine cannot safely
 freeze a mid-flight HTTP request, a running python function, or a
@@ -532,7 +548,157 @@ Consequences pinned:
   is committed — a bin/Scripts fallback in `_resolve_interpreter` is a
   fine future issue if mixed-OS teams hit it.
 
+## D33 — The entire v0.x series is experimental; stability begins at v1.0
+
+(2026-07-11, owner decision after the first working-version review.)
+
+`v0.1.0` is intentionally a historical milestone: the first version
+that works end to end, not a declaration that the architecture, flow
+schema, event schema, or public API is stable. Breaking and experimental
+changes are allowed throughout `v0.x.x` when they materially improve
+correctness, observability, or the product model. Release notes must say
+so plainly.
+
+The existing `schema: napflow/v1` marker is also experimental during the
+0.x package series. It identifies the current shape; it does not create
+a compatibility promise before package v1.0. Best-effort migrations are
+welcome, but forward compatibility for v0.1 flow files and histories is
+not guaranteed until formats carry explicit versions and migration
+policy. At v1.0, changing a stable flow schema requires a new
+`napflow/vN` marker or a migration; event-log compatibility receives the
+same treatment.
+
+Rejected: delaying the honest first release until every hardening item
+lands (the owner wants the working milestone recorded); pretending the
+`v1` text already means stable (would constrain the necessary v0.2
+storage and replay redesign).
+
+## D34 — Full-fidelity history stores large content once; replay stays canonical and lazy
+
+(2026-07-11, owner approved after weighing clarity against local
+resource use.)
+
+Data clarity and reliable content are more important than minimizing
+every byte. v0.2 therefore replaces irreversible body truncation with a
+full-fidelity history model:
+
+- JSONL remains append-only and canonical for event order (`seq`),
+  frame/node identity, timing, state, and references. Live WebSocket and
+  replay continue to use the same event vocabulary.
+- Small values stay inline for immediate inspection. Large bodies and
+  payloads are written once to immutable content-addressed blobs;
+  events carry a typed reference with hash, byte size, media type, and
+  encoding. Repeated appearances never duplicate the bytes.
+- Runtime execution values and persisted observation are separate.
+  Moving persisted content into a blob must never silently truncate or
+  change the value delivered through a flow.
+- Local limits are soft by default: warn and expose size, do not silently
+  destroy information. Explicit hard limits remain available for CI or
+  constrained machines, and any omitted content is an explicit event
+  with reason/size/hash—not a plausible-looking prefix.
+- Replay is streamed/paged, blobs load on demand, and disposable offset
+  indexes/summaries may accelerate seeking. JSONL plus blobs remain the
+  source of truth; derived indexes are rebuildable.
+- Retention treats a run atomically: JSONL, blobs, indexes, and reports
+  are one retention unit. A self-contained export bundle (JSONL + blobs
+  + manifest, likely `.napflow-run.zip`) is the sharing surface.
+
+This preserves D13's important invariant—replay is a recording, never
+re-execution—without multiplying one large response across engine,
+server, CLI, browser, and disk memory. Rejected: keeping every large
+value inline; deleting old events from a retained run; UI-only row caps
+that leave server/browser memory unbounded; silent truncation as the
+normal local policy.
+
+## D35 — Preserve raw local truth; redact presentation and exports, never protocol structure
+
+(2026-07-11, owner decision: observability first, masking only where it
+is concretely useful for CI/CD.)
+
+The canonical local history preserves real values and is stored with
+restrictive permissions. Redaction is a view/export concern:
+
+- Event names, schema keys, enums, identifiers, frame/node metadata,
+  and control fields are never rewritten.
+- The local UI may display complete values, with hide/reveal affordances
+  as convenience rather than destructive storage behavior.
+- Terminal presentation, reports, and exported run bundles support a
+  declared-secret redaction policy. CI-oriented output defaults to the
+  safe declared-secret policy; raw export requires an explicit choice.
+- Runtime-acquired secrets may later be registered or selected by field
+  path. Until then, documentation must not claim absolute shareability.
+- Policy is explicit in configuration/CLI, not inferred only from a
+  possibly-surprising `CI` environment variable.
+
+The implementation may temporarily retain the v0.1 behavior while the
+v0.2 format lands, but it must first stop masking dictionary keys and
+protocol fields. Rejected: no masking anywhere (CI logs and artifacts
+often leave the developer's machine); irreversible masking at event
+creation (destroys the only ground truth); encryption/key management in
+v0.2 (overengineering for a local-first developer tool).
+
+## D36 — One run lifecycle owns fairness, cancellation, resources, and frame release
+
+(2026-07-11, accepted v0.2 architecture after adversarial engine
+review.)
+
+Timeouts, aborts, capture bytes, loop concurrency, worker teardown, and
+frame retention are one lifecycle concern, not independent local
+patches. v0.2 introduces an explicit run-lifecycle/resource owner with
+these invariants:
+
+- The pump processes bounded batches and yields cooperatively; every
+  batch checks abort and a monotonic deadline. Tight inline guard/merge
+  cycles cannot starve the event loop or ignore the run deadline.
+- All engine-owned tasks, HTTP sessions, streams, and workers close in
+  `finally`, including external coroutine cancellation.
+- Worker timeout means immediate terminate, then grace, then hard kill;
+  graceful EOF is normal-finalization behavior only. A timed-out worker
+  must not overlap a replacement and commit late side effects.
+- D32 remains intact: the child stays stdlib-only and the wire remains
+  newline-delimited JSON. v0.2 defines and tests an adequate protocol
+  line ceiling/reader limit and routes oversize/malformed messages as
+  worker errors instead of leaking reader exceptions.
+- Parallel loops use a bounded producer/fixed task set, not one task per
+  input. Finished frames emit reconstructable summaries, then release
+  runtime-only state; the durable event tree—not live Python objects—
+  supports future subflow drilldown.
+- Slow subscribers and presentation layers are bounded; durable data is
+  replayed from disk rather than duplicated indefinitely in RAM.
+
+Cooperative yields may slightly reduce pathological in-memory message
+throughput, but batching keeps ordinary overhead negligible and makes
+the server responsive. Measurement follows correctness (v0.2 perf
+suite); it does not justify retaining starvation bugs.
+
+## D37 — Local-only stays simple, but workspace and browser boundaries are explicit
+
+(2026-07-11, owner decision: remote use is possible but far away; do not
+build user/session authentication now.)
+
+v0.2 does not add accounts, OAuth, sessions, a remote deployment mode,
+or a public bind option. It does establish two inexpensive boundaries:
+
+1. A single workspace resolver is the only route from an identity to a
+   flow, subflow, fixture, run log, source file, or clone destination. It
+   validates lexical form, resolves symlinks, enforces containment, and
+   validates run IDs. Entry runs and reads are held to the same boundary
+   as writes.
+2. The server remains loopback-only and validates loopback Host plus
+   same-origin mutation/WebSocket requests. This is request-origin
+   hardening, not a general authentication system. A pluggable auth seam
+   may be added only when remote use becomes real.
+
+Workspaces remain trusted code: running one executes its `nodes.py`.
+Path containment is still required because “trusted workspace” does not
+mean “silently access outside the selected workspace.” Rejected: relying
+on scattered `_safe_identity` calls; capability/user-token machinery in
+v0.2; exposing `0.0.0.0` before a real remote security design exists.
+
 ## Known open risks (watch during implementation)
+- EC09/EC10/EC22/EC27/EC32/EC35/EC38 and EC42–EC51 are open—not
+  “resolved by documentation.” Their ledger rows name v0.2 or
+  post-v0.2 closure conditions; close them only with the stated tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.
 - Ghost-wires for template references — elegant on paper, may be noisy

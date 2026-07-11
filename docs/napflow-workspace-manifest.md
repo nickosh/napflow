@@ -13,6 +13,12 @@ safe profile (D23, `yaml-profile.md`); `napf init` also writes
 `run_capture_mb` valve, `.env` dialect pinned, offline `flows/smoke` as
 the first-touch check (EC28–EC37).
 
+Compatibility/current-state note (D33–D37, 2026-07-11): this is the
+v0.1 manifest behavior. Package v0.x and `schema: napflow/v1` remain
+experimental; v0.2 may replace capture/redaction settings as it moves to
+full-fidelity blobs, soft local limits, and explicit CI/export policy.
+Breaking changes are documented rather than prohibited before v1.0.
+
 ## Full example
 
 ```yaml
@@ -66,7 +72,7 @@ python:
                             # Point at a project venv to enable its
                             # third-party packages in python nodes.
 
-codegen:                    # RESERVED: parsed, unused in v1
+codegen:                    # RESERVED: parsed, unused in current v0.x
   output: generated/
   client_style: niquests
 ```
@@ -148,7 +154,7 @@ the HTTP demo against httpbin (network required); it is deliberately NOT
 the smoke check, so a proxy, a firewall, or httpbin having a bad day
 cannot break a user's first five minutes (nor napflow's own CI).
 
-## CLI surface (v1)
+## CLI surface (v0.1)
 
 ```
 napf init [dir]               scaffold workspace
@@ -202,7 +208,7 @@ nicety: `napf check --write-env-example` to regenerate a committed
 `napf check` is the CI pre-gate: fails fast on broken references before
 anything executes.
 
-## Server surface (v1) — pinned at S4/M1, 2026-07-06
+## Server surface (v0.1) — pinned at S4/M1, 2026-07-06
 
 `napf ui [--port] [--no-browser]` serves UI + API + WebSocket on ONE
 localhost port (D03) and opens the default browser (stdlib
@@ -210,10 +216,17 @@ localhost port (D03) and opens the default browser (stdlib
 THIN adapter: run semantics live in `core/runprep.py`, shared verbatim
 with `napf run` — one gate, one env-resolution rule, one stream wiring.
 
+> **Known v0.1 gaps, reopened for v0.2:** `_safe_identity` protects only
+> selected URL/write paths; entry runs, histories, refs, fixtures, and
+> symlinked parents do not share one resolved-containment policy (EC38).
+> Writes are non-atomic and debounced navigation can lose edits (EC46).
+> D37 + PLAN M1 are authoritative for the replacement boundary; the
+> endpoint list below documents current v0.1 behavior.
+
 - **Port**: default **6273** ("NAPF" on a phone keypad). Taken + no
   explicit `--port` ⇒ scan the next 19 (multiple open workspaces, the
   Jupyter convention). An explicit busy `--port` = error, exit 2.
-- **Bind**: `127.0.0.1` only — never a network service. No auth in v1
+- **Bind**: `127.0.0.1` only — never a network service. No auth in v0.1
   (localhost trust); anything beyond that is out of scope (PRODUCT).
 - **REST** (JSON): `GET /api/workspace` (manifest summary + profiles +
   version) · `GET /api/flows` (structured `napf list`; unloadable
@@ -248,7 +261,7 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   `PUT /api/flows/<identity>` `{flow, base_etag?, force?}` — validate
   the FlowFile JSON (400 `validation` + pydantic diagnostics, nothing
   written) → etag gate (`base_etag` ≠ current ⇒ 409 `{error:
-  "etag_conflict", etag}` unless `force`; last-write-wins is the v1
+  "etag_conflict", etag}` unless `force`; last-write-wins is the v0.1
   conflict ceiling) → `merge_flow_document` into the round-trip doc →
   the ONE canonical serializer (D23). Returns `{identity, etag,
   diagnostics}` — check runs post-save; E-codes gate RUNS, never saves
@@ -260,7 +273,7 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   anyway — the editor never holds user code hostage; broken code
   surfaces as E008 until fixed. PUT creates a missing nodes.py.
   `GET /api/etags/<identity>` → `{identity, etag, code_etag}` — cheap
-  poll target; FR-1004's v1 shape is polling (~2s), not a native FS
+  poll target; FR-1004's v0.1 shape is polling (~2s), not a native FS
   watcher: external change while the canvas is clean ⇒ silent reload;
   while dirty ⇒ the PUT's 409 raises the reload/overwrite prompt.
 - **Subflow UX** (S4/M6, FR-1007): the flow-detail payload also carries
@@ -287,7 +300,7 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   drop at run end (JSONL is the durable record), finished summaries
   capped at 32. Server shutdown aborts running flows (clean JSONL
   prefix, EC20). Reports (`defaults.run.report`) are NOT written for
-  server runs in v1 — they stay a `napf run`/CI concern (revisited at
+  server runs in v0.1 — they stay a `napf run`/CI concern (revisited at
   S4/M5: still deferred, D29 — the canvas gets full wire detail live
   over the WebSocket plus the JSONL history browser).
 - **Static UI**: the pre-built bundle ships inside the wheel and is
@@ -296,10 +309,10 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
 
 ## Roadmap / reserved
 
-- `codegen:` key — parsed, unused in v1 (design-constrained today; see
-  PRODUCT.md).
+- `codegen:` key — parsed, unused in current v0.x (design-constrained
+  today; see PRODUCT.md).
 - **Runtime secret redaction (D22)** — `set ... secret: true` or a
   response field-path redaction directive, so login-acquired tokens can
-  opt into masking. Deferred from v1; until then the shareability
-  guarantee is scoped to declared secrets.
+  opt into masking. This v0.1 note is superseded for v0.2 by D35; until
+  then the shareability guarantee is scoped to declared secrets.
 - `napf check --write-env-example`.

@@ -17,7 +17,8 @@ Core promises (never compromise these):
 4. **CI-first**: headless `napf run` with assert-driven exit codes is a
    first-class citizen, not an afterthought.
 5. **Full observability**: complete request/response detail (headers,
-   bodies, timing, retries) always captured in run history.
+   bodies, timing, retries) remains inspectable without silent loss;
+   v0.2 stores large content once and loads it lazily (D34).
 6. (Future, design-constrained today): generate standalone Python code
    (niquests clients, Pydantic models) from flows. One-directional:
    flows → code, never code → flows.
@@ -28,13 +29,13 @@ Core promises (never compromise these):
 - `docs/napflow-workspace-manifest.md` — napflow.yaml, CLI surface, env model
 - `docs/napflow-engine-spec.md`     — scheduler, frames, firing rules, events
 - `docs/yaml-profile.md`            — canonical YAML read/emit profile (D23)
-- `docs/DECISIONS.md`               — why each major decision was made (D01–D25)
+- `docs/DECISIONS.md`               — why each major decision was made (D01–D37)
 - `docs/EDGE_CASES.md`              — resolution ledger; append new cases here
-- `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; FR/NFR checklist
+- `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; v0.1 + v0.2 FR/NFR checklist
   (tick requirements in the PR that lands them, with a test)
 - `docs/PLAN.md` / `docs/JOURNAL.md`    — milestone sequencing + working journal
-- `docs/RELEASING.md`               — versioning (0.1.0.devN per completed
-  stage) + tag-driven release flow (release.yml)
+- `docs/RELEASING.md`               — experimental-v0.x policy (D33) +
+  tag-driven release flow (release.yml)
 
 Specs are hypotheses: when implementation proves one wrong, UPDATE THE SPEC
 in the same PR as the code change.
@@ -49,7 +50,8 @@ Documentation workflow:
   progress log; keep entries to 2–5 lines.
 - Update `docs/REQUIREMENTS.md` only when a requirement actually lands with a
   test.
-- Update `docs/EDGE_CASES.md` only when resolving a new edge case.
+- Update `docs/EDGE_CASES.md` when recording a reproduced edge case or
+  landing its tested resolution; OPEN means planned, never “doc fixed.”
 
 Git workflow:
 - Use Conventional Commits for commit messages (`type(scope): subject`);
@@ -127,6 +129,23 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
   500MB/run, truncated markers); secrets masked AT EMISSION (events
   born masked).
 
+The final sentence describes **v0.1 current behavior**, not the v0.2
+target. D34–D36 + PLAN v0.2 replace destructive/local safeguards with:
+store-once full-fidelity blobs and lazy replay; private raw local truth
+plus redacted presentation/export; bounded cooperative lifecycle,
+cleanup, tasks/frames, and subscriber windows. Never extend the v0.1
+valves/mask-everywhere approach as if it were the accepted future design.
+
+## Version and compatibility policy
+
+- `v0.1.0` is the first working milestone. All package v0.x releases,
+  including the current `schema: napflow/v1`, are experimental (D33).
+- Breaking flow/event/API/UI changes are allowed before package v1.0
+  when documented in release notes. Best-effort readers/migrations are
+  welcome but must not preserve faulty behavior at the expense of v0.2.
+- v1.0 is when selected formats become stable and incompatible schema
+  changes require a new marker or migration policy.
+
 ## File format invariants
 
 - Stable human-readable node ids (never UUIDs; charset
@@ -143,7 +162,7 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
   (filename stem = profile name); process env overrides files;
   `env.required` per flow fails fast.
 
-## Build order (each stage independently useful)
+## Build history and current order
 
 1. `core/loader.py` + Pydantic models + `napf check`
    (E001–E009, E011–E012 — E010 reserved; W101–W107)
@@ -152,6 +171,11 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 3. Remaining nodes (python + worker subprocess, merge, guards, loop,
    flow, set/get, switch, delay, log, fixture, note)
 4. server/ + UI canvas (last)
+5. **Current: v0.2 full-fidelity hardening and replay**, sequenced only
+   by `docs/PLAN.md` M0–M7: regression/format baseline → workspace and
+   durable saves → lifecycle/worker → bounded execution/history →
+   full-fidelity blobs/redaction → scalable replay/timeline → public,
+   packaging, and UI contracts → measured release gate.
 
 ## Testing priorities (in order of bug-risk)
 
@@ -167,6 +191,10 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 7. Loader round-trip: load → save preserves comments & key order (ruamel)
 8. Timeout routing across node shapes (D24, TR-8) + native-value
    templating detection & post-eval coercion (D25, TR-10)
+9. v0.2 adversarial priorities (TR-11–22): path/symlink containment;
+   inline-cycle deadline/abort; worker large-line/late-side-effect;
+   cancellation cleanup; full-fidelity hash round-trip; redaction schema
+   integrity; bounded large replay/loops; autosave/atomic durability.
 
 ## Deferred by decision (do NOT implement, DO keep compatible)
 
@@ -176,6 +204,14 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 - Conflict resolution beyond last-write-wins + reload prompt
 - Endpoint collections + Postman/OpenAPI import (one-directional,
   generation not sync; `endpoint:` = future additive request-config
-  key — nothing to reserve in v1; see PRODUCT.md roadmap)
-- `napf ui --app` Chromium app-mode window (v1 opens the default
+  key — nothing to reserve in v0.x; see PRODUCT.md roadmap)
+- `napf ui --app` Chromium app-mode window (current UI opens the default
   browser via stdlib `webbrowser`; no pywebview — see PRODUCT.md roadmap)
+- Pause/resume/step and wire breakpoints (D30), extract-to-subflow (D31),
+  remote hosting/user authentication, and encryption/key management are
+  explicitly after v0.2. Keep seams compatible; do not add them to the
+  v0.2 hardening release without a new owner decision.
+- Also explicitly after v0.2: fine-grained runtime-token redaction
+  (EC10), descendant process-tree cleanup (EC22), and preemptible Jinja
+  rendering / a final hard-deadline contract (EC27/EC35). These are OPEN
+  limitations, not “resolved by documentation.”

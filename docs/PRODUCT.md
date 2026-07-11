@@ -1,6 +1,7 @@
 # napflow — Product Definition
 
-Status: v1.0, 2026-07-02. Companions: `REQUIREMENTS.md` (what to build),
+Status: v0.x product direction, amended through the v0.2 plan on
+2026-07-11. Companions: `REQUIREMENTS.md` (what to build),
 the spec files (how it behaves), `DECISIONS.md` (why).
 
 ## One-liner
@@ -54,8 +55,10 @@ CI** with assert-driven exit codes and full wire-level history.
    first-class citizen; a failure anywhere in the frame tree — including
    a required output that was never produced — is exit 1 (D18/D20).
 5. **Full observability** — complete request/response detail (headers,
-   bodies, timing, retries) always captured in run history; history is
-   shareable (declared secrets masked at emission, D22).
+   bodies, timing, retries) remains inspectable in run history without
+   silent loss. v0.2 stores large content once and loads it lazily
+   (D34); canonical local truth stays exact, while CI/report/export
+   views apply explicit redaction (D35).
 6. **Codegen-ready** (future, design-constrained today) — flows →
    standalone Python (niquests clients, Pydantic models), strictly
    one-directional.
@@ -88,7 +91,16 @@ CI** with assert-driven exit codes and full wire-level history.
 
 (Full build-vs-adopt analysis: D01.)
 
-## Non-goals (v1)
+## Experimental compatibility during v0.x
+
+`v0.1.0` means “first version working end to end,” not stable formats.
+Breaking flow, event, API, and UI changes are expected throughout the
+0.x package series when they improve the product. The current
+`schema: napflow/v1` marker is experimental until package v1.0; v0.x
+release notes identify breaking changes, and migrations are best-effort
+rather than a compatibility promise (D33).
+
+## Non-goals (current v0.x direction)
 
 - **Not a daemon** — no timer/webhook triggers in core; cron +
   `napf run` covers scheduling (D08).
@@ -101,7 +113,7 @@ CI** with assert-driven exit codes and full wire-level history.
 - **No collaborative editing** — last-write-wins + reload prompt; deeper
   conflict resolution deliberately deferred.
 
-## Success criteria (v1)
+## Success criteria (v0.1 working milestone)
 
 - `uv tool install napflow && napf init && napf run flows/smoke` is
   green in under five minutes on macOS, Windows, and Linux — fully
@@ -117,32 +129,37 @@ CI** with assert-driven exit codes and full wire-level history.
 
 ## Release roadmap
 
-- **v1.0** — the four build stages (see `REQUIREMENTS.md`):
-  loader + `napf check` → engine core + `napf run` → full node set +
-  python worker → server + UI canvas. Stages S1–S3 form a shippable
-  CLI-only product; releasing/announcing before the canvas lands is an
-  explicit option (the UI is roughly half the total work).
-- **v1.1 candidates** (decided-deferred, kept compatible): `poll` node,
-  `duplicate` node, inline loop bodies, marker-based `collect`, runtime
-  secret redaction, `napf check --write-env-example`, python worker pool,
-  `napf ui --app` (chromeless Chromium app-mode window via
+- **v0.1.0 — first working version.** The four build stages are complete:
+  loader/check → engine/CLI → full nodes/worker → server/UI canvas.
+  Released as a developer-preview milestone with known hardening work;
+  no public announcement or stability promise is required.
+- **v0.2.0 — full-fidelity hardening and replay** (D33–D37, PLAN):
+  centralized workspace/durable-save boundaries; fair cancellation-safe
+  engine and worker lifecycle; bounded active loop/server/browser state;
+  versioned JSONL plus store-once full-fidelity blobs; raw local truth
+  plus redacted CI/export views; paged/lazy replay, child-frame drilldown,
+  and timeline scrubber; public `run_flow`; deterministic packaging and
+  authoritative release gates. This is the next committed release.
+- **After v0.2 candidates:** pause/resume/step and wire breakpoints (D30),
+  pack-selection-to-subflow (D31), `poll`/`duplicate`, inline loop bodies,
+  marker-based `collect`, `napf check --write-env-example`, worker-pool
+  expansion, `napf ui --app` (chromeless Chromium app-mode window via
   `msedge`/`chrome --app=<url>`, falling back to plain
-  `webbrowser.open` — app-like feel with zero new deps; v1 always opens
-  the default browser).
-- **v1.1 run debugging & replay** (adopted 2026-07-08, PLAN
-  "Post-v0.1.0 backlog", D29/D30): **timeline scrubber replay** —
-  slider + play over any run's JSONL, all canvas animations and data
-  following, never re-executing (D13 makes it a recording by
-  construction; pure frontend); **pause/resume + step** (pause-request
-  dispatch gate, paused time excluded from timeouts); **wire
-  breakpoints** (runtime holds set in the UI, never flow.yaml — D30);
-  **opt-in full-payload capture** (valve pattern lifting the 512-char
-  `value_preview` bound; defaults measured from real flows first).
+  `webbrowser.open` — app-like feel, zero new deps; today the UI always
+  opens the default browser), fine-grained runtime-token redaction
+  (EC10), descendant process-tree cleanup (EC22), and preemptible
+  template/hard-deadline semantics (EC27/EC35). These stay compatible
+  with the v0.2 lifecycle/replay foundations but do not delay that
+  hardening release.
+- **v1.0 direction:** make selected flow/event/public-API formats stable,
+  publish migration policy, and remove the experimental `napflow/v1`
+  qualification. Stability is an outcome of real 0.x use, not inferred
+  from the current schema marker.
 - **v2 direction**: codegen (flows → niquests clients + Pydantic
   models) — scoped to the *reducible subset*: linear chains and
   recognized patterns (retry cycles → `while` loops). Arbitrary cyclic,
   merge-heavy graphs would require emitting a mini-runtime, which
-  defeats "reads like requests code"; no v1 decision may assume
+  defeats "reads like requests code"; no v0.x decision may assume
   full-graph codegen. Also: revisit conflict handling beyond
   last-write-wins.
 - **v2 direction, imports** (parked 2026-07-02): endpoint collections —
@@ -150,7 +167,7 @@ CI** with assert-driven exit codes and full wire-level history.
   request nodes reference (`endpoint: users.create` + per-node
   overrides) — and one-directional **Postman collection / OpenAPI
   import** generating that catalog + request-node scaffolds. Import is
-  generation, never sync (same philosophy as D02/codegen). v1
+  generation, never sync (same philosophy as D02/codegen). v0.x
   compatibility: `endpoint:` lands later as an additive optional
   request-config key and `napf import` as a new subcommand — nothing to
   reserve today; `defaults.request` + env profiles cover the small-scale

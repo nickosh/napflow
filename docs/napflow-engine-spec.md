@@ -8,6 +8,13 @@ senior review: worker stdout protocol integrity, loader write path +
 diagnostics, native-value templating (**D25**), budget default, run
 capture valve, Windows loop policy, trust model (EC28–EC37).
 
+Compatibility/current-state note (D33–D37, 2026-07-11): this document
+describes the v0.1 engine unless a section says otherwise. Event/history
+formats are experimental during package v0.x. The accepted v0.2 redesign
+(fair lifecycle, full-fidelity blob-backed history, raw local truth plus
+redacted exports, bounded/lazy replay) is sequenced in `PLAN.md` and must
+be folded into this spec in the same PRs that implement it.
+
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
 types, JSONL history, last-write-wins, macOS+Windows+Linux (D26),
@@ -338,7 +345,7 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     importing niquests, guarded by a test. `http_version` pinning uses
     one cached session per version option (session-level disable flags;
     best-effort where niquests lacks a flag).
-  - **Retry** = immediate re-attempt (no backoff in v1 — the config
+  - **Retry** = immediate re-attempt (no backoff in v0.1 — the config
     surface pinned at M1 has only `max_attempts`), transport failures
     only, never status-based. `retries_total` in `request_finished` =
     attempts performed − 1.
@@ -413,7 +420,7 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     is a node error (`variable_unset`), never a silent null — the EC19
     corollary: a Get racing its Set is a missing wire, not an empty
     value.
-  - **fixture**: `file`/`format` are literal in v1 (not templatable);
+  - **fixture**: `file`/`format` are literal in v0.1 (not templatable);
     format infers only from `.json`/`.csv` — any other extension needs
     `format:`. The cache is per RUN, keyed by resolved path (a mid-run
     file change or deletion cannot split the data). CSV values stay
@@ -431,7 +438,7 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     stdout/stderr are visible as the run executes, not just in the
     JSONL.
 
-## 5a. Python worker subprocess (v1)
+## 5a. Python worker subprocess (v0.1)
 
 One worker process per flow module, spawned lazily at first use, killed
 at FINALIZE.
@@ -477,7 +484,7 @@ engine ──spawn──▶ worker (configured interpreter)
   node error, never an engine failure.
 - **Grandchild processes (EC22)**: killing the worker does not reap
   subprocesses the user's python spawned (`subprocess.Popen` in
-  `nodes.py`). Known v1 limitation — documented, not solved. Candidate
+  `nodes.py`). Known v0.1 limitation — documented, not solved. Candidate
   later: process-group kill on POSIX / `CREATE_NEW_PROCESS_GROUP` on
   Windows.
 - **Interpreter**: `python.interpreter` in napflow.yaml; default = the
@@ -618,6 +625,14 @@ run_finished     {state, duration_ms, asserts: {passed, failed},
 ```
 
 Rules:
+
+> **Known v0.1 gaps, reopened for v0.2:** the implementation does not
+> fully satisfy the next two bullets. Capture can be bypassed through
+> Log/message/End output paths and can keep writing prefixes after its
+> run budget (EC32); request history is a pre-transport preview rather
+> than the final prepared request (EC50); recursive masking can rewrite
+> protocol keys/state (EC45). D34/D35 + PLAN M4 are the accepted target.
+
 - **Masking (D22)**: secrets are masked at emission — events are born
   masked. The *values* of env vars matching `environments.secrets`
   (active profile + process env) are replaced wherever they appear, via
@@ -657,7 +672,7 @@ Pins made at S2/M2 (2026-07-05, `core/events.py`):
   a longer secret masks fully); dict keys are scanned too ("wherever
   they appear").
 
-## 8. `napf check` rules (v1)
+## 8. `napf check` rules (v0.1)
 
 ```
 E001 yaml parse / schema validation failure
@@ -722,9 +737,12 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
 
 ## 9. Resolved (was: open questions)
 
-- **Body capture: always full.** Complete request/response bodies in every
-  run's JSONL; 10MB-per-body disk valve with `truncated: true` marker.
-- **Per-node execution timeout: IN v1**, enforced via the worker
+- **Body capture (v0.1 intended behavior, EC32 reopened):** the current
+  10MB-per-body/run valves emit `truncated: true`, but do not reliably
+  bound all persisted payload paths and conflict with complete local
+  observability. D34's store-once full-fidelity model replaces them in
+  v0.2; do not treat this item as resolved.
+- **Per-node execution timeout: IN v0.1**, enforced via the worker
   subprocess model (§5a) for python nodes and task cancellation for all
   others. Per-node `max_seconds`, global default
   `defaults.run.node_timeout_s: 300`.
@@ -738,7 +756,7 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
 - **2026-07-02 amendments (same day)**: timeout model (D24, EC25–EC27);
   senior-review fixes incl. native-value templating (D25, EC28–EC37).
 
-## 10. Roadmap notes (v1.1 candidates)
+## 10. Roadmap notes (post-v0.2 candidates)
 
 - `poll` node (sugar over merge/condition/counter/delay).
 - **`duplicate` node** — split a message into N identical parallel
@@ -747,7 +765,13 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   if real flows show the workaround is clumsy.
 - Inline loop bodies.
 - Per-module python worker pool (lifts the serial-worker limitation, §5a).
-- Runtime secret redaction (see manifest roadmap, D22).
+- Fine-grained runtime-secret registration/field-path rules beyond
+  v0.2's raw-local + redacted-export baseline (D35).
+- Descendant-process cleanup through POSIX process groups / Windows Job
+  Objects or equivalent (EC22).
+- Preemptible synchronous template execution, or an explicitly
+  cooperative trusted-code deadline contract backed by tests
+  (EC27/EC35).
 
 ## 11. Security & trust model (EC35)
 
@@ -761,10 +785,12 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   accidental mutation), not against a hostile flow author. Accepted
   risk: template rendering is synchronous on the engine loop, so a
   pathological expression can stall the run — same trust domain as user
-  code; the run deadline (D24) is the backstop.
+  code. **The v0.1 run deadline is not a hard backstop for synchronous
+  rendering**; EC27/EC35 remain open until the post-v0.2 decision above.
 - **The server binds localhost only.** `napf ui` serves on `127.0.0.1`
-  with no authentication in v1 — do not bind it to public interfaces;
+  with no authentication in v0.1 — do not bind it to public interfaces;
   remote/multi-user operation is out of scope.
-- **Secrets**: declared-secret masking at emission per D22;
-  runtime-acquired tokens are stored in full until runtime redaction
-  lands (manifest roadmap).
+- **Secrets (v0.1 current)**: declared-secret masking at emission per
+  D22; runtime-acquired tokens are stored in full. D35 replaces this in
+  v0.2 with private raw local truth plus explicit redacted
+  presentation/report/export views that never rewrite protocol fields.

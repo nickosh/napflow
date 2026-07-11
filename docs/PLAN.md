@@ -1,9 +1,9 @@
-# napflow — Development Plan (v1)
+# napflow — Development Plan (v0.x)
 
-Status: adopted 2026-07-02. This file sequences the stage backlog —
-`REQUIREMENTS.md` stage tags define the *scope*; this defines the *order
-of attack* and definition-of-done per milestone. Tick boxes as
-milestones land; append course corrections, don't rewrite history.
+Status: v0.1 build stages adopted 2026-07-02 and completed 2026-07-09;
+v0.2 plan adopted 2026-07-11. `REQUIREMENTS.md` defines testable scope;
+this file defines order and definition-of-done. Tick boxes as milestones
+land; append course corrections, don't rewrite history.
 
 ## S1 — loader, models, `napf check`  ✅ done 2026-07-05
 
@@ -325,71 +325,326 @@ facto release candidate; only release-prep lands between). From the
 v0.1.0 tag on, work moves to feature branches + PRs (see Working
 agreements).
 
-## Post-v0.1.0 backlog (adopted 2026-07-08 — run debugging & replay)
+## v0.2.0 — full-fidelity hardening and replay
 
-Owner-requested during M5 planning; sequenced by risk and dependency.
-Each becomes a stage/milestone with FRs when scheduled —
-REQUIREMENTS.md stays a v1 checklist until then. Details: D29/D30 +
-PRODUCT roadmap.
+Adopted 2026-07-11 after the first working-version architecture review.
+`v0.1.0` is deliberately allowed to ship first as the working milestone;
+v0.2 is the first deliberate hardening release. Details and rationale:
+D33–D37. Requirements: FR-11xx, NFR-12–18, TR-11–22.
 
-1. **R1 — timeline scrubber replay** (pure frontend, the flagship):
-   slider + play (real-time from event `ts` deltas, speed multipliers)
-   over any finished/historical JSONL — scrubbing folds a record
-   prefix through the existing `runview.ts` reducer, all animations
-   and port/log data follow. Never re-executes anything (D13: replay =
-   re-read). Perf: checkpoint snapshots every ~1k records so a
-   100k-event run scrubs smoothly.
-2. **R2 — pause/resume + step** (engine + server + UI, D30):
-   pause-request gates the pump's dispatch — in-flight firings
-   complete, queued deliveries hold, run state `paused`; paused time
-   excluded from timeout guards / `max_seconds` / run deadline
-   (monotonic clocks offset by pause epochs); `run_paused`/
-   `run_resumed` events; pause/resume/step endpoints + UI buttons.
-   Step = release exactly one held delivery.
-3. **R3 — wire breakpoints** (rides R2's gate, D30): runtime
-   breakpoints keyed by edge — hold a matching message BEFORE it fires
-   its target; the travelling dot stops mid-wire with the held value
-   inspectable. Set in the UI on wires/input handles (E004 makes them
-   the same thing), sent with the run request — NEVER stored in
-   flow.yaml (git-friendly files, headless CI unaffected).
-4. **R4 — opt-in full-payload capture** (engine, independent): a
-   per-run "record full payloads" flag lifting `value_preview`'s 512
-   chars via the capture-valve pattern (per-value + per-run caps,
-   truncated markers, like body capture). Defaults picked from
-   measuring real flows first (message budget 100k bounds the worst
-   case — exactly why it's opt-in).
-5. **R5 — pack selection to new flow** (adopted 2026-07-09, D31):
-   extract-to-subflow refactoring — selected nodes + wires move into a
-   new flow folder, replaced by a single flow node, boundary wires
-   becoming Start/End ports. Needs its own design pass: boundary-port
-   inference, edge rewriting, splitting nodes.py between folders, and
-   fixing up cross-cut `{{ nodes.* }}` refs and set/get variables.
-   NOT the same thing as D09's clone (which shipped at S4/M6).
-6. **R6 — performance guard suite** (adopted 2026-07-10, owner call):
-   a pytest-marked perf suite (`-m perf` or similar), EXCLUDED from CI
-   runs by default — perf assertions on shared hosted runners are
-   flake factories; run it manually / on demand. Contents: automate
-   the NFR-08 overhead measurement (per-firing scheduling cost +
-   python-worker pipe round-trip, computed from event `ts` deltas in
-   the run JSONL — the history already carries the data) with generous
-   ceilings, and a `max_concurrency` peak-bound assertion (run many
-   items with a small cap, count maximum concurrent iterations — the
-   semaphore makes the bound true by construction, but nothing counts
-   it today). Sequencing: the owner measures MANUALLY first during the
-   dev4 window (that measurement ticks NFR-08); R6 then turns the
-   method into a repeatable suite.
+### Outcome
+
+v0.2 keeps the current product and technology stack, but makes its
+boundaries honest and composable:
+
+- full request/response fidelity without copying large data through
+  every layer or silently truncating it;
+- replay that remains the same durable recording while streaming,
+  seeking, drilling into frames, and scrubbing efficiently;
+- deadlines, aborts, workers, loops, and cleanup that remain correct
+  under adversarial inputs;
+- one workspace containment policy and durable, conflict-safe editing;
+- a real public core API and a deterministic install/release surface;
+- local-first clarity, with redaction applied where CI/export needs it;
+- measured performance after correctness, not speculative optimization.
+
+### Scope rules
+
+1. **No rewrite.** Keep Python/asyncio, BlackSheep, niquests, JSONL,
+   React, xyflow, Zustand, CodeMirror, and the single-wheel product.
+   Refactor ownership boundaries, not technology for its own sake.
+2. **No silent data loss.** Execution values stay semantically complete;
+   persisted large content is stored once and referenced. Explicit CI
+   hard limits may omit content only with an unmistakable record.
+3. **Replay remains a recording.** Never re-execute a historical run.
+   JSONL order is canonical; blobs/indexes are attached/derived data.
+4. **v0.x is experimental.** v0.2 may break v0.1 flow/event/API shapes;
+   document the break and prefer a simple read-only adapter where cheap,
+   but do not preserve a faulty design at the cost of the next one.
+5. **Every review reproduction becomes a regression test before or with
+   its fix.** No checkbox closes from code inspection alone.
+
+### Former post-v0.1 backlog disposition — no item dropped
+
+The earlier R1–R6 block was replaced by the sequenced plan below, not
+discarded. This mapping is the continuity ledger:
+
+| Former item | v0.2 disposition | Reason |
+|---|---|---|
+| **R1 timeline scrubber replay** | **Included: M5 / FR-1106 / TR-18.** Real `ts` deltas, speed multipliers, prefix folding, and derived checkpoints are retained; the former ~1k-record checkpoint cadence remains the initial candidate, then is measured/tuned. | The new paged/lazy replay foundation makes the original frontend feature viable on full-fidelity large runs. |
+| **R2 pause/resume + step** | **After v0.2, item 1; D30 remains authoritative.** | The fair M2 dispatch lifecycle is its prerequisite, but control-plane semantics should not expand the hardening release. |
+| **R3 wire breakpoints** | **After v0.2, item 2; D30 remains authoritative.** | It still rides R2's runtime wire-hold gate and never enters `flow.yaml`. |
+| **R4 opt-in full-payload capture** | **Superseded by the stronger M4 / D34 design, not lost.** The 512-character preview limitation is removed through prepared-request capture and store-once full-fidelity blobs; M0 still measures thresholds first. | Owner chose content reliability as the local default. Explicit hard limits remain available for CI instead of making complete capture an exceptional mode. |
+| **R5 pack selection to new flow** | **After v0.2, item 3; D31 remains authoritative.** | Boundary inference, Python splitting, template refs, and variable rewrites remain a separate refactoring feature. |
+| **R6 performance guard suite** | **Included: M0 baseline + M7 / NFR-18.** It remains opt-in and excluded from ordinary shared-runner CI; event-`ts` measurement where valid and the explicit `max_concurrency` peak assertion are retained. | Correctness refactors land before final measurement; the original scheduler/worker measurements are expanded to storage/replay memory. |
+
+### M0 — release boundary, format decisions, and regression harness
+
+- [ ] Release `v0.1.0` as the first working developer-preview milestone:
+      package version/tag match exactly; release notes state trusted
+      workspaces, localhost-only operation, experimental `napflow/v1`
+      and event formats, and no v0.x compatibility guarantee. This is
+      release preparation, not a v0.2 blocker or feature backport. (D33)
+- [ ] Add a version to the run-history envelope/manifest before changing
+      storage. Pin canonical event ordering, blob-reference shape,
+      inline threshold semantics, byte/hash rules, and the disposable
+      index contract in the engine spec. (FR-1101, D34)
+- [ ] Turn the audit probes into failing tests: public import; clean-tree
+      wheel; entry/ref/fixture/history traversal and symlinks; inline
+      deadline/abort; 70KB worker response; late timeout side effect;
+      external cancellation cleanup; capture bypass; secret value
+      `passed`; >64KB final event; same-second retention; immediate
+      navigation/close during autosave; overlapping saves. (TR-11–22)
+- [ ] Record before-change manual performance baselines for: guarded
+      inline message throughput, worker round trips at 1KB/100KB/10MB,
+      parallel loops at 100/10k/100k items, and 10MB/100MB history first
+      render/replay memory. Baselines inform batching and inline-blob
+      thresholds; they are not correctness gates. (NFR-08, NFR-18)
+
+M0 DoD: v0.1 can be reproduced from its tag; v0.2 formats and invariants
+are written before implementation; every confirmed critical/high audit
+finding has a named failing test or an explicit later milestone owner.
+
+### M1 — workspace boundary and durable editing
+
+- [ ] Introduce `WorkspaceResolver` (name provisional) as the sole path
+      authority for entry flows, flow/loop references, fixtures, run
+      logs, source reads/writes, and clone destinations. Validate lexical
+      identity and run-id format, resolve symlinks, and require resolved
+      containment. Remove scattered raw `root / Path(user_value)` joins
+      and `_safe_identity` as a partial policy. (FR-1107, D37, EC38)
+- [ ] Keep the server loopback-only; validate loopback Host and same-origin
+      mutation/WebSocket requests. Do not add users, sessions, OAuth,
+      capability-token lifecycle, or a public bind flag. (FR-1108, D37,
+      EC51)
+- [ ] Add one atomic-write primitive: same-directory temporary file,
+      UTF-8/LF emit, flush, atomic replace, preserved permissions, and
+      cleanup. Serialize ETag-check + write per file so two accepted
+      requests cannot race. Use it for flow YAML and nodes.py. (FR-1109)
+- [ ] Replace independent debounce timers with a serialized save
+      coordinator for canvas and code. Edits made during a save queue
+      behind it; flow navigation, editor close, and `beforeunload` flush
+      or visibly prompt; stale responses cannot overwrite current state.
+      Split persistence/navigation from the global Zustand store enough
+      to unit-test it. (FR-1110, EC46)
+- [ ] Define a portable flow-identity grammar or encode/decode every URL
+      segment consistently; cover spaces, `#`, `%`, `?`, nested flows,
+      Windows drive syntax, and browser back/forward. (FR-1111)
+
+M1 DoD: no API/checker/engine path can escape the selected workspace,
+including through symlinks; crash/interruption cannot leave a truncated
+source file; navigating or closing within the debounce window loses no
+accepted edit; the existing comment-preserving golden diffs stay green.
+
+### M2 — fair scheduler, cancellation, and worker lifecycle
+
+- [ ] Process ready inline deliveries in bounded batches (initial tuning
+      range 64–256), then cooperatively yield and check an explicit
+      monotonic run deadline/abort flag. Preserve the quiescence sentinel
+      and message-budget semantics. A tight guarded cycle must not freeze
+      the ASGI loop or complete past a deadline as `passed`. (NFR-12)
+- [ ] Put cancellation/cleanup ownership in `try/finally`: firing tasks,
+      HTTP sessions, event streams, and workers close before external
+      `CancelledError` escapes. Server shutdown and caller cancellation
+      use the same cleanup path. (NFR-13)
+- [ ] Separate normal worker shutdown (EOF) from timeout/crash teardown.
+      Timeout immediately terminates, waits one grace interval, then
+      kills; replacement cannot start while the old worker can still
+      commit work. This milestone owns the worker process itself;
+      descendant process-group/Job-Object cleanup remains EC22 after
+      v0.2. (D36, EC09, EC43)
+- [ ] Preserve D32's stdlib JSON-lines protocol. Configure and document an
+      adequate line/reader limit (or explicit maximum message with a
+      clean protocol error), handle `LimitOverrunError`/reader failure,
+      and test large results and stderr without hanging finalization.
+- [ ] Make checker and worker callable surfaces agree: either implement
+      async functions and positional-only arguments or reject them with
+      positioned diagnostics. Strictly validate binary envelopes/base64
+      and route encoding failures through the request error port. (EC48)
+
+M2 DoD: deadlines and aborts interrupt inline cycles; external
+cancellation leaves no task/session/worker behind; a valid 70KB+ Python
+result completes or fails as a documented node error; a timed-out worker
+cannot produce a late side effect or overlap its replacement.
+
+### M3 — bounded execution state and history lifecycle
+
+- [ ] Replace parallel-loop `gather(one task per item)` with a bounded
+      producer/fixed task set while preserving index-ordered results and
+      `max_concurrency`. Compact finished child frames after emitting a
+      reconstructable frame summary (parent, target flow, loop index,
+      timing, state, outputs/errors/assert counts). (NFR-14, D36)
+- [ ] Bound live subscriber queues and disconnect/resync slow consumers;
+      replay late subscribers from the durable log instead of retaining
+      an unlimited prefix in RAM. Keep running-run summaries bounded.
+- [ ] Remove the CLI's unconditional all-event `ListSink`: no report means
+      no report buffer; JSON/JUnit retain only their required event
+      classes or stream from the durable log.
+- [ ] Make run retention operate after completion on whole run units,
+      never active files. Use truly chronological metadata/IDs; delete
+      JSONL, blobs, indexes, `.report.json`, and `.junit.xml` together.
+      Replace the fixed-64KB tail assumption with a summary/index or a
+      robust backward record reader. (EC47)
+
+M3 DoD: task/frame/RAM growth is proportional to configured concurrency
+and active presentation windows rather than total loop/history size;
+slow WebSocket clients cannot grow the server without bound; retention
+never deletes an active/newer run or leaves companion artifacts.
+
+### M4 — full-fidelity history, prepared requests, and redacted exports
+
+- [ ] Implement the D34 store: small JSON-compatible values inline;
+      large text/binary/structured content stored once in immutable
+      content-addressed blobs with hash, bytes, media type, encoding,
+      and explicit reference records. Verify the stored hash round-trip.
+      Deduplicate repeated appearances inside a run. (FR-1102, NFR-15)
+- [ ] Apply storage policy to every persisted payload path—not only
+      `request_finished.body`: message/log values, request bodies,
+      response bodies, error payloads, and `run_finished.end_outputs`.
+      Execution values remain complete and independent of their persisted
+      representation. Remove misleading run/body valves once migration
+      is complete. (EC32)
+- [ ] Capture the prepared request rather than a 512-character preflight
+      preview: final URL/query, effective headers/cookies, body reference,
+      timing/retry metadata, and response detail. Preserve explicit
+      privacy policy for library-generated sensitive headers. (FR-1103,
+      EC50)
+- [ ] Store canonical local runs with private permissions and unmodified
+      structural records. Implement explicit redaction views for reports,
+      terminal presentation, and export; never rewrite protocol keys.
+      Declared-secret CI exports default safe, raw export is explicit,
+      and absolute “shareable by construction” language is removed.
+      (FR-1104, D35, EC45)
+- [ ] Add self-contained run export/import (manifest + JSONL + referenced
+      blobs, archive format provisional). Import verifies hashes and opens
+      read-only; an exported redacted bundle contains no unreachable raw
+      blob. Explicit CI hard limits record omitted hashes/sizes/reasons.
+      (FR-1105)
+
+M4 DoD: a large response routed through Log and End is stored in full
+once, inspected byte-for-byte, and replayed without duplicated bodies;
+no silent truncation remains; a secret named/value-shaped like an event
+field cannot corrupt replay; redacted and raw export behavior is tested.
+
+### M5 — scalable replay, frame drilldown, and timeline scrubber
+
+- [ ] Version replay APIs and stream/page event records rather than
+      returning one unbounded JSON array. Add rebuildable byte-offset or
+      sequence indexes; support seeking by `seq`, frame, node, and event
+      class without changing canonical JSONL. (FR-1106)
+- [ ] Fetch blobs lazily. The browser keeps a bounded/virtualized event
+      window plus reduced node/frame summaries, not every full record.
+      Opening detail resolves the blob and verifies/handles missing data.
+- [ ] Reconstruct the frame tree from durable events and summaries.
+      Root canvas loads first; subflow/loop iteration detail loads when
+      expanded. Runtime frame compaction must be invisible to replay.
+- [ ] Land the timeline scrubber (former R1): slider, play/pause, real
+      event-time deltas, speed multipliers, and deterministic prefix fold
+      through `runview`. Add derived checkpoints for seeking large runs;
+      start by measuring the former ~1k-record cadence, then tune;
+      checkpoints are disposable and never replace source events.
+- [ ] Preserve EC20 behavior for genuinely incomplete runs while using a
+      durable final summary to distinguish them from one large final line.
+
+M5 DoD: a 100k-event/full-fidelity run opens with bounded server/browser
+memory, first renders without fetching all blobs, scrubs smoothly, and
+drills into completed child frames without re-execution.
+
+### M6 — public/package/UI contract completion
+
+- [ ] Implement and document an ergonomic stable-for-v0.2
+      `from napflow.core import run_flow` wrapper. It owns workspace
+      preparation and cleanup without importing server/CLI, supports
+      pytest use, and is tested from an installed wheel. (FR-1112, EC42)
+- [ ] Make source/Git installation honest: either a deterministic PEP 517
+      frontend build, committed generated bundle, or removal of the Git
+      install promise in favor of built artifacts. Test a wheel from a
+      clean Git archive/sdist and execute `napf ui`. (FR-1113, EC44)
+- [ ] Bring visual editing to schema parity for safety/template fields:
+      universal `max_seconds`, template-aware number/boolean fields,
+      request TLS/timeout, and typed Start defaults. Add schema-to-form
+      coverage so drift fails a test. Fix abort-response status handling.
+      (FR-1114, EC49)
+- [ ] Split live-run transport and history/persistence orchestration from
+      the global Zustand store along the new API boundaries; preserve pure
+      graph/run reducers and avoid a framework rewrite.
+- [ ] Generate/audit third-party notices for bundled frontend code before
+      public distribution.
+
+M6 DoD: documented installation and core-import examples work from the
+built artifact; every authoritative editable schema field has a valid UI
+path or an explicit documented YAML-only status; frontend orchestration
+has direct unit coverage for persistence and run transport.
+
+### M7 — release gates, compatibility evidence, and v0.2 promotion
+
+- [ ] One reusable required workflow gates PRs and tags: Ruff format/lint,
+      import contracts, full pytest, Vitest, production UI build, wheel
+      membership/install smoke, and Playwright. Release refuses tag/package
+      mismatch and `.dev` versions. (NFR-16)
+- [ ] Add Linux Python 3.12/3.13/current compatibility plus minimum and
+      latest-compatible dependency jobs; retain macOS/Windows/Linux user
+      path coverage without multiplying every browser/dependency axis.
+- [ ] Land the opt-in `perf` suite (former R6), excluded from ordinary CI:
+      scheduler fairness/throughput, worker sizes, bounded loop peak,
+      full-fidelity write/read, and replay memory/first-render. Compare to
+      M0 baselines and document deliberate trade-offs. (NFR-18)
+- [ ] Run adversarial release checks: traversal/symlink, foreign
+      Host/Origin, disk-full/interrupted save, slow subscriber, missing/
+      corrupt blob, incomplete run, worker crash/timeout, abort at each
+      lifecycle phase, and clean-artifact install.
+- [ ] Update engine/workspace/flow specs to implemented v0.2 behavior,
+      publish format notes and any best-effort v0.1 reader/migration, close
+      EC09/EC32/EC38/EC42–EC51 only with their tests, record EC27's
+      cooperative-scheduler half precisely, and retain EC10/EC22/EC35
+      as named post-v0.2 limitations; then tag `v0.2.0`.
+
+v0.2 DoD: all FR-11xx/NFR-12–18/TR-11–22 requirements are green; no
+v0.2-targeted critical/high review case remains merely documented;
+post-v0.2 limitations retain explicit scope and closure tests; release
+artifacts are reproducible and their version matches the tag;
+full-fidelity replay is useful on large real runs without sacrificing
+content reliability.
+
+### Explicitly after v0.2
+
+These remain compatible but are deliberately excluded so the hardening
+release stays bounded:
+
+1. **Pause/resume + step** (former R2, D30): dispatch gate, paused-time
+   clock offsets, server/UI controls.
+2. **Wire breakpoints** (former R3, D30): runtime wire holds riding the
+   pause gate, never flow-file content.
+3. **Pack selection to new flow** (former R5, D31): extract-to-subflow
+   refactor with boundary inference and Python/template rewrites.
+4. **Fine-grained runtime-secret redaction** (EC10): register derived
+   values or response field paths and redact referenced export blobs;
+   v0.2 delivers the declared-secret/raw-local policy first.
+5. **Descendant-process cleanup** (EC22): owned POSIX process groups and
+   Windows Job Objects/equivalent, with timeout/abort/shutdown tree tests.
+6. **Preemptible template execution / hard deadline semantics**
+   (EC27/EC35): measure first, then isolate synchronous Jinja work in a
+   killable boundary or explicitly retain a cooperative trusted-code
+   deadline contract with tests and precise documentation.
+7. Poll/duplicate nodes, inline loop bodies, marker collect,
+   `napf check --write-env-example`, per-module worker-pool expansion,
+   app-mode UI, endpoint catalogs/imports, codegen, remote
+   hosting/authentication, and collaborative editing.
+8. Encryption/key management for histories. v0.2 uses local filesystem
+   permissions plus explicit redaction/export policy.
 
 ## Working agreements
 
 - Conventional commits (`type(scope): subject`) — they feed git-cliff.
-- Spec updates land in the same PR as the behavior change (CLAUDE.md).
+- Spec updates land in the same PR as the behavior change (AGENTS.md).
 - Tick REQUIREMENTS checkboxes in the landing PR, with a test.
 - One dated journal entry per milestone: `docs/JOURNAL.md`
   (done / decided / next).
-- New edge cases → `EDGE_CASES.md` (EC38+); new decisions →
-  `DECISIONS.md` (D26+).
-- Version bumps `0.1.0.devN` in the commit that completes a stage;
-  releases are tag-driven (`RELEASING.md`, adopted 2026-07-05).
+- New edge cases → `EDGE_CASES.md` (EC52+); new decisions →
+  `DECISIONS.md` (D38+).
+- v0.x releases are experimental (D33), tag-driven, and require exact
+  tag/package version agreement (`RELEASING.md`). Breaking changes are
+  permitted with clear release notes until v1.0.
 - **From the v0.1.0 tag on** (owner call 2026-07-08): no direct
   commits to `main` — feature branches + PRs, conventional commits
   feed git-cliff per release. Side benefit: per-PR CI closes the
