@@ -55,7 +55,14 @@ jobs:
           EOF
       - name: Release notes for this tag
         if: github.ref_type == 'tag'
-        run: uvx git-cliff --latest --strip header -o RELEASE_NOTES.md
+        # every v0.x is experimental (D33) — notes lead with the honest
+        # developer-preview posture (PLAN M0), then the git-cliff body
+        run: |
+          uvx git-cliff --latest --strip header -o CLIFF_BODY.md
+          case "$GITHUB_REF_NAME" in
+            v0.*) cat docs/release-notes-preamble-v0.md CLIFF_BODY.md > RELEASE_NOTES.md ;;
+            *) mv CLIFF_BODY.md RELEASE_NOTES.md ;;
+          esac
       - uses: actions/upload-artifact@v7
         with:
           name: dist

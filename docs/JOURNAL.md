@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-11 — v0.1.0 release prep
+
+- Done: version 0.1.0, CHANGELOG regenerated (`--tag v0.1.0`), README
+  status/install flipped to PyPI, v0.x honest-notes preamble added
+  (`docs/release-notes-preamble-v0.md`, wired into release.yml) —
+  PLAN M0 box 1 ticked. Owner: PyPI pending publisher registered,
+  dry-run green.
+- Next: push → CI green → owner flips repo public → tag v0.1.0 → push
+  tag → verify `uv tool install napflow` + first-touch. Then PR-only
+  workflow and M0 baseline work.
+
 ## 2026-07-11 — release workflow: PyPI trusted publishing + dry-run
 
 - Done: `release.yml` restructured into build → pypi → github-release

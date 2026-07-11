@@ -380,11 +380,15 @@ discarded. This mapping is the continuity ledger:
 
 ### M0 — release boundary, format decisions, and regression harness
 
-- [ ] Release `v0.1.0` as the first working developer-preview milestone:
+- [x] Release `v0.1.0` as the first working developer-preview milestone:
       package version/tag match exactly; release notes state trusted
       workspaces, localhost-only operation, experimental `napflow/v1`
       and event formats, and no v0.x compatibility guarantee. This is
       release preparation, not a v0.2 blocker or feature backport. (D33)
+      — shipped 2026-07-11 via release.yml: tag↔version hard gate, PyPI
+      trusted publishing, and `docs/release-notes-preamble-v0.md`
+      prepended to every v0.x release's notes (the required wording,
+      automated)
 - [ ] Add a version to the run-history envelope/manifest before changing
       storage. Pin canonical event ordering, blob-reference shape,
       inline threshold semantics, byte/hash rules, and the disposable

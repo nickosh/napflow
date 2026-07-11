@@ -47,8 +47,11 @@ nothing is published. Validate the dry-run green before the first tag.
      workflow hard-fails unless `v<version>` equals the pushed tag
      (automated gate; supersedes the old manual check)
    - regenerate the changelog: `uvx git-cliff --tag v0.1.0 -o CHANGELOG.md`
-   - write honest release notes: developer preview, experimental v0.x
-     compatibility, trusted workspace/localhost posture, known limits
+   - release notes: the workflow prepends
+     `docs/release-notes-preamble-v0.md` (developer preview,
+     experimental v0.x compatibility, trusted workspace/localhost
+     posture) to every `v0.*` release's git-cliff body — re-read the
+     preamble each release and keep it honest
    - tick anything release-worthy in REQUIREMENTS/PLAN; journal entry
 2. **Flip the repo public** (owner call 2026-07-11: at the v0.1.0 tag,
    not before). The sdist on PyPI exposes the source regardless; a

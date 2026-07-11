@@ -1,6 +1,7 @@
 # napflow
 
 [![CI](https://github.com/nickosh/napflow/actions/workflows/ci.yml/badge.svg)](https://github.com/nickosh/napflow/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/napflow)](https://pypi.org/project/napflow/)
 
 Local-first, git-friendly, node-based flow editor and engine for complex
 API request/response processing — think *"Postman Flows, but open,
@@ -8,15 +9,15 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: v0.1.0 release candidate / developer preview.** All four
-planned stages are complete at checkpoint `0.1.0.dev4` — the file format, validator, CLI,
-headless engine (full node catalog), and the visual canvas (edit, run,
-inspect, history) work end to end on macOS, Windows, and Linux. A
-manual-testing pass is running on this checkpoint; the same scope then
-ships as the first tagged release. All `v0.x` formats—including the
-current `schema: napflow/v1` marker—are experimental and may change
-before v1.0. The accepted v0.2 full-fidelity/hardening plan is in
-[docs/PLAN.md](docs/PLAN.md) (D33–D37).
+**Status: v0.1.0 — developer preview.** The first working milestone:
+file format, validator, CLI, headless engine (full node catalog), and
+the visual canvas (edit, run, inspect, history) work end to end on
+macOS, Windows, and Linux. All `v0.x` formats—including the current
+`schema: napflow/v1` marker—are experimental and may change before
+v1.0. napflow assumes trusted workspaces (flows run real Python on
+your machine) and is localhost-only. The accepted v0.2
+full-fidelity/hardening plan is in [docs/PLAN.md](docs/PLAN.md)
+(D33–D37).
 
 ## Why
 
@@ -46,20 +47,19 @@ before v1.0. The accepted v0.2 full-fidelity/hardening plan is in
 
 ## Try it
 
-Not on PyPI yet — install from git (needs [uv](https://docs.astral.sh/uv/)):
-
-> Known v0.1 source-install limitation: the UI bundle is generated and
-> gitignored, so a clean direct-Git build may serve the placeholder UI.
-> Tagged release artifacts build and include the UI; deterministic Git
-> installation is planned for v0.2 (FR-1113).
+Needs Python 3.12+; simplest with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-uv tool install git+https://github.com/nickosh/napflow
+uv tool install napflow
 napf init my-flows && cd my-flows
 napf check
 napf run flows/smoke   # headless, offline demo flow
 napf ui                # opens the canvas in your browser
 ```
+
+> Install from PyPI (above) or a GitHub release wheel. Direct
+> `git+https` installs serve a placeholder UI — the bundle is build
+> output, not in git; deterministic Git installs are planned (FR-1113).
 
 ## What a flow looks like
 
