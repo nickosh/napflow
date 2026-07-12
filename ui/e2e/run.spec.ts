@@ -13,7 +13,7 @@ import { expect, test } from "@playwright/test";
 test("live run: passed overlay, wire detail, run mode locks editing", async ({
   page,
 }) => {
-  await page.goto("/flows/passcase");
+  await page.goto("/flow/flows/passcase");
   await expect(page.getByTestId("node-verify")).toBeVisible();
   // editing surfaces are up before the run
   await expect(page.getByTestId("add-node")).toBeVisible();
@@ -72,7 +72,7 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
 test("failing run: red assert, live log value, travelled wires", async ({
   page,
 }) => {
-  await page.goto("/flows/failcase");
+  await page.goto("/flow/flows/failcase");
   await expect(page.getByTestId("node-verify")).toBeVisible();
 
   // failcase declares a Start port → the popover opens, prefilled
@@ -125,7 +125,7 @@ test("failing run: red assert, live log value, travelled wires", async ({
 test("run inputs override the Start-port default (napf run -i parity)", async ({
   page,
 }) => {
-  await page.goto("/flows/failcase");
+  await page.goto("/flow/flows/failcase");
   await page.getByTestId("run-button").click();
   await page.getByTestId("run-input-threshold").fill("3");
   await page.getByTestId("run-popover-start").click();
@@ -142,7 +142,7 @@ test("run inputs override the Start-port default (napf run -i parity)", async ({
 });
 
 test("a live run pulses and can be aborted", async ({ page }) => {
-  await page.goto("/flows/slow");
+  await page.goto("/flow/flows/slow");
   await page.getByTestId("run-button").click();
 
   // mid-delay: the run is live, the delay node is visibly executing
@@ -179,7 +179,7 @@ test("a live run pulses and can be aborted", async ({ page }) => {
 test("history browser lists and replays runs; EC20 dangling start", async ({
   page,
 }) => {
-  await page.goto("/flows/failcase");
+  await page.goto("/flow/flows/failcase");
   await page.getByTestId("open-history").click();
   await expect(page.getByTestId("run-panel")).toBeVisible();
 

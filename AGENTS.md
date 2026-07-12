@@ -178,7 +178,9 @@ valves/mask-everywhere approach as if it were the accepted future design.
    by `docs/PLAN.md` M0–M7: regression/format baseline → workspace and
    durable saves → lifecycle/worker → bounded execution/history →
    full-fidelity blobs/redaction → scalable replay/timeline → public,
-   packaging, and UI contracts → measured release gate.
+   packaging, and UI contracts → measured release gate. M0 and M1 are
+   complete (2026-07-12); the next implementation milestone is M2's
+   scheduler fairness, cancellation, and worker lifecycle.
 
 ## Testing priorities (in order of bug-risk)
 

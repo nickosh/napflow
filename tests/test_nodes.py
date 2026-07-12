@@ -6,6 +6,8 @@ per-run cache) — plus rule-6 seeding through the EC08 empty-seed guard
 
 import textwrap
 
+import pytest
+
 from test_engine import end, events_of, flow, run, start
 
 
@@ -209,6 +211,22 @@ def test_fixture_error_shapes(tmp_path):
         assert result.state == "failed", file  # EC24: no error port
         assert result.unhandled_errors[0]["kind"] == "fixture_error"
         assert needle in result.unhandled_errors[0]["message"]
+
+
+def test_fixture_runtime_rejects_symlink_escape_when_checker_is_bypassed(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.json"
+    outside.write_text('["must not be read"]', encoding="utf-8")
+    (tmp_path / "fixtures").mkdir()
+    try:
+        (tmp_path / "fixtures" / "escape.json").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    result, _ = run(fixture_flow("fixtures/escape.json"), workspace_root=tmp_path)
+    assert result.state == "failed"
+    error = result.unhandled_errors[0]
+    assert error["kind"] == "fixture_error"
+    assert "workspace boundary" in error["message"]
 
 
 def test_fixture_cached_per_run_survives_file_deletion(tmp_path):

@@ -83,6 +83,13 @@ model would silently delete every comment). The loader also retains
 ruamel's line/column marks through validation so every `napf check`
 diagnostic points at file:line (engine spec §8).
 
+As of v0.2/M1 (2026-07-12), `save_document` emits to a same-directory
+temporary file as UTF-8/LF, flushes and `fsync`s it, preserves existing
+permission bits, then atomically replaces the live path and cleans up on
+failure. The canvas, CLI/scaffold, and cloned flow sources all pass through
+this primitive; JSONL histories remain append-only streams and deliberately
+do not. This durability layer changes no serializer bytes or key ordering.
+
 ## Key order & determinism
 
 Determinism comes from the *emitter*: the loader builds node/edge

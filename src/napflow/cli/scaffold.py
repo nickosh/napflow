@@ -9,6 +9,7 @@ scaffolded workspace must pass `napf check` with zero diagnostics and
 
 from pathlib import Path
 
+from napflow.core.files import atomic_write_text
 from napflow.core.loader import save_document
 
 MAIN_FLOW = {
@@ -262,8 +263,7 @@ def scaffold_workspace(directory: Path) -> list[tuple[str, str]]:
             results.append((rel, "exists"))
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
+        atomic_write_text(path, content)
         results.append((rel, "created"))
 
     (directory / ".napflow").mkdir(parents=True, exist_ok=True)

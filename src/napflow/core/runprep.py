@@ -22,10 +22,15 @@ from napflow.core.events import (
     SecretMasker,
     apply_retention,
     new_run_id,
-    run_log_path,
 )
 from napflow.core.loader import LoadedFlow, LoadError, load_flow
-from napflow.core.workspace import EnvFileError, Workspace, layer_env, parse_env_file
+from napflow.core.workspace import (
+    EnvFileError,
+    Workspace,
+    WorkspaceBoundaryError,
+    layer_env,
+    parse_env_file,
+)
 
 PrepFailure = Literal[
     "flow_not_found",
@@ -72,8 +77,11 @@ def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> Prep
     broken subflow blocks like a broken entry. An explicit `env` must
     exist; the manifest default is best-effort (profiles are gitignored
     — fresh clones have none)."""
-    identity = Path(flow).as_posix().strip("/")
-    file = workspace.root / Path(identity) / "flow.yaml"
+    try:
+        identity = workspace.resolver.normalize_identity(flow)
+        file = workspace.resolver.flow_file(identity)
+    except WorkspaceBoundaryError as e:
+        raise RunPrepError("workspace_boundary", str(e)) from e
     if not file.is_file():
         known = ", ".join(r.identity for r in workspace.discover_flows()) or "none"
         raise RunPrepError(
@@ -85,6 +93,13 @@ def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> Prep
     except LoadError as e:
         raise RunPrepError("load", str(e), diagnostics_from_load_error(e)) from e
     diagnostics = check_run_closure(loaded, identity, workspace)
+    boundary = next((d for d in diagnostics if d.reason == "workspace_boundary"), None)
+    if boundary is not None:
+        raise RunPrepError(
+            "workspace_boundary",
+            f"{identity}: {boundary.message}",
+            diagnostics,
+        )
     if any(d.severity == "error" for d in diagnostics):
         raise RunPrepError("check", f"{identity}: check errors", diagnostics)
 
@@ -131,7 +146,7 @@ def open_run_stream(
     sinks fan out the same born-masked records (D13)."""
     manifest = workspace.manifest.model
     run_id = new_run_id()
-    log_path = run_log_path(workspace.root, prepared.identity, run_id)
+    log_path = workspace.resolver.run_log(prepared.identity, run_id)
     stream = EventStream(
         run_id,
         SecretMasker(manifest.environments.secrets, prepared.env),

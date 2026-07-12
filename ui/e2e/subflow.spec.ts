@@ -7,7 +7,7 @@ import { expect, test } from "@playwright/test";
 // (fullyParallel: false) — the mutating clone test goes LAST.
 
 test("cross-node template refs render as ghost-wires", async ({ page }) => {
-  await page.goto("/flows/ghostcase");
+  await page.goto("/flow/flows/ghostcase");
   await expect(page.getByTestId("node-two")).toBeVisible();
   // 3 real wires + 1 ghost (two's label reads one's output)
   const ghost = page.locator(".react-flow__edge.napf-ghost-edge");
@@ -18,40 +18,40 @@ test("cross-node template refs render as ghost-wires", async ({ page }) => {
 test("double-clicking a flow node drills into its target", async ({
   page,
 }) => {
-  await page.goto("/flows/parent");
+  await page.goto("/flow/flows/parent");
   await page.getByTestId("node-sub").dblclick();
-  await expect(page).toHaveURL(/\/flows\/child$/);
+  await expect(page).toHaveURL(/\/flow\/flows\/child$/);
   // the child canvas replaces the parent's — pure navigation (D09)
   await expect(page.getByTestId("node-sub")).toHaveCount(0);
   await expect(page.getByTestId("node-start")).toBeVisible();
   // browser back returns to the parent (popstate)
   await page.goBack();
-  await expect(page).toHaveURL(/\/flows\/parent$/);
+  await expect(page).toHaveURL(/\/flow\/flows\/parent$/);
   await expect(page.getByTestId("node-sub")).toBeVisible();
 });
 
 test("the drilled-in flow reports where it is used (D09)", async ({
   page,
 }) => {
-  await page.goto("/flows/child");
+  await page.goto("/flow/flows/child");
   const usedBy = page.getByTestId("used-by");
   await expect(usedBy).toContainText("used in 1 place");
   await expect(usedBy).toContainText("(sub)");
   await page.getByTestId("used-by-flows/parent").click();
-  await expect(page).toHaveURL(/\/flows\/parent$/);
+  await expect(page).toHaveURL(/\/flow\/flows\/parent$/);
 });
 
 test("the inspector opens a flow node's target", async ({ page }) => {
-  await page.goto("/flows/parent");
+  await page.goto("/flow/flows/parent");
   await page.getByTestId("node-sub").click();
   await page.getByTestId("drill-in").click();
-  await expect(page).toHaveURL(/\/flows\/child$/);
+  await expect(page).toHaveURL(/\/flow\/flows\/child$/);
 });
 
 test("clone-to-new-flow forks the target and repoints the node", async ({
   page,
 }) => {
-  await page.goto("/flows/parent");
+  await page.goto("/flow/flows/parent");
   await page.getByTestId("node-sub").click();
   await page.getByTestId("clone-flow").click();
   // the dest prefills from the target; keep the default

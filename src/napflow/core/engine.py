@@ -94,6 +94,7 @@ from napflow.core.worker import (
     WorkerTaskError,
     default_interpreter,
 )
+from napflow.core.workspace import WorkspaceBoundaryError, WorkspaceResolver
 
 RunState = Literal["passed", "failed", "error", "aborted"]
 
@@ -293,11 +294,19 @@ class FlowRun:
         run_timeout_s: float | None = None,
         flow_dir: Path | None = None,
         workspace_root: Path | None = None,
+        workspace_resolver: WorkspaceResolver | None = None,
     ):
         self._flow = flow
         self._flow_identity = flow_identity
         self._flow_dir = flow_dir
-        self._workspace_root = workspace_root
+        self._workspace_resolver = workspace_resolver
+        if self._workspace_resolver is None and workspace_root is not None:
+            self._workspace_resolver = WorkspaceResolver(workspace_root)
+        self._workspace_root = (
+            self._workspace_resolver.root
+            if self._workspace_resolver is not None
+            else workspace_root
+        )
         self._python_settings = manifest.python
         self._defaults = manifest.defaults.run
         self._env = dict(env)
@@ -810,6 +819,23 @@ class FlowRun:
                 " FlowRun/execute_flow) to locate nodes.py",
             )
         nodes_path = frame.flow_dir / "nodes.py"
+        if self._workspace_resolver is not None:
+            try:
+                relative_dir = frame.flow_dir.resolve(strict=False).relative_to(
+                    self._workspace_resolver.root
+                )
+                if relative_dir.parts:
+                    nodes_path = self._workspace_resolver.source_file(
+                        relative_dir.as_posix(), "nodes.py"
+                    )
+                else:
+                    nodes_path = self._workspace_resolver.resolve_workspace_path(
+                        "nodes.py", label="python source"
+                    )
+            except (OSError, RuntimeError, ValueError, WorkspaceBoundaryError) as e:
+                raise _NodeError(
+                    "worker_crash", f"python source violates workspace boundary: {e}"
+                ) from e
         if not nodes_path.is_file():
             raise _NodeError("worker_crash", f"no nodes.py at {nodes_path}")
         if self._workers is None:
@@ -874,14 +900,18 @@ class FlowRun:
         cached = self._flow_cache.get(ref)
         if cached is not None:
             return cached
-        if self._workspace_root is None:
+        if self._workspace_resolver is None:
             raise _NodeError(
                 "flow_load_error",
                 "flow references need workspace_root — pass it to FlowRun/execute_flow",
             )
-        flow_dir = self._workspace_root / Path(ref)
         try:
-            loaded = load_flow(flow_dir / "flow.yaml")
+            flow_dir = self._workspace_resolver.flow_dir(ref)
+            loaded = load_flow(self._workspace_resolver.flow_file(ref))
+        except WorkspaceBoundaryError as e:
+            raise _NodeError(
+                "flow_load_error", f"flow {ref!r} violates workspace boundary: {e}"
+            ) from e
         except (OSError, LoadError) as e:
             raise _NodeError("flow_load_error", f"cannot load flow {ref!r}: {e}") from e
         entry = (_Graph(loaded.model), flow_dir, loaded.model.env)
@@ -1116,14 +1146,22 @@ class FlowRun:
         per RUN (keyed by resolved path — a mid-run file change or
         deletion never splits the data). CSV → list of dicts, header
         row required, values stay strings (no inference)."""
-        root = self._workspace_root or self._flow_dir
-        if root is None:
+        resolver = self._workspace_resolver
+        if resolver is None and self._flow_dir is not None:
+            resolver = WorkspaceResolver(self._flow_dir)
+        if resolver is None:
             raise _NodeError(
                 "fixture_error",
                 "fixture nodes need workspace_root (or flow_dir) to"
                 " resolve files — pass it to FlowRun/execute_flow",
             )
-        path = root / node.config.file
+        try:
+            path = resolver.fixture_file(node.config.file)
+        except WorkspaceBoundaryError as e:
+            raise _NodeError(
+                "fixture_error",
+                f"fixture {node.config.file!r} violates workspace boundary: {e}",
+            ) from e
         key = str(path)
         if key in self._fixture_cache:
             return self._fixture_cache[key]
@@ -1581,6 +1619,7 @@ async def execute_flow(
     run_timeout_s: float | None = None,
     flow_dir: Path | None = None,
     workspace_root: Path | None = None,
+    workspace_resolver: WorkspaceResolver | None = None,
 ) -> RunResult:
     """Run one flow to quiescence (BIND → EXECUTE → FINALIZE). The
     caller owns LOAD/CHECK, the event stream, and its sinks (M5 wires
@@ -1598,5 +1637,6 @@ async def execute_flow(
         run_timeout_s=run_timeout_s,
         flow_dir=flow_dir,
         workspace_root=workspace_root,
+        workspace_resolver=workspace_resolver,
     )
     return await run.execute()

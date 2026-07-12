@@ -1,6 +1,8 @@
 // Thin typed wrappers over the server REST surface (WM "Server
 // surface"). The UI never constructs run semantics — core owns them.
 
+import { apiIdentityPath } from "./identity";
+
 export type WorkspaceInfo = {
   name: string | null;
   description: string | null;
@@ -159,7 +161,7 @@ export async function fetchFlows(): Promise<FlowSummary[]> {
 }
 
 export function fetchFlowDetail(identity: string): Promise<FlowDetail> {
-  return getJson<FlowDetail>(`/api/flows/${identity}`);
+  return getJson<FlowDetail>(apiIdentityPath("/api/flows", identity));
 }
 
 async function putJson<T>(path: string, body: unknown): Promise<T> {
@@ -196,7 +198,7 @@ export function putFlow(
   baseEtag: string | null,
   force = false,
 ): Promise<SavedFlow> {
-  return putJson<SavedFlow>(`/api/flows/${identity}`, {
+  return putJson<SavedFlow>(apiIdentityPath("/api/flows", identity), {
     flow,
     base_etag: baseEtag,
     force,
@@ -204,7 +206,7 @@ export function putFlow(
 }
 
 export function fetchCode(identity: string): Promise<CodeFile> {
-  return getJson<CodeFile>(`/api/code/${identity}`);
+  return getJson<CodeFile>(apiIdentityPath("/api/code", identity));
 }
 
 export function putCode(
@@ -213,7 +215,7 @@ export function putCode(
   baseEtag: string | null,
   force = false,
 ): Promise<SavedCode> {
-  return putJson<SavedCode>(`/api/code/${identity}`, {
+  return putJson<SavedCode>(apiIdentityPath("/api/code", identity), {
     code,
     base_etag: baseEtag,
     force,
@@ -221,7 +223,7 @@ export function putCode(
 }
 
 export function fetchEtags(identity: string): Promise<Etags> {
-  return getJson<Etags>(`/api/etags/${identity}`);
+  return getJson<Etags>(apiIdentityPath("/api/etags", identity));
 }
 
 // ---- runs (S4/M5, FR-1005) ------------------------------------------
@@ -306,18 +308,20 @@ export async function fetchRunEvents(
   flow: string,
 ): Promise<Record<string, unknown>[]> {
   const payload = await getJson<{ events: Record<string, unknown>[] }>(
-    `/api/runs/${runId}/events?flow=${encodeURIComponent(flow)}`,
+    `/api/runs/${encodeURIComponent(runId)}/events?flow=${encodeURIComponent(flow)}`,
   );
   return payload.events;
 }
 
 export async function abortRun(runId: string): Promise<void> {
-  await fetch(`/api/runs/${runId}/abort`, { method: "POST" });
+  await fetch(`/api/runs/${encodeURIComponent(runId)}/abort`, { method: "POST" });
 }
 
 /** Live tail: text frames are the JSONL lines verbatim (buffered
  * prefix, then stream; normal close after run_finished). */
 export function openRunSocket(runId: string): WebSocket {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  return new WebSocket(`${scheme}://${window.location.host}/ws/runs/${runId}`);
+  return new WebSocket(
+    `${scheme}://${window.location.host}/ws/runs/${encodeURIComponent(runId)}`,
+  );
 }

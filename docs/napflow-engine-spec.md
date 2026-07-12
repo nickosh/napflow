@@ -427,7 +427,10 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     strings (no type inference); short rows fill missing fields with
     null; a row longer than the header is an error. All failures =
     `fixture_error` via the EC24 path. Paths resolve against the
-    workspace root (fallback: the flow dir).
+    workspace root (fallback: the flow dir outside a selected workspace).
+    With a workspace, the central resolver rejects lexical traversal,
+    drive/backslash forms, and resolved symlink escape before any read;
+    checker/run preparation reports stable `workspace_boundary` (D37).
   - **fixture auto-seed (rule 6, D17)**: goes through the normal
     firing path with a synthetic trigger (`value: null`,
     `produced_by: "__seed__"`) — `max_seconds` and error handling
@@ -898,9 +901,19 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   pathological expression can stall the run — same trust domain as user
   code. **The v0.1 run deadline is not a hard backstop for synchronous
   rendering**; EC27/EC35 remain open until the post-v0.2 decision above.
+- **Workspace path containment is centralized (v0.2/M1, D37).** Entry,
+  reference, fixture, source, history, and clone paths pass through one
+  lexical + symlink-aware resolver and must remain below the selected
+  canonical workspace (clone destinations also remain below `flows.root`).
+  Boundary failures use stable `workspace_boundary`; run IDs use the
+  pinned Windows-safe grammar. This prevents accidental/identity-driven
+  escape, but the trusted-workspace model is not an OS sandbox against a
+  separate malicious local process racing filesystem entries.
 - **The server binds localhost only.** `napf ui` serves on `127.0.0.1`
-  with no authentication in v0.1 — do not bind it to public interfaces;
-  remote/multi-user operation is out of scope.
+  with no authentication or public bind mode. v0.2/M1 additionally requires
+  one loopback Host on every request and a matching browser Origin on
+  mutations/WebSockets (programmatic loopback clients may omit Origin).
+  Remote/multi-user operation is out of scope.
 - **Secrets (v0.1 current)**: declared-secret masking at emission per
   D22; runtime-acquired tokens are stored in full. D35 replaces this in
   v0.2 with private raw local truth plus explicit redacted

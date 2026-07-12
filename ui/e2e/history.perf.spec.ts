@@ -7,7 +7,7 @@ const CASES = [
 
 for (const { label, runId } of CASES) {
   test(`history first render and retained heap: ${label}`, async ({ page }) => {
-    await page.goto("/flows/perf");
+    await page.goto("/flow/flows/perf");
     await expect(page.getByTestId("node-start")).toBeVisible();
     await page.getByTestId("open-history").click();
     const row = page.getByTestId("history-run").filter({ hasText: runId });

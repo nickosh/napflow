@@ -18,6 +18,10 @@ v0.1 manifest behavior. Package v0.x and `schema: napflow/v1` remain
 experimental; v0.2 may replace capture/redaction settings as it moves to
 full-fidelity blobs, soft local limits, and explicit CI/export policy.
 Breaking changes are documented rather than prohibited before v1.0.
+Amended 2026-07-12 for v0.2/M1: path resolution, local-request checks,
+source durability, editor persistence, and flow-identity URL transport now
+describe the implemented hardened behavior; later D34–D36 storage/lifecycle
+changes remain future milestones.
 
 ## Full example
 
@@ -115,9 +119,23 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    bearer token in a login response body) are not — see roadmap. Masking
    applies in UI, logs, and stored runs alike, at emission (events are
    born masked).
-6. **`napf` walks upward** from cwd to find `napflow.yaml` (like git);
+6. **Workspace identities and containment (D37, v0.2/M1)** — one
+   `WorkspaceResolver` owns entry flows, flow/loop references, fixtures,
+   histories, source files, and clone destinations. Identities are non-empty
+   workspace-relative POSIX paths: empty segments, `.`/`..`, backslashes,
+   Windows drive syntax, control characters, and invalid Unicode surrogates
+   are rejected; spaces and URL-reserved filename characters remain data.
+   Candidates are resolved symlink-aware beneath the canonical workspace;
+   clone destinations must also be lexically and canonically under
+   `flows.root`. `flow.yaml`/`nodes.py` must resolve to their exact canonical
+   source names, while whole-directory aliases that stay inside the workspace
+   remain usable. Run ids match `YYYYmmdd-HHMMSS-xxxxxx` (lowercase hex).
+   A final JSONL path must likewise resolve to that run id's exact canonical
+   location, not alias another flow/run. Every violation uses stable reason
+   `workspace_boundary`.
+7. **`napf` walks upward** from cwd to find `napflow.yaml` (like git);
    all manifest paths are workspace-relative.
-7. **Serialization** — the manifest and all flow files are read with a
+8. **Serialization** — the manifest and all flow files are read with a
    safe YAML loader and written through the shared canonical serializer
    (block style, strings double-quoted, no anchors, LF). See
    `yaml-profile.md` (D23).
@@ -208,7 +226,7 @@ nicety: `napf check --write-env-example` to regenerate a committed
 `napf check` is the CI pre-gate: fails fast on broken references before
 anything executes.
 
-## Server surface (v0.1) — pinned at S4/M1, 2026-07-06
+## Server surface — v0.1 API plus v0.2/M1 boundary (2026-07-12)
 
 `napf ui [--port] [--no-browser]` serves UI + API + WebSocket on ONE
 localhost port (D03) and opens the default browser (stdlib
@@ -216,18 +234,21 @@ localhost port (D03) and opens the default browser (stdlib
 THIN adapter: run semantics live in `core/runprep.py`, shared verbatim
 with `napf run` — one gate, one env-resolution rule, one stream wiring.
 
-> **Known v0.1 gaps, reopened for v0.2:** `_safe_identity` protects only
-> selected URL/write paths; entry runs, histories, refs, fixtures, and
-> symlinked parents do not share one resolved-containment policy (EC38).
-> Writes are non-atomic and debounced navigation can lose edits (EC46).
-> D37 + PLAN M1 are authoritative for the replacement boundary; the
-> endpoint list below documents current v0.1 behavior.
+v0.2/M1 keeps the endpoint vocabulary but replaces the former scattered
+`_safe_identity`, direct source writes, and independent UI debounce timers.
+All identity-derived paths now use resolution rule 6; all source writes use
+the durable path below; canvas persistence is serialized and lifecycle-aware.
 
 - **Port**: default **6273** ("NAPF" on a phone keypad). Taken + no
   explicit `--port` ⇒ scan the next 19 (multiple open workspaces, the
   Jupyter convention). An explicit busy `--port` = error, exit 2.
-- **Bind**: `127.0.0.1` only — never a network service. No auth in v0.1
-  (localhost trust); anything beyond that is out of scope (PRODUCT).
+- **Bind/request boundary**: `127.0.0.1` only — never a network service.
+  Every HTTP/WS request must carry exactly one Host resolving to localhost or
+  a loopback IP (dynamic ports allowed). Browser mutation methods and WS must
+  also carry an `http(s)` Origin exactly matching scheme/host/port; a foreign
+  or malformed authority is rejected before the handler/WS accept as HTTP
+  403 `{error: "request_origin"}` or WS close 4403. Programmatic loopback
+  clients may omit Origin. There is no auth/public bind mode (D37/EC51).
 - **REST** (JSON): `GET /api/workspace` (manifest summary + profiles +
   version) · `GET /api/flows` (structured `napf list`; unloadable
   flows appear `valid: false`) · `GET /api/flows/<identity>` (catch-all
@@ -258,9 +279,10 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   malformed/newer format or unsupported declared feature) ·
   `POST /api/runs/{run_id}/abort` (202 aborting; on a finished run:
   200 + final state, idempotent no-op).
-- **Write path** (S4/M4, FR-1003; identities are `_safe_identity`-
-  guarded — absolute/`..`/drive-letter tails 400, but symlinked parents
-  can still escape in v0.1 as the warning above records):
+- Identity, run-id, or resolved-containment failures on these REST paths are
+  HTTP 400 with stable `{error: "workspace_boundary", message}`; missing safe
+  resources keep their existing 404/check vocabulary.
+- **Write path** (S4/M4 + v0.2/M1, FR-1003/1109):
   `PUT /api/flows/<identity>` `{flow, base_etag?, force?}` — validate
   the FlowFile JSON (400 `validation` + pydantic diagnostics, nothing
   written) → etag gate (`base_etag` ≠ current ⇒ 409 `{error:
@@ -275,10 +297,30 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   a syntax error is REPORTED (`ast.parse`, EC14) but the file saves
   anyway — the editor never holds user code hostage; broken code
   surfaces as E008 until fixed. PUT creates a missing nodes.py.
+  Both paths serialize the per-canonical-file ETag check + write, so requests
+  carrying one base ETag cannot both be accepted. `save_document` and
+  nodes.py writes emit UTF-8/LF into a same-directory temporary file, flush +
+  `fsync`, preserve existing permission bits, atomically replace, and clean
+  the temporary on failure; a failed write returns 507 `write_failed` without
+  truncating the live source. Scaffold and clone source creation use the same
+  primitive; a failed clone removes its unaccepted destination. JSONL run
+  histories remain streaming files and deliberately do not use atomic replace.
   `GET /api/etags/<identity>` → `{identity, etag, code_etag}` — cheap
   poll target; FR-1004's v0.1 shape is polling (~2s), not a native FS
   watcher: external change while the canvas is clean ⇒ silent reload;
   while dirty ⇒ the PUT's 409 raises the reload/overwrite prompt.
+- **Editor persistence/identity transport** (v0.2/M1, FR-1110/1111): one
+  revisioned coordinator per mounted flow/code file debounces but never
+  overlaps writes; edits accepted during a request queue behind it and use the
+  returned ETag. Flow navigation, code-editor close, and run start flush every
+  mounted coordinator; conflict/error blocks the transition, while
+  `beforeunload` visibly prompts whenever work is pending. Resource/navigation
+  generations prevent late GET/PUT responses from replacing newer state.
+  Browser routes are `/flow/<identity>`; every identity segment is encoded
+  exactly once, keeping `/` as hierarchy and spaces/`#`/`%`/`?` as data.
+  Namespacing prevents valid identities such as `api/workspace` or
+  `assets/canvas` from colliding with REST/static paths. Back/forward crosses
+  the same save barrier and restores a blocked history transition.
 - **Subflow UX** (S4/M6, FR-1007): the flow-detail payload also carries
   `template_refs: {node: [node_ids]}` — cross-node `nodes.<id>`
   references, AST-derived (the same Jinja2 parse E009 runs) from
@@ -287,20 +329,24 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   — and `used_by: [{identity, nodes}]` — flows whose flow/loop nodes
   reference this one, D09's "used in N places" (a place = a
   referencing node). `POST /api/flows/clone` `{source, dest}` → 201
-  `{identity}`: forks the flow FOLDER verbatim (flow.yaml + nodes.py +
+  `{identity}`: forks the flow FOLDER (flow.yaml + nodes.py +
   anything else in it — D09's explicit "Clone to new flow…"). Guards:
-  both identities `_safe_identity`-checked (400), dest must sit under
+  both identities cross the central workspace boundary (400
+  `workspace_boundary`), dest must sit lexically and canonically under
   `flows.root` (a clone discovery can't see would be invisible in the
-  sidebar and `napf list` — 400), must not be or nest inside the
-  source (400), and must not already exist (409 `dest_exists`);
-  unknown source 404.
+  sidebar and `napf list`), must not be or nest inside the source (400),
+  and must not already exist (409 `dest_exists`); unknown source 404.
+  Concurrent attempts at one destination serialize. Nested symlinks are
+  preserved as links rather than dereferenced; source files use the durable
+  write primitive and an interrupted clone destination is removed.
 - **WebSocket** `/ws/runs/{run_id}`: text frames are the JSONL lines
   VERBATIM (one `encode_record` — identical by construction, D13).
   Live run: replay the buffered prefix, then stream; server closes
   normally after `run_finished`. Finished run: validate the history
   envelope, replay the file, close; malformed/newer/unsupported format:
   close `4409`.
-  Unknown run: close `4404`.
+  Unknown run: close `4404`; malformed run id/boundary: `4400`; rejected
+  Host/Origin before accept: `4403`.
 - **Run registry**: runs the server started, in memory — live buffers
   drop at run end (JSONL is the durable record), finished summaries
   capped at 32. Server shutdown aborts running flows (clean JSONL
@@ -309,8 +355,9 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   S4/M5: still deferred, D29 — the canvas gets full wire detail live
   over the WebSocket plus the JSONL history browser).
 - **Static UI**: the pre-built bundle ships inside the wheel and is
-  served at `/` with an SPA fallback (S4/M2, NFR-03); until it exists,
-  `/` is a plain placeholder page.
+  served at `/` with an SPA fallback (S4/M2, NFR-03). Canvas deep links
+  live only below `/flow/`; API and `/assets/` retain their own namespaces.
+  Until the bundle exists, `/` is a plain placeholder page.
 
 ## Roadmap / reserved
 

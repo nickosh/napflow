@@ -32,6 +32,7 @@ from napflow.core.events import (
     parse_history_format,
     run_log_path,
 )
+from napflow.core.workspace import WorkspaceBoundaryError
 
 NO_SECRETS = SecretMasker([], {})
 FIXED_CLOCK = lambda: datetime(2026, 7, 5, 10, 0, 0, 123456, tzinfo=UTC)  # noqa: E731
@@ -306,10 +307,17 @@ def test_jsonl_roundtrip(tmp_path):
 
 
 def test_sink_never_overwrites(tmp_path):
-    path = run_log_path(tmp_path, "flows/demo", "duplicate-id")
+    path = run_log_path(tmp_path, "flows/demo", "20260712-120000-abcdef")
     JsonlSink(path).close()
     with pytest.raises(FileExistsError):
         JsonlSink(path)
+
+
+def test_run_log_path_uses_workspace_boundary(tmp_path):
+    with pytest.raises(WorkspaceBoundaryError):
+        run_log_path(tmp_path, "../outside", new_run_id())
+    with pytest.raises(WorkspaceBoundaryError):
+        run_log_path(tmp_path, "flows/demo", "../outside")
 
 
 def test_run_id_format_and_sortability():

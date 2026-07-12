@@ -30,6 +30,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
+from napflow.core.workspace import WorkspaceResolver
+
 MASK = "***"
 
 # --------------------------------------------------------------------------
@@ -360,8 +362,9 @@ def new_run_id(now: datetime | None = None) -> str:
 
 def run_log_path(workspace_root: Path, flow_identity: str, run_id: str) -> Path:
     """`.napflow/runs/<flow>/<run-id>.jsonl` — <flow> is the
-    workspace-relative identity, so nested flows nest here too."""
-    return workspace_root / RUNS_DIRNAME / Path(flow_identity) / f"{run_id}.jsonl"
+    workspace-relative identity, so nested flows nest here too. This
+    compatibility helper delegates to the central workspace boundary."""
+    return WorkspaceResolver(workspace_root).run_log(flow_identity, run_id)
 
 
 def apply_retention(runs_dir: Path, history: int) -> list[Path]:

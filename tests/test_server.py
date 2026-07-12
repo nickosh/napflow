@@ -13,9 +13,10 @@ import asyncio
 import json
 import socket
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
-from blacksheep.contents import JSONContent
+from blacksheep.contents import Content, JSONContent
 from blacksheep.testing import TestClient
 
 from napflow.cli.main import DEFAULT_UI_PORT, _pick_ui_port
@@ -23,7 +24,12 @@ from napflow.cli.scaffold import scaffold_workspace
 from napflow.core.events import HISTORY_FEATURE_CONTENT_BLOBS, HISTORY_FORMAT
 from napflow.core.workspace import Workspace, load_workspace
 from napflow.server import build_app
-from napflow.server.app import WS_HISTORY_FORMAT, _read_records
+from napflow.server.app import (
+    WS_HISTORY_FORMAT,
+    WS_REQUEST_ORIGIN,
+    _read_records,
+    _SourceWriteCoordinator,
+)
 
 # --------------------------------------------------------------------------
 # Harness — suite style: sync tests drive async scenarios via asyncio.run
@@ -305,6 +311,32 @@ def test_empty_live_history_prefix_is_readable(tmp_path):
     assert _read_records(log_path, allow_empty=True) == []
 
 
+def test_history_endpoints_reject_final_log_symlink_escape(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    run_id = "19700101-000000-abcdef"
+    runs = ws.root / ".napflow" / "runs" / "flows" / "smoke"
+    runs.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text('{"event":"run_started","seq":1}\n', encoding="utf-8")
+    try:
+        (runs / f"{run_id}.jsonl").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    async def scenario(client):
+        listed = await client.get("/api/runs", query={"flow": "flows/smoke"})
+        assert listed.status == 400
+        assert (await listed.json())["error"] == "workspace_boundary"
+
+        replay = await client.get(
+            f"/api/runs/{run_id}/events", query={"flow": "flows/smoke"}
+        )
+        assert replay.status == 400
+        assert (await replay.json())["error"] == "workspace_boundary"
+
+    with_client(ws, scenario)
+
+
 def test_history_replay_rejects_malformed_first_json_record(tmp_path):
     """A corrupt first nonblank line is an invalid envelope, not an empty or
     partially flushed live history. Both public replay surfaces must reject
@@ -404,12 +436,13 @@ edges:
 
 def test_unknown_run_endpoints_404(tmp_path):
     ws = make_scaffold_ws(tmp_path)
+    missing = "19700101-000000-abcdef"
 
     async def scenario(client):
-        for path in ("/api/runs/nope", "/api/runs/nope/events"):
+        for path in (f"/api/runs/{missing}", f"/api/runs/{missing}/events"):
             response = await client.get(path)
             assert response.status == 404
-        response = await client.post("/api/runs/nope/abort")
+        response = await client.post(f"/api/runs/{missing}/abort")
         assert response.status == 404
 
     with_client(ws, scenario)
@@ -519,7 +552,7 @@ def test_ui_bundle_served_with_spa_fallback(tmp_path, monkeypatch):
         assert "bundle" in await index.text()
         asset = await client.get("/assets/app.js")
         assert asset.status == 200
-        fallback = await client.get("/flows/some/client/route")
+        fallback = await client.get("/flow/flows/some/client/route")
         assert fallback.status == 200
         assert "bundle" in await fallback.text()
 
@@ -718,6 +751,41 @@ def test_write_endpoints_reject_path_escapes(tmp_path):
     with_client(ws, scenario)
 
 
+@pytest.mark.parametrize(
+    ("source_name", "target_name", "endpoint", "body"),
+    [
+        ("nodes.py", "flow.yaml", "code", {"code": "# replacement\n"}),
+        ("flow.yaml", "nodes.py", "flows", {"flow": {}}),
+    ],
+)
+def test_source_endpoints_reject_sibling_symlink_aliases(
+    tmp_path, source_name, target_name, endpoint, body
+):
+    ws = make_scaffold_ws(tmp_path)
+    flow_dir = ws.root / "flows" / "smoke"
+    source = flow_dir / source_name
+    target = flow_dir / target_name
+    target_before = target.read_bytes()
+    source.unlink()
+    try:
+        source.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    async def scenario(client):
+        path = f"/api/{endpoint}/flows/smoke"
+        read = await client.get(path)
+        assert read.status == 400
+        assert (await read.json())["error"] == "workspace_boundary"
+
+        write = await client.put(path, content=JSONContent(body))
+        assert write.status == 400
+        assert (await write.json())["error"] == "workspace_boundary"
+        assert target.read_bytes() == target_before
+
+    with_client(ws, scenario)
+
+
 def test_code_get_put_roundtrip_with_syntax_report(tmp_path):
     ws = make_scaffold_ws(tmp_path)
     path = ws.root / "flows" / "smoke" / "nodes.py"
@@ -806,6 +874,287 @@ edges:
     with_client(ws, scenario)
 
 
+def test_source_write_failure_is_controlled_and_preserves_code(tmp_path, monkeypatch):
+    import napflow.server.app as server_app
+
+    ws = make_scaffold_ws(tmp_path)
+    path = ws.root / "flows" / "smoke" / "nodes.py"
+    before = path.read_bytes()
+
+    def disk_full(_path, _text):
+        raise OSError(28, "simulated disk full")
+
+    monkeypatch.setattr(server_app, "atomic_write_text", disk_full)
+
+    async def scenario(client):
+        got = await client.get("/api/code/flows/smoke")
+        code = await got.json()
+        response = await client.put(
+            "/api/code/flows/smoke",
+            content=JSONContent(
+                {"code": code["code"] + "\n# new\n", "base_etag": code["etag"]}
+            ),
+        )
+        assert response.status == 507
+        assert (await response.json())["error"] == "write_failed"
+        assert path.read_bytes() == before
+
+    with_client(ws, scenario)
+
+
+def test_source_endpoints_reject_file_symlink_outside_flow_directory(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    flow_dir = ws.root / "flows" / "main"
+    nodes = flow_dir / "nodes.py"
+    nodes.unlink()
+    manifest = ws.root / "napflow.yaml"
+    before = manifest.read_bytes()
+    try:
+        nodes.symlink_to(manifest)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    async def scenario(client):
+        got = await client.get("/api/code/flows/main")
+        assert got.status == 400
+        assert (await got.json())["error"] == "workspace_boundary"
+
+        put = await client.put(
+            "/api/code/flows/main",
+            content=JSONContent({"code": "must not overwrite manifest"}),
+        )
+        assert put.status == 400
+        assert (await put.json())["error"] == "workspace_boundary"
+        assert manifest.read_bytes() == before
+
+    with_client(ws, scenario)
+
+
+def test_concurrent_code_puts_serialize_the_etag_check(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    path = ws.root / "flows" / "smoke" / "nodes.py"
+
+    async def scenario(client):
+        original = await (await client.get("/api/code/flows/smoke")).json()
+
+        async def save(marker):
+            return await client.put(
+                "/api/code/flows/smoke",
+                content=JSONContent(
+                    {
+                        "code": original["code"] + f"\n# {marker}\n",
+                        "base_etag": original["etag"],
+                    }
+                ),
+            )
+
+        responses = await asyncio.gather(save("first"), save("second"))
+        assert sorted(response.status for response in responses) == [200, 409]
+        final = path.read_text(encoding="utf-8")
+        assert ("# first" in final) != ("# second" in final)
+
+    with_client(ws, scenario)
+
+
+def test_source_write_coordinator_serializes_yielding_critical_sections(tmp_path):
+    async def scenario():
+        coordinator = _SourceWriteCoordinator()
+        path = tmp_path / "flow.yaml"
+        active = 0
+        maximum = 0
+
+        async def enter():
+            nonlocal active, maximum
+            async with coordinator.lock(path):
+                active += 1
+                maximum = max(maximum, active)
+                await asyncio.sleep(0)
+                active -= 1
+
+        await asyncio.gather(enter(), enter())
+        assert maximum == 1
+
+    asyncio.run(scenario())
+
+
+def test_run_start_rejects_history_directory_symlink_escape(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    outside = tmp_path / "outside-runs"
+    outside.mkdir()
+    flow_runs = ws.root / ".napflow" / "runs" / "flows"
+    flow_runs.mkdir(parents=True)
+    try:
+        (flow_runs / "smoke").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    async def scenario(client):
+        response = await client.post(
+            "/api/runs", content=JSONContent({"flow": "flows/smoke"})
+        )
+        assert response.status == 400
+        assert (await response.json())["error"] == "workspace_boundary"
+        assert list(outside.iterdir()) == []
+
+    with_client(ws, scenario)
+
+
+def test_server_rejects_surrogate_identity_with_boundary_reason(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        response = await client.post(
+            "/api/runs",
+            content=Content(b"application/json", b'{"flow":"flows/\\ud800"}'),
+        )
+        assert response.status == 400
+        assert (await response.json())["error"] == "workspace_boundary"
+
+    with_client(ws, scenario)
+
+
+def test_concurrent_flow_puts_serialize_the_etag_check(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        original = await _flow_detail(client, "flows/main")
+
+        async def save(x):
+            flow = json.loads(json.dumps(original["flow"]))
+            flow["layout"]["start"] = [x, 200]
+            return await _put_flow(
+                client,
+                "flows/main",
+                flow=flow,
+                base_etag=original["etag"],
+            )
+
+        responses = await asyncio.gather(save(101), save(202))
+        assert sorted(response.status for response in responses) == [200, 409]
+        final = await _flow_detail(client, "flows/main")
+        assert final["flow"]["layout"]["start"][0] in {101, 202}
+
+    with_client(ws, scenario)
+
+
+def test_loopback_host_and_same_origin_mutation_boundary(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    path = ws.root / "flows" / "smoke" / "nodes.py"
+
+    async def scenario(client):
+        foreign_host = await client.get(
+            "/api/workspace", headers={"host": "attacker.example:8000"}
+        )
+        assert foreign_host.status == 403
+        assert (await foreign_host.json())["error"] == "request_origin"
+
+        malformed_host = await client.get(
+            "/api/workspace", headers={"host": "localhost:"}
+        )
+        assert malformed_host.status == 403
+
+        ipv6 = await client.get("/api/workspace", headers={"host": "[::1]:8000"})
+        assert ipv6.status == 200
+
+        got = await client.get("/api/code/flows/smoke")
+        code = await got.json()
+        accepted = await client.put(
+            "/api/code/flows/smoke",
+            headers={"origin": "http://127.0.0.1:8000"},
+            content=JSONContent(
+                {"code": code["code"] + "\n# accepted\n", "base_etag": code["etag"]}
+            ),
+        )
+        assert accepted.status == 200
+        accepted_payload = await accepted.json()
+        before_rejection = path.read_bytes()
+
+        for origin in (
+            "https://127.0.0.1:8000",
+            "http://127.0.0.1:9999",
+            "http://attacker.example:8000",
+            "null",
+        ):
+            rejected = await client.put(
+                "/api/code/flows/smoke",
+                headers={"origin": origin},
+                content=JSONContent(
+                    {
+                        "code": code["code"] + "\n# rejected\n",
+                        "base_etag": accepted_payload["etag"],
+                    }
+                ),
+            )
+            assert rejected.status == 403
+            assert (await rejected.json())["error"] == "request_origin"
+            assert path.read_bytes() == before_rejection
+
+    with_client(ws, scenario)
+
+
+def test_foreign_origin_rejects_every_mutation_route(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    run_id = "19700101-000000-abcdef"
+    headers = {"origin": "http://attacker.example:8000"}
+
+    async def scenario(client):
+        responses = [
+            await client.put(
+                "/api/flows/flows/main",
+                headers=headers,
+                content=JSONContent({"flow": {}}),
+            ),
+            await client.put(
+                "/api/code/flows/main",
+                headers=headers,
+                content=JSONContent({"code": "# rejected\n"}),
+            ),
+            await client.post(
+                "/api/flows/clone",
+                headers=headers,
+                content=JSONContent({"source": "flows/main", "dest": "flows/rejected"}),
+            ),
+            await client.post(
+                "/api/runs",
+                headers=headers,
+                content=JSONContent({"flow": "flows/main"}),
+            ),
+            await client.post(f"/api/runs/{run_id}/abort", headers=headers),
+        ]
+        assert [response.status for response in responses] == [403] * len(responses)
+        assert not (ws.root / "flows" / "rejected").exists()
+
+    with_client(ws, scenario)
+
+
+def test_encoded_reserved_identity_round_trips_through_api(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    identity = "flows/team space #100%"
+    directory = ws.root / identity
+    directory.mkdir()
+    source = ws.root / "flows" / "main" / "flow.yaml"
+    (directory / "flow.yaml").write_bytes(source.read_bytes())
+    encoded = quote(identity, safe="/")
+
+    async def scenario(client):
+        response = await client.get(f"/api/flows/{encoded}")
+        assert response.status == 200, await response.text()
+        detail = await response.json()
+        assert detail["identity"] == identity
+
+        saved = await client.put(
+            f"/api/flows/{encoded}",
+            content=JSONContent({"flow": detail["flow"], "base_etag": detail["etag"]}),
+        )
+        assert saved.status == 200, await saved.text()
+
+        listed = await client.get("/api/runs", query={"flow": identity})
+        assert listed.status == 200
+        assert (await listed.json())["flow"] == identity
+
+    with_client(ws, scenario)
+
+
 def test_etags_poll_endpoint(tmp_path):
     ws = make_scaffold_ws(tmp_path)
 
@@ -875,8 +1224,20 @@ def test_flow_detail_template_refs_and_used_by(tmp_path):
     with_client(ws, scenario)
 
 
-def test_clone_flow_forks_the_folder(tmp_path):
+def test_clone_flow_forks_the_folder_through_durable_source_writes(
+    tmp_path, monkeypatch
+):
+    import napflow.server.app as server_app
+
     ws = make_scaffold_ws(tmp_path)
+    real_atomic_write = server_app.atomic_write_text
+    durable_writes = []
+
+    def observe_atomic_write(path, text):
+        durable_writes.append(path.name)
+        real_atomic_write(path, text)
+
+    monkeypatch.setattr(server_app, "atomic_write_text", observe_atomic_write)
 
     async def scenario(client):
         response = await client.post(
@@ -888,9 +1249,66 @@ def test_clone_flow_forks_the_folder(tmp_path):
         # the FOLDER forks (D09): nodes.py travels with flow.yaml
         assert (ws.root / "flows/smoke_copy/flow.yaml").is_file()
         assert (ws.root / "flows/smoke_copy/nodes.py").is_file()
+        assert sorted(durable_writes) == ["flow.yaml", "nodes.py"]
         listed = await client.get("/api/flows")
         identities = [f["identity"] for f in (await listed.json())["flows"]]
         assert "flows/smoke_copy" in identities
+
+    with_client(ws, scenario)
+
+
+def test_interrupted_clone_removes_unaccepted_destination(tmp_path, monkeypatch):
+    import napflow.server.app as server_app
+
+    ws = make_scaffold_ws(tmp_path)
+    source = ws.root / "flows" / "smoke" / "flow.yaml"
+    before = source.read_bytes()
+    real_atomic_write = server_app.atomic_write_text
+
+    def interrupt_clone(path, text):
+        if path.name == "nodes.py":
+            raise OSError("simulated clone interruption")
+        real_atomic_write(path, text)
+
+    monkeypatch.setattr(server_app, "atomic_write_text", interrupt_clone)
+
+    async def scenario(client):
+        response = await client.post(
+            "/api/flows/clone",
+            content=JSONContent(
+                {"source": "flows/smoke", "dest": "flows/interrupted_copy"}
+            ),
+        )
+        assert response.status == 507
+        assert (await response.json())["error"] == "write_failed"
+        assert not (ws.root / "flows" / "interrupted_copy").exists()
+        assert source.read_bytes() == before
+
+    with_client(ws, scenario)
+
+
+def test_clone_preserves_nested_symlinks_without_dereferencing(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    source = ws.root / "flows" / "smoke"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not be copied", encoding="utf-8")
+    link = source / "outside-link"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    async def scenario(client):
+        response = await client.post(
+            "/api/flows/clone",
+            content=JSONContent(
+                {"source": "flows/smoke", "dest": "flows/smoke_link_copy"}
+            ),
+        )
+        assert response.status == 201, await response.text()
+        copied = ws.root / "flows" / "smoke_link_copy" / "outside-link"
+        assert copied.is_symlink()
+        assert copied.readlink() == outside
 
     with_client(ws, scenario)
 
@@ -972,12 +1390,32 @@ def test_ws_replays_finished_runs_from_the_jsonl(tmp_path):
 
 def test_ws_unknown_run_closes_4404(tmp_path):
     ws = make_scaffold_ws(tmp_path)
+    missing = "19700101-000000-abcdef"
 
     async def scenario(client):
-        async with client.websocket_connect("/ws/runs/nope") as sock:
+        async with client.websocket_connect(f"/ws/runs/{missing}") as sock:
             message = await sock.receive()
             assert message["type"] == "websocket.close"
             assert message["code"] == 4404
+
+    with_client(ws, scenario)
+
+
+def test_ws_rejects_foreign_host_and_origin_before_accept(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    missing = "19700101-000000-abcdef"
+
+    async def scenario(client):
+        for headers in (
+            {"host": "attacker.example:8000"},
+            {"origin": "http://attacker.example:8000"},
+        ):
+            socket = client.websocket_connect(f"/ws/runs/{missing}", headers=headers)
+            await socket.send({"type": "websocket.connect"})
+            message = await socket.receive()
+            assert message["type"] == "websocket.close"
+            assert message["code"] == WS_REQUEST_ORIGIN
+        await client.websocket_all_closed()
 
     with_client(ws, scenario)
 

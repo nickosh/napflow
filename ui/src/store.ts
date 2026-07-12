@@ -19,10 +19,17 @@ import {
   type FlowModelNode,
   type FlowSummary,
   type RunListEntry,
+  type SavedFlow,
   type WorkspaceInfo,
 } from "./api";
 import { defaultConfig } from "./forms";
 import { freshNodeId } from "./graph";
+import { flowPath, identityFromPath } from "./identity";
+import {
+  persistenceRegistry,
+  SaveCoordinator,
+  type SavePhase,
+} from "./persistence";
 import {
   applyRecord,
   emptyRunView,
@@ -38,7 +45,7 @@ export type DetailError = {
   diagnostics: Diagnostic[];
 };
 
-export type SaveState = "clean" | "dirty" | "saving" | "conflict" | "error";
+export type SaveState = SavePhase;
 
 const AUTOSAVE_MS = 1000; // owner fork (2026-07-06): debounced autosave
 const ETAG_POLL_MS = 2000; // FR-1004 v1 shape: poll, reload/prompt on drift
@@ -59,7 +66,8 @@ type AppState = {
   interacting: boolean; // a drag is live — hold off external reloads
   load: () => Promise<void>;
   refreshFlows: () => Promise<void>;
-  openFlow: (identity: string, opts?: { push?: boolean }) => Promise<void>;
+  openFlow: (identity: string, opts?: { push?: boolean }) => Promise<boolean>;
+  popFlow: (identity: string | null, historyIndex: number | null) => Promise<void>;
   selectNode: (id: string | null) => void;
   // canvas edit actions — every one mutates detail.flow then autosaves
   moveNode: (id: string, x: number, y: number) => void;
@@ -92,17 +100,10 @@ type AppState = {
   openHistoryRun: (runId: string) => Promise<void>;
 };
 
-function identityFromPath(pathname: string): string | null {
-  const identity = pathname.replace(/^\/+|\/+$/g, "");
-  return identity.length > 0 ? identity : null;
-}
-
 function splitRef(ref: string): [string, string] {
   const dot = ref.indexOf(".");
   return [ref.slice(0, dot), ref.slice(dot + 1)];
 }
-
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ---- live run socket (module-level: one run watched at a time) ------
 // Records are batched per animation-ish tick: fast flows emit hundreds
@@ -127,9 +128,52 @@ function closeRunSocket() {
   }
 }
 
+type FlowSaveValue = { identity: string; flow: FlowModel };
+
 export const useAppStore = create<AppState>((set, get) => {
+  let navigationGeneration = 0;
+  let detailGeneration = 0;
+  let activeHistoryIndex = 0;
+  let restoringHistory = false;
+  const flowSaves = new SaveCoordinator<FlowSaveValue, SavedFlow>({
+    debounceMs: AUTOSAVE_MS,
+    save: ({ identity, flow }, baseEtag, force) =>
+      putFlow(identity, flow, baseEtag, force),
+    etag: (saved) => saved.etag,
+    classifyError: (error) =>
+      error instanceof ConflictError ? "conflict" : "error",
+    onSaved: (saved, { value, latest }) => {
+      const current = get().detail;
+      if (current === null || current.identity !== value.identity) return;
+      set({
+        detail: {
+          ...current,
+          etag: saved.etag,
+          diagnostics: saved.diagnostics,
+        },
+      });
+      if (latest) {
+        // Port surfaces and Python function lists are server-derived. Refetch
+        // only after the latest queued revision has reached disk.
+        queueMicrotask(() => void refreshDetail(value.identity));
+      }
+    },
+  });
+  persistenceRegistry.register(flowSaves);
+  flowSaves.subscribe(({ phase, error }) => {
+    if (phase === "error") {
+      set({
+        saveState: phase,
+        saveError: error instanceof Error ? error.message : String(error),
+        saveDiagnostics: error instanceof ApiError ? error.diagnostics : [],
+      });
+    } else {
+      set({ saveState: phase, saveError: null, saveDiagnostics: [] });
+    }
+  }, false);
+
   /** Replace detail.flow (immutably at the top level — React re-renders
-   * off object identity), mark dirty, kick the autosave timer. */
+   * off object identity), then queue the newest revision for autosave. */
   function edit(
     mutate: (flow: FlowModel) => FlowModel,
     opts?: { rebuild?: boolean },
@@ -137,81 +181,37 @@ export const useAppStore = create<AppState>((set, get) => {
     const { detail, runView } = get();
     if (detail === null) return;
     if (runView !== null) return; // run mode locks editing (owner fork)
+    detailGeneration += 1;
     const flow = mutate(detail.flow);
     set({
       detail: { ...detail, flow },
-      saveState: "dirty",
       saveError: null,
       saveDiagnostics: [],
       ...(opts?.rebuild ? { graphVersion: get().graphVersion + 1 } : {}),
     });
-    if (saveTimer !== null) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => void save(), AUTOSAVE_MS);
-  }
-
-  async function save(force = false) {
-    const { detail, saveState } = get();
-    if (detail === null) return;
-    if (saveState === "saving") {
-      // a save is in flight — re-arm; the fresh model goes next round
-      saveTimer = setTimeout(() => void save(), AUTOSAVE_MS);
-      return;
-    }
-    const identity = detail.identity;
-    set({ saveState: "saving" });
-    try {
-      const saved = await putFlow(identity, detail.flow, detail.etag, force);
-      const current = get().detail;
-      if (current === null || current.identity !== identity) return;
-      const dirtiedMeanwhile = current.flow !== detail.flow;
-      set({
-        detail: {
-          ...current,
-          etag: saved.etag,
-          diagnostics: saved.diagnostics,
-        },
-        saveState: dirtiedMeanwhile ? "dirty" : "clean",
-      });
-      if (dirtiedMeanwhile) {
-        if (saveTimer !== null) clearTimeout(saveTimer);
-        saveTimer = setTimeout(() => void save(), AUTOSAVE_MS);
-      } else {
-        // quiet refetch: port surfaces (D11) and python fn lists are
-        // server-derived — new nodes get their handles here
-        await refreshDetail(identity);
-      }
-    } catch (e) {
-      const current = get().detail;
-      if (current === null || current.identity !== identity) return;
-      if (e instanceof ConflictError) {
-        set({ saveState: "conflict" });
-      } else if (e instanceof ApiError) {
-        set({
-          saveState: "error",
-          saveError: e.message,
-          saveDiagnostics: e.diagnostics,
-        });
-      } else {
-        set({
-          saveState: "error",
-          saveError: e instanceof Error ? e.message : String(e),
-        });
-      }
-    }
+    flowSaves.edit({ identity: detail.identity, flow });
   }
 
   /** Re-pull detail from the server without disturbing local edits:
    * applied only while clean and not mid-drag. */
   async function refreshDetail(identity: string) {
+    const navigation = navigationGeneration;
+    const detailVersion = detailGeneration;
+    const expectedEtag = get().detail?.etag ?? null;
     try {
       const fresh = await fetchFlowDetail(identity);
       const s = get();
       if (
+        navigation === navigationGeneration &&
+        detailVersion === detailGeneration &&
         s.selectedFlow === identity &&
         s.detail?.identity === identity &&
+        s.detail.etag === expectedEtag &&
         s.saveState === "clean" &&
         !s.interacting
       ) {
+        detailGeneration += 1;
+        flowSaves.reset(fresh.etag);
         set({ detail: fresh, graphVersion: s.graphVersion + 1 });
       }
     } catch {
@@ -309,7 +309,7 @@ export const useAppStore = create<AppState>((set, get) => {
           fetchFlows(),
         ]);
         set({ workspace, flows, error: null, runEnv: workspace.env_default });
-        // deep link wins (SPA fallback serves index for /flows/...);
+        // deep link wins (SPA fallback serves index for /flow/<identity>);
         // otherwise the manifest's `main:` flow opens by default (WM)
         const fromPath = identityFromPath(window.location.pathname);
         const initial =
@@ -318,7 +318,14 @@ export const useAppStore = create<AppState>((set, get) => {
             ? workspace.main
             : (flows[0]?.identity ?? null));
         if (initial !== null) {
-          await get().openFlow(initial, { push: fromPath === null });
+          const stateIndex = window.history.state?.napflowIndex;
+          activeHistoryIndex = Number.isInteger(stateIndex) ? stateIndex : 0;
+          window.history.replaceState(
+            { ...(window.history.state ?? {}), napflowIndex: activeHistoryIndex },
+            "",
+            flowPath(initial),
+          );
+          await get().openFlow(initial, { push: false });
         }
       } catch (e) {
         set({ error: e instanceof Error ? e.message : String(e) });
@@ -335,12 +342,20 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     openFlow: async (identity, opts) => {
-      if (saveTimer !== null) clearTimeout(saveTimer);
+      const navigation = ++navigationGeneration;
+      if (!(await persistenceRegistry.flushAll())) {
+        return false;
+      }
+      if (navigation !== navigationGeneration) return false;
+
       closeRunSocket(); // a run view belongs to its flow
+      detailGeneration += 1;
+      flowSaves.reset(null);
       set({
         selectedFlow: identity,
+        detail: null,
+        detailError: null,
         selectedNode: null,
-        saveState: "clean",
         saveError: null,
         saveDiagnostics: [],
         runView: null,
@@ -351,22 +366,41 @@ export const useAppStore = create<AppState>((set, get) => {
         runNotice: null,
         runSelection: null,
       });
-      if (opts?.push !== false && window.location.pathname !== `/${identity}`) {
-        window.history.pushState(null, "", `/${identity}`);
+      if (
+        opts?.push !== false &&
+        identityFromPath(window.location.pathname) !== identity
+      ) {
+        activeHistoryIndex += 1;
+        window.history.pushState(
+          { ...(window.history.state ?? {}), napflowIndex: activeHistoryIndex },
+          "",
+          flowPath(identity),
+        );
       }
       try {
         const detail = await fetchFlowDetail(identity);
-        // a slow response for a flow the user already navigated away
-        // from must not clobber the current one
-        if (get().selectedFlow === identity) {
+        // A slow response, including one for the same identity opened twice,
+        // must not clobber the latest navigation generation.
+        if (
+          navigation === navigationGeneration &&
+          get().selectedFlow === identity
+        ) {
+          flowSaves.reset(detail.etag);
           set({
             detail,
             detailError: null,
             graphVersion: get().graphVersion + 1,
           });
+          return true;
         }
+        return false;
       } catch (e) {
-        if (get().selectedFlow !== identity) return;
+        if (
+          navigation !== navigationGeneration ||
+          get().selectedFlow !== identity
+        ) {
+          return false;
+        }
         const detailError: DetailError =
           e instanceof ApiError
             ? { message: e.message, diagnostics: e.diagnostics }
@@ -375,6 +409,33 @@ export const useAppStore = create<AppState>((set, get) => {
                 diagnostics: [],
               };
         set({ detail: null, detailError });
+        // The save barrier accepted this navigation. A missing or temporarily
+        // invalid target is still the current history entry and should render
+        // its detail error, not be mistaken for a blocked persistence flush.
+        return true;
+      }
+    },
+
+    popFlow: async (identity, historyIndex) => {
+      if (restoringHistory) {
+        restoringHistory = false;
+        return;
+      }
+      const targetIndex =
+        historyIndex !== null && Number.isInteger(historyIndex)
+          ? historyIndex
+          : activeHistoryIndex;
+      const accepted =
+        identity !== null &&
+        (await get().openFlow(identity, { push: false }));
+      if (accepted) {
+        activeHistoryIndex = targetIndex;
+        return;
+      }
+      const delta = activeHistoryIndex - targetIndex;
+      if (delta !== 0) {
+        restoringHistory = true;
+        window.history.go(delta);
       }
     },
 
@@ -474,9 +535,9 @@ export const useAppStore = create<AppState>((set, get) => {
       const { detail } = get();
       if (detail === null) return;
       if (how === "overwrite") {
-        await save(true); // last-write-wins (FR-1004 ceiling)
+        await flowSaves.overwrite(); // last-write-wins (FR-1004 ceiling)
       } else {
-        set({ saveState: "clean" });
+        flowSaves.discard();
         await get().openFlow(detail.identity, { push: false });
       }
     },
@@ -511,20 +572,18 @@ export const useAppStore = create<AppState>((set, get) => {
     startRun: async (inputs) => {
       const { detail, runLive } = get();
       if (detail === null || runLive) return;
-      // the run gate reads the FILE — flush any pending autosave first
-      if (saveTimer !== null) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
-      }
-      if (get().saveState === "dirty") await save();
-      if (get().saveState !== "clean") {
+      // The run gate reads flow.yaml and nodes.py from disk. Flush every
+      // mounted editor and block on conflict/error.
+      if (!(await persistenceRegistry.flushAll())) {
         set({ runNotice: "flow not saved yet — resolve the save first" });
         return;
       }
+      const current = get().detail;
+      if (current === null || current.identity !== detail.identity) return;
       set({ runNotice: null });
       try {
         const started = await apiStartRun(
-          detail.identity,
+          current.identity,
           get().runEnv,
           inputs,
         );
@@ -600,11 +659,3 @@ export const useAppStore = create<AppState>((set, get) => {
 });
 
 export { AUTOSAVE_MS, ETAG_POLL_MS };
-
-// browser back/forward re-selects the flow from the path
-window.addEventListener("popstate", () => {
-  const identity = identityFromPath(window.location.pathname);
-  if (identity !== null) {
-    void useAppStore.getState().openFlow(identity, { push: false });
-  }
-});

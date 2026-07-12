@@ -22,7 +22,7 @@ test("served bundle renders the app with real workspace data", async ({
 test("unknown client-side routes still serve the app (SPA)", async ({
   page,
 }) => {
-  await page.goto("/flows/does/not/exist");
+  await page.goto("/flow/flows/does/not/exist");
   // the SPA fallback serves index.html; the app loads and reports the
   // unknown flow instead of a browser-level 404
   await expect(page.getByTestId("workspace-name")).toContainText("napf-e2e");

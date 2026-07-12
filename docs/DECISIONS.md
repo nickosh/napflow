@@ -695,8 +695,17 @@ mean “silently access outside the selected workspace.” Rejected: relying
 on scattered `_safe_identity` calls; capability/user-token machinery in
 v0.2; exposing `0.0.0.0` before a real remote security design exists.
 
+Implemented at v0.2/M1 (2026-07-12): `WorkspaceResolver` is threaded
+through checker/engine/CLI/server path consumers; lexical + resolved
+containment failures use `workspace_boundary`. The loopback server now
+rejects non-loopback/malformed Host and foreign browser Origin before
+mutation or WebSocket accept. This boundary assumes the selected local
+workspace/process trust domain is not concurrently mutating path entries
+maliciously; it is not an OS filesystem sandbox against another local
+process, consistent with the trusted-code decision above.
+
 ## Known open risks (watch during implementation)
-- EC09/EC10/EC22/EC27/EC32/EC35/EC38 and EC42–EC51 are open—not
+- EC09/EC10/EC22/EC27/EC32/EC35, EC42–EC45, and EC47–EC50 are open—not
   “resolved by documentation.” Their ledger rows name v0.2 or
   post-v0.2 closure conditions; close them only with the stated tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —

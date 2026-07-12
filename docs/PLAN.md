@@ -445,38 +445,50 @@ named performance size measured with no deferred slot. (PR scope, owner call
 2026-07-12: v0.2 lands as larger feature PRs off `feat/v0.2`, not one branch
 per milestone.)
 
-### M1 — workspace boundary and durable editing
+### M1 — workspace boundary and durable editing  ✅ done 2026-07-12
 
-- [ ] Introduce `WorkspaceResolver` (name provisional) as the sole path
+- [x] Introduce `WorkspaceResolver` as the sole path
       authority for entry flows, flow/loop references, fixtures, run
       logs, source reads/writes, and clone destinations. Validate lexical
       identity and run-id format, resolve symlinks, and require resolved
       containment. Remove scattered raw `root / Path(user_value)` joins
       and `_safe_identity` as a partial policy. Rejections crossing this
       boundary use the stable `workspace_boundary` preparation/API reason.
-      (FR-1107, D37, EC38)
-- [ ] Keep the server loopback-only; validate loopback Host and same-origin
+      Implemented in `core/workspace.py` and threaded through checker,
+      engine, CLI, history, and server paths. (FR-1107, D37, EC38)
+- [x] Keep the server loopback-only; validate loopback Host and same-origin
       mutation/WebSocket requests. Do not add users, sessions, OAuth,
       capability-token lifecycle, or a public bind flag. (FR-1108, D37,
-      EC51)
-- [ ] Add one atomic-write primitive: same-directory temporary file,
+      EC51) Loopback IPv4/IPv6/localhost authorities pass; foreign or
+      malformed Host/Origin is rejected before handlers/WS accept.
+- [x] Add one atomic-write primitive: same-directory temporary file,
       UTF-8/LF emit, flush, atomic replace, preserved permissions, and
       cleanup. Serialize ETag-check + write per file so two accepted
       requests cannot race. Use it for flow YAML and nodes.py. (FR-1109)
-- [ ] Replace independent debounce timers with a serialized save
+      The shared primitive covers serializer/scaffold/editor/clone source
+      writes; failed clones remove their unaccepted destination.
+- [x] Replace independent debounce timers with a serialized save
       coordinator for canvas and code. Edits made during a save queue
       behind it; flow navigation, editor close, and `beforeunload` flush
       or visibly prompt; stale responses cannot overwrite current state.
       Split persistence/navigation from the global Zustand store enough
       to unit-test it. (FR-1110, EC46)
-- [ ] Define a portable flow-identity grammar or encode/decode every URL
+- [x] Define a portable flow-identity grammar or encode/decode every URL
       segment consistently; cover spaces, `#`, `%`, `?`, nested flows,
-      Windows drive syntax, and browser back/forward. (FR-1111)
+      Windows drive syntax, and browser back/forward. (FR-1111) Canvas
+      deep links use `/flow/<encoded-identity>` so valid `api/*` and
+      `assets/*` identities cannot collide with server routes.
 
 M1 DoD: no API/checker/engine path can escape the selected workspace,
 including through symlinks; crash/interruption cannot leave a truncated
 source file; navigating or closing within the debounce window loses no
 accepted edit; the existing comment-preserving golden diffs stay green.
+**Met 2026-07-12:** the resolver/path matrix, atomic interruption and
+concurrent-ETag tests, persistence unit tests, and real-browser navigation,
+close, unload, conflict, reserved-identity, and back/forward cases pass;
+the full Python/Vitest/Playwright suites and canonical round-trip tests are
+green. The trusted-workspace model still does not claim protection from a
+separate malicious local process racing filesystem entries (D37).
 
 ### M2 — fair scheduler, cancellation, and worker lifecycle
 
@@ -642,7 +654,8 @@ has direct unit coverage for persistence and run transport.
       lifecycle phase, and clean-artifact install.
 - [ ] Update engine/workspace/flow specs to implemented v0.2 behavior,
       publish format notes and any best-effort v0.1 reader/migration, close
-      EC09/EC32/EC38/EC42–EC51 only with their tests, record EC27's
+      remaining EC09/EC32/EC42–EC45/EC47–EC50 only with their tests, preserve
+      M1's tested EC38/EC46/EC51 closures, record EC27's
       cooperative-scheduler half precisely, and retain EC10/EC22/EC35
       as named post-v0.2 limitations; then tag `v0.2.0`.
 

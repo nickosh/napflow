@@ -30,6 +30,8 @@ import RunPanel from "./components/RunPanel";
 import SaveStatus from "./components/SaveStatus";
 import { PALETTE_DRAG_TYPE } from "./forms";
 import { drillTarget, toGraph, type CanvasNode } from "./graph";
+import { identityFromPath } from "./identity";
+import { persistenceRegistry } from "./persistence";
 import { ETAG_POLL_MS, useAppStore } from "./store";
 
 const nodeTypes = { napflow: FlowNode };
@@ -208,7 +210,7 @@ function Canvas() {
 }
 
 export default function App() {
-  const { workspace, error, detail, load, pollEtags } = useAppStore();
+  const { workspace, error, detail, load, popFlow, pollEtags } = useAppStore();
   const inRunMode = useAppStore((s) => s.runView !== null);
   const runPanelOpen = useAppStore((s) => s.runPanelTab !== null);
   const [codeOpen, setCodeOpen] = useState(false);
@@ -216,6 +218,44 @@ export default function App() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Browser back/forward is a same-document navigation, so it must cross the
+  // same save barrier as sidebar and drill-in navigation.
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const identity = identityFromPath(window.location.pathname);
+      const index = Number.isInteger(event.state?.napflowIndex)
+        ? event.state.napflowIndex
+        : null;
+      void popFlow(identity, index);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [popFlow]);
+
+  // Async PUT/ETag handshakes cannot be made reliable from beforeunload
+  // (sendBeacon is POST-only and keepalive bodies are bounded). Prompt while
+  // any accepted edit is debounced, saving, conflicted, or errored.
+  useEffect(() => {
+    let attached = false;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const unsubscribe = persistenceRegistry.subscribe((pending) => {
+      if (pending && !attached) {
+        window.addEventListener("beforeunload", beforeUnload);
+        attached = true;
+      } else if (!pending && attached) {
+        window.removeEventListener("beforeunload", beforeUnload);
+        attached = false;
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (attached) window.removeEventListener("beforeunload", beforeUnload);
+    };
+  }, []);
 
   // FR-1004 v1: poll etags; external edits live-reload while clean
   useEffect(() => {

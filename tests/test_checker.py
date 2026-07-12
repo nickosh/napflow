@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
+import pytest
+
 from napflow.core.checker import check_workspace, template_refs, used_by
+from napflow.core.runprep import RunPrepError, prepare_run
 from napflow.core.workspace import load_workspace
 
 # --------------------------------------------------------------------------
@@ -254,6 +257,85 @@ def test_e008_broken_references(tmp_path: Path) -> None:
     assert any("static path" in m for m in e008)
     assert any("fixtures/nope.json" in m for m in e008)
     assert any("'missing' not found" in m for m in e008)
+
+
+def test_e008_rejects_lexical_workspace_boundary_paths(tmp_path: Path) -> None:
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: sub, type: flow, config: {flow: ../outside}}\n"
+        "  - {id: each, type: loop, config: {over: '[]', body: C:/outside}}\n"
+        "  - {id: fix, type: fixture, config: {file: ../outside.json}}\n"
+        "  - {id: end, type: end}\n"
+    )
+    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow})
+    boundary = [
+        d
+        for d in check_workspace(ws)
+        if d.code == "E008" and "workspace boundary" in d.message
+    ]
+    assert {d.node_id for d in boundary} == {"sub", "each", "fix"}
+
+
+def test_e008_rejects_reference_and_fixture_symlink_escapes(tmp_path: Path) -> None:
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: sub, type: flow, config: {flow: flows/escape}}\n"
+        "  - {id: fix, type: fixture, config: {file: fixtures/escape.json}}\n"
+        "  - {id: end, type: end}\n"
+    )
+    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow})
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    outside_flow = _flow("  - {id: start, type: start}\n  - {id: end, type: end}\n")
+    (outside / "flow.yaml").write_text(outside_flow, encoding="utf-8")
+    (outside / "data.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "fixtures").mkdir()
+    try:
+        (tmp_path / "flows" / "escape").symlink_to(outside, target_is_directory=True)
+        (tmp_path / "fixtures" / "escape.json").symlink_to(outside / "data.json")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    boundary = [
+        d
+        for d in check_workspace(ws)
+        if d.code == "E008" and "workspace boundary" in d.message
+    ]
+    assert {d.node_id for d in boundary} == {"sub", "fix"}
+
+
+def test_e008_rejects_python_source_alias_with_stable_prep_reason(
+    tmp_path: Path,
+) -> None:
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: py, type: python, config: {function: present}}\n"
+        "  - {id: end, type: end}\n"
+    )
+    ws = make_ws(
+        tmp_path,
+        {
+            "flows/t/flow.yaml": flow,
+            "flows/t/nodes.py": "def present():\n    return None\n",
+        },
+    )
+    nodes = tmp_path / "flows" / "t" / "nodes.py"
+    nodes.unlink()
+    try:
+        nodes.symlink_to(tmp_path / "flows" / "t" / "flow.yaml")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    boundary = [
+        diagnostic
+        for diagnostic in check_workspace(ws)
+        if diagnostic.code == "E008" and diagnostic.node_id == "py"
+    ]
+    assert len(boundary) == 1
+    assert boundary[0].reason == "workspace_boundary"
+    with pytest.raises(RunPrepError) as excinfo:
+        prepare_run(ws, "flows/t")
+    assert excinfo.value.reason == "workspace_boundary"
 
 
 def test_e008_loop_body_needs_item_port(tmp_path: Path) -> None:

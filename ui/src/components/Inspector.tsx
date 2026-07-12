@@ -1,5 +1,6 @@
 import { drillTarget } from "../graph";
 import { useAppStore } from "../store";
+import { flowPath } from "../identity";
 import ConfigForm from "./ConfigForm";
 import { EndPortEditor, StartPortEditor } from "./PortEditor";
 import SubflowActions from "./SubflowActions";
@@ -54,7 +55,7 @@ export default function Inspector() {
                   <li key={u.identity} style={{ marginBottom: 2 }}>
                     <a
                       data-testid={`used-by-${u.identity}`}
-                      href={`/${u.identity}`}
+                      href={flowPath(u.identity)}
                       onClick={(e) => {
                         e.preventDefault();
                         void openFlow(u.identity);

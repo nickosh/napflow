@@ -87,6 +87,23 @@ def test_run_passes_with_stdout_json_and_jsonl(ws):
     assert records[-1]["state"] == "passed"
 
 
+def test_run_rejects_history_directory_symlink_escape(ws, tmp_path):
+    outside = tmp_path / "outside-runs"
+    outside.mkdir()
+    flow_runs = ws / ".napflow" / "runs" / "flows"
+    flow_runs.mkdir(parents=True)
+    try:
+        (flow_runs / "hello").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    result = runner.invoke(app, ["run", "flows/hello", "-i", "msg=hi"])
+    assert result.exit_code == 2
+    assert "outside" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert list(outside.iterdir()) == []
+
+
 def test_run_uses_default_env_profile(ws):
     result = runner.invoke(app, ["run", "flows/hello"])
     assert result.exit_code == 0, result.stderr

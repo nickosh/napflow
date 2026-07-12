@@ -118,8 +118,9 @@ class RunManager:
             env_name=prepared.env_name,
             inputs=inputs,
             stream=opened.stream,
-            flow_dir=workspace.root / Path(prepared.identity),
+            flow_dir=workspace.resolver.flow_dir(prepared.identity),
             workspace_root=workspace.root,
+            workspace_resolver=workspace.resolver,
         )
         run = ActiveRun(
             run_id=opened.run_id,

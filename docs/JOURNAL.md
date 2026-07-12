@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-12 — v0.2 M1 workspace boundary + durable editing
+
+- Done: centralized lexical/symlink-aware workspace resolution and stable
+  boundary errors across checker/engine/CLI/server; added loopback Host/Origin.
+- Done: atomic source writes + serialized ETag locks, revisioned canvas/code
+  persistence, lifecycle save barriers, and `/flow/` segment-encoded routes.
+- Verified: 395 pytest + 47 Vitest + 40 Playwright; production UI build,
+  Ruff, import contracts, atomic interruption/concurrency, and goldens green.
+- Carry: trusted workspaces are not an OS sandbox against a malicious local
+  filesystem racer; next is M2 scheduler fairness/cancellation/worker lifecycle.
+
 ## 2026-07-12 — repo-scoped closeout skill + Claude discovery
 
 - Done: added `.agents/skills/napflow-closeout` with session, milestone, and

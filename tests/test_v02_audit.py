@@ -1,18 +1,15 @@
 """v0.2 audit probes (PLAN M0) — one test per confirmed critical/high
 finding from the first-working-version review (TR-11–22, EC42–EC51).
 
-Each backend-reproducible finding is an `xfail(strict=True)` test that
-asserts the CORRECT, post-fix behavior. It therefore FAILS today (the
-defect is present) and will XPASS — loudly, because strict — the moment
-its owning milestone lands the fix. That XPASS is the signal to remove
-the marker and tick the requirement (no checkbox closes from inspection).
+Each unresolved backend-reproducible finding is an `xfail(strict=True)`
+test that asserts the CORRECT, post-fix behavior. When its owning milestone
+lands, the marker is removed and the test becomes an ordinary regression;
+M1's workspace-boundary probe is the first converted case.
 
-Findings with no clean headless reproduction (frontend save races, the
-clean-tree wheel build, deadline-under-inline-cycle which depends on the
-M2 cooperative-batch redesign, and the racy late-side-effect window) are
-routed to their owning milestone with an explicit `skip` at the bottom —
-the M0 DoD permits a named later owner in lieu of a failing test, and
-these skips keep that ledger visible in the suite itself.
+Findings owned by later milestones without a clean test at this layer remain
+explicit `skip`s near the bottom. M1's frontend persistence cases moved to
+real Playwright coverage plus pure coordinator tests, so they no longer sit
+in this placeholder ledger.
 """
 
 import asyncio
@@ -69,11 +66,6 @@ def test_public_run_flow_import():
 # TR-12 — workspace boundary is symlink-aware (D37, EC38; owner: M1)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EC38/M1: entry-flow resolution follows symlinks outside workspace",
-)
 def test_entry_flow_resolution_is_symlink_contained(tmp_path):
     """Run preparation is a stable entry-flow behavior surface. A clean
     identity that resolves through a symlink outside the workspace must be
@@ -404,32 +396,61 @@ def test_retention_keeps_newest_within_same_second(tmp_path):
 # Routed to a later milestone (M0 DoD: explicit owner in lieu of a test)
 
 
-@pytest.mark.skip(
-    reason="TR-12/FR-1107 owner M1: entry-flow absolute/parent/drive/encoded "
-    "identity matrix lands with the central WorkspaceResolver"
+def test_entry_flow_boundary_matrix(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "napflow.yaml").write_text("schema: napflow/v1\n", encoding="utf-8")
+    workspace = load_workspace(root)
+
+    for identity in (
+        "",
+        "/absolute",
+        "../parent",
+        "flows/./dot",
+        "flows//empty",
+        "C:/outside",
+        r"C:\outside",
+    ):
+        with pytest.raises(RunPrepError) as excinfo:
+            prepare_run(workspace, identity)
+        assert excinfo.value.reason == "workspace_boundary"
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        "  - {id: bad, type: flow, config: {flow: ../outside}}\n",
+        "  - {id: bad, type: loop, config: {over: '[]', body: C:/outside}}\n",
+        "  - {id: bad, type: fixture, config: {file: ../outside.json}}\n",
+    ],
 )
-def test_entry_flow_boundary_matrix(): ...
+def test_reference_boundary_uses_stable_preparation_reason(tmp_path, node):
+    root = tmp_path / "workspace"
+    flow_dir = root / "flows" / "entry"
+    flow_dir.mkdir(parents=True)
+    (root / "napflow.yaml").write_text("schema: napflow/v1\n", encoding="utf-8")
+    (flow_dir / "flow.yaml").write_text(
+        "schema: napflow/v1\n"
+        "flow: {name: boundary}\n"
+        "nodes:\n"
+        "  - {id: start, type: start}\n"
+        f"{node}"
+        "  - {id: end, type: end}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunPrepError) as excinfo:
+        prepare_run(load_workspace(root), "flows/entry")
+    assert excinfo.value.reason == "workspace_boundary"
+    assert any(d.reason == "workspace_boundary" for d in excinfo.value.diagnostics)
 
 
-@pytest.mark.skip(
-    reason="TR-12/FR-1107 owner M1: flow/loop reference traversal and symlink "
-    "matrix lands with the central WorkspaceResolver"
-)
-def test_flow_and_loop_reference_boundary_matrix(): ...
+# TR-12 ref/loop/fixture matrices now execute in test_checker.py and
+# test_nodes.py; the entry symlink regression remains above.
 
 
-@pytest.mark.skip(
-    reason="TR-12/FR-1107 owner M1: fixture traversal and symlink matrix lands "
-    "with the central WorkspaceResolver"
-)
-def test_fixture_boundary_matrix(): ...
-
-
-@pytest.mark.skip(
-    reason="TR-12/FR-1107 owner M1: history identity/run-id traversal and "
-    "symlink matrix lands with the central WorkspaceResolver"
-)
-def test_history_boundary_matrix(): ...
+# TR-12 history identity/run-id/final-symlink coverage executes in
+# test_workspace.py and test_server.py.
 
 
 @pytest.mark.skip(
@@ -475,15 +496,6 @@ def test_blob_marker_shaped_user_payload_round_trips_as_literal(): ...
 def test_clean_tree_wheel_contains_ui(): ...
 
 
-@pytest.mark.skip(
-    reason="TR-20/FR-1110 owner M1: navigate/close-during-autosave is a "
-    "frontend (Playwright) save-coordinator test"
-)
-def test_navigation_during_autosave_flushes(): ...
-
-
-@pytest.mark.skip(
-    reason="TR-20/FR-1110 owner M1: overlapping saves is a frontend "
-    "(Playwright) serialized-save-coordinator test"
-)
-def test_overlapping_saves_serialize(): ...
+# TR-20 immediate navigation, editor close, unload prompt, and overlapping
+# saves execute in ui/e2e/editing.spec.ts; pure queue/ETag cases execute in
+# ui/src/persistence.test.ts.

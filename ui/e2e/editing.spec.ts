@@ -24,7 +24,7 @@ async function flowModel(page: Page, identity: string) {
 test.describe.configure({ mode: "serial" }); // shared workspace state
 
 test("dragging a node autosaves a layout-only change", async ({ page }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   const before = await flowModel(page, "flows/main");
 
   const node = page.getByTestId("node-start");
@@ -42,7 +42,7 @@ test("dragging a node autosaves a layout-only change", async ({ page }) => {
 });
 
 test("adding a node from the palette persists it", async ({ page }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   await page.getByTestId("add-node").click();
   await page.getByTestId("palette-log").click();
   await expect(page.getByTestId("node-log")).toBeVisible();
@@ -57,7 +57,7 @@ test("adding a node from the palette persists it", async ({ page }) => {
 test("dragging a type from the palette adds it at the drop point", async ({
   page,
 }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   await page.getByTestId("add-node").click();
   // HTML5 dnd: Playwright mouse moves don't carry dataTransfer, so
   // dispatch the drag events by hand with a shared store
@@ -97,7 +97,7 @@ test("dragging a type from the palette adds it at the drop point", async ({
 });
 
 test("config form edits a node's config and autosaves", async ({ page }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   await page.getByTestId("node-log").click();
   await page.getByTestId("config-label").fill("hello from e2e");
   await page.getByTestId("config-label").blur();
@@ -111,7 +111,7 @@ test("config form edits a node's config and autosaves", async ({ page }) => {
 test("connecting onto a wired input replaces the edge (E004)", async ({
   page,
 }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   // main ships start.out → end.done; rewire log.out → end.done
   const source = page
     .getByTestId("node-log")
@@ -133,7 +133,7 @@ test("connecting onto a wired input replaces the edge (E004)", async ({
 });
 
 test("deleting a node removes it and its edges", async ({ page }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   await page.getByTestId("node-log").click();
   await page.getByTestId("delete-node").click();
   await expect(page.getByTestId("node-log")).toHaveCount(0);
@@ -149,7 +149,7 @@ test("deleting a node removes it and its edges", async ({ page }) => {
 });
 
 test("assert checks edit as structured rows", async ({ page }) => {
-  await page.goto("/flows/smoke");
+  await page.goto("/flow/flows/smoke");
   await page.getByTestId("node-verify").click();
   // smoke ships two expr checks; edit the first one's value: 0 → 5
   await expect(page.getByTestId("check-expr-0")).toHaveValue(
@@ -187,7 +187,7 @@ test("assert checks edit as structured rows", async ({ page }) => {
 });
 
 test("switch cases edit as structured rows", async ({ page }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   await page.getByTestId("add-node").click();
   await page.getByTestId("palette-switch").click();
   await expect(page.getByTestId("node-switch")).toBeVisible();
@@ -226,7 +226,7 @@ test("switch cases edit as structured rows", async ({ page }) => {
 test("start/end port editors edit flow inputs and outputs (FR-1006)", async ({
   page,
 }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
 
   await page.getByTestId("node-start").click();
   await page.getByTestId("start-port-add").click();
@@ -250,7 +250,7 @@ test("start/end port editors edit flow inputs and outputs (FR-1006)", async ({
 test("start-port defaults save with the declared type, not as strings", async ({
   page,
 }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   await page.getByTestId("node-start").click();
 
   // the previous test left port 0 (greeting: string); add a number port
@@ -296,7 +296,7 @@ test("nodes.py editor round-trips code and reports syntax errors", async ({
     }
   ).code;
 
-  await page.goto("/flows/smoke");
+  await page.goto("/flow/flows/smoke");
   await page.getByTestId("open-code").click();
   // CodeMirror pane (bundled, no CDN): .cm-content is a real
   // contenteditable, so plain keyboard input drives it
@@ -338,7 +338,7 @@ test("dragging a mismatched wire shows the live W102 hint (never blocks)", async
 }) => {
   // flows/hint has a subflow whose `count` input is number-typed;
   // start.out is object — hovering it mid-drag must raise the hint
-  await page.goto("/flows/hint");
+  await page.goto("/flow/flows/hint");
   const source = page
     .getByTestId("node-start")
     .locator(".react-flow__handle-right");
@@ -367,7 +367,7 @@ test("dragging a mismatched wire shows the live W102 hint (never blocks)", async
 test("external file change while clean live-reloads the canvas", async ({
   page,
 }) => {
-  await page.goto("/flows/main");
+  await page.goto("/flow/flows/main");
   await waitSaved(page);
   const before = await flowModel(page, "flows/main");
 
@@ -384,4 +384,139 @@ test("external file change while clean live-reloads the canvas", async ({
   await page.waitForTimeout(3_000); // > ETAG_POLL_MS
   await expect(page.getByTestId("save-conflict")).toHaveCount(0);
   await waitSaved(page);
+});
+
+async function dragNodeBy(page: Page, testId: string, dx: number, dy: number) {
+  const node = page.getByTestId(testId);
+  const box = (await node.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    box.x + box.width / 2 + dx,
+    box.y + box.height / 2 + dy,
+    { steps: 3 },
+  );
+  await page.mouse.up();
+}
+
+test("immediate flow navigation flushes the pending canvas edit", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/main");
+  const before = await flowModel(page, "flows/main");
+  await dragNodeBy(page, "node-start", 70, 35);
+
+  // Click before the one-second debounce expires. openFlow must drain the
+  // coordinator before it replaces the current detail.
+  await page.getByRole("button", { name: "flows/smoke" }).click();
+  await expect(page).toHaveURL(/\/flow\/flows\/smoke$/);
+  const after = await flowModel(page, "flows/main");
+  expect(after.flow.layout.start).not.toEqual(before.flow.layout.start);
+});
+
+test("an edit during an in-flight save queues one serialized successor", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/main");
+  const bodies: Array<{ flow: { layout: { start: [number, number] } } }> = [];
+  let firstSeen!: () => void;
+  const sawFirst = new Promise<void>((resolve) => {
+    firstSeen = resolve;
+  });
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  await page.route("**/api/flows/flows/main", async (route) => {
+    if (route.request().method() !== "PUT") {
+      await route.continue();
+      return;
+    }
+    bodies.push(route.request().postDataJSON());
+    if (bodies.length === 1) {
+      firstSeen();
+      await firstGate;
+    }
+    await route.continue();
+  });
+
+  await dragNodeBy(page, "node-start", 45, 20);
+  await sawFirst;
+  await dragNodeBy(page, "node-start", 55, 25);
+  releaseFirst();
+  await waitSaved(page);
+
+  expect(bodies).toHaveLength(2);
+  const final = await flowModel(page, "flows/main");
+  expect(final.flow.layout.start).toEqual(bodies[1].flow.layout.start);
+});
+
+test("closing nodes.py immediately flushes before unmount", async ({ page }) => {
+  const original = (
+    (await (await page.request.get("/api/code/flows/smoke")).json()) as {
+      code: string;
+    }
+  ).code;
+  await page.goto("/flow/flows/smoke");
+  await page.getByTestId("open-code").click();
+  const content = page.getByTestId("code-text").locator(".cm-content");
+  await content.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.insertText(`${original}\n# close-flush\n`);
+  await page.getByTestId("code-close").click();
+  await expect(page.getByTestId("code-editor")).toHaveCount(0);
+
+  const saved = await (await page.request.get("/api/code/flows/smoke")).json();
+  expect(saved.code).toContain("# close-flush");
+  const restored = await page.request.put("/api/code/flows/smoke", {
+    data: { code: original, force: true },
+  });
+  expect(restored.ok()).toBeTruthy();
+});
+
+test("beforeunload prompts while an accepted edit is pending", async ({ page }) => {
+  await page.goto("/flow/flows/main");
+  await dragNodeBy(page, "node-start", 30, 15);
+
+  const dialogPromise = page.waitForEvent("dialog");
+  void page.evaluate(() => window.location.reload()).catch(() => null);
+  const dialog = await dialogPromise;
+  expect(dialog.type()).toBe("beforeunload");
+  await dialog.dismiss();
+  await waitSaved(page);
+});
+
+test("an ETag conflict blocks navigation until the user resolves it", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/main");
+  const before = await flowModel(page, "flows/main");
+  await dragNodeBy(page, "node-start", 35, 20);
+
+  // Land an external revision before the local one-second debounce. The
+  // navigation flush must see 409 and leave both the canvas and URL in place.
+  const externalFlow = structuredClone(before.flow);
+  externalFlow.layout.end = [
+    externalFlow.layout.end[0] + 1,
+    externalFlow.layout.end[1],
+  ];
+  const external = await page.request.put("/api/flows/flows/main", {
+    data: {
+      flow: externalFlow,
+      base_etag: before.etag,
+    },
+  });
+  expect(external.ok()).toBeTruthy();
+
+  await page.getByRole("button", { name: "flows/smoke" }).click();
+  await expect(page).toHaveURL(/\/flow\/flows\/main$/);
+  await expect(page.getByTestId("save-conflict")).toBeVisible();
+
+  await page.getByTestId("conflict-overwrite").click();
+  await waitSaved(page);
+  const saved = await flowModel(page, "flows/main");
+  expect(saved.flow.layout.start).not.toEqual(before.flow.layout.start);
+  await page.getByRole("button", { name: "flows/smoke" }).click();
+  await expect(page).toHaveURL(/\/flow\/flows\/smoke$/);
 });

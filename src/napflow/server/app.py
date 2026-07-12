@@ -8,11 +8,18 @@ semantics (gate, env, masking) via core/runprep.py.
 """
 
 import ast
+import asyncio
 import hashlib
+import ipaddress
 import json
+import os
 import shutil
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from blacksheep import Application, Request, Response, WebSocket
 from blacksheep.server.responses import html
@@ -38,6 +45,7 @@ from napflow.core.events import (
     parse_history_features,
     parse_history_format,
 )
+from napflow.core.files import atomic_write_text
 from napflow.core.loader import (
     LoadError,
     load_document,
@@ -48,7 +56,7 @@ from napflow.core.loader import (
 )
 from napflow.core.models import EndNode, StartNode
 from napflow.core.runprep import RunPrepError, prepare_run
-from napflow.core.workspace import Workspace
+from napflow.core.workspace import Workspace, WorkspaceBoundaryError
 from napflow.server.runs import RunManager
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -61,8 +69,150 @@ bundle. The API is live under <code>/api</code>.</p>
 </body></html>"""
 
 # WebSocket close codes (4xxx = application-defined)
+WS_WORKSPACE_BOUNDARY = 4400
+WS_REQUEST_ORIGIN = 4403
 WS_UNKNOWN_RUN = 4404
 WS_HISTORY_FORMAT = 4409
+
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+@dataclass(frozen=True)
+class _Authority:
+    scheme: str
+    host: str
+    port: int
+
+
+def _request_scheme(request: Request) -> str:
+    scheme = request.scheme.lower()
+    if scheme == "ws":
+        return "http"
+    if scheme == "wss":
+        return "https"
+    return scheme
+
+
+def _parse_authority(value: str, scheme: str) -> _Authority | None:
+    """Parse a Host authority without accepting URL-shaped surprises."""
+    try:
+        parsed = urlsplit(f"//{value}")
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        not value
+        or value.endswith(":")
+        or any(char.isspace() for char in value)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.hostname is None
+    ):
+        return None
+    host = parsed.hostname.lower().removesuffix(".")
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    if not 1 <= port <= 65535:
+        return None
+    return _Authority(scheme=scheme, host=host, port=port)
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_authority(request: Request) -> _Authority | None:
+    hosts = request.get_headers(b"host")
+    if len(hosts) != 1:
+        return None
+    try:
+        raw_host = hosts[0].decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    authority = _parse_authority(raw_host, _request_scheme(request))
+    if authority is None or not _is_loopback_host(authority.host):
+        return None
+    return authority
+
+
+def _origin_matches(request: Request, authority: _Authority) -> bool:
+    origins = request.get_headers(b"origin")
+    if not origins:
+        # Origin is a browser boundary. Programmatic localhost clients such
+        # as niquests and websockets remain supported without fabricating it.
+        return True
+    if len(origins) != 1:
+        return False
+    try:
+        value = origins[0].decode("ascii")
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (UnicodeDecodeError, ValueError):
+        return False
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.netloc == ""
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.hostname is None
+    ):
+        return False
+    host = parsed.hostname.lower().removesuffix(".")
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return _Authority(parsed.scheme, host, port) == authority
+
+
+class _LocalRequestBoundary:
+    """Loopback Host + browser same-origin boundary (D37/FR-1108)."""
+
+    async def __call__(
+        self,
+        request: Request,
+        next_handler: Callable[[Request], Awaitable[Response | None]],
+    ) -> Response | None:
+        authority = _request_authority(request)
+        is_websocket = isinstance(request, WebSocket)
+        origin_required = is_websocket or request.method.upper() in _UNSAFE_METHODS
+        if authority is None or (
+            origin_required and not _origin_matches(request, authority)
+        ):
+            if is_websocket:
+                await request.close(WS_REQUEST_ORIGIN, "request origin rejected")
+                return None
+            return json_response(
+                {
+                    "error": "request_origin",
+                    "message": "request rejected by local server boundary",
+                },
+                status=403,
+            )
+        return await next_handler(request)
+
+
+class _SourceWriteCoordinator:
+    """Per-canonical-file serialization for ETag check + replacement."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def lock(self, path: Path) -> AsyncIterator[None]:
+        key = os.path.normcase(str(path))
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            yield
 
 
 def _diag_payload(diag: CheckDiagnostic, root: Path) -> dict[str, Any]:
@@ -92,17 +242,6 @@ def _prep_error(e: RunPrepError, root: Path) -> Response:
         },
         status=status,
     )
-
-
-def _safe_identity(tail: str) -> str | None:
-    """Workspace-relative flow identity from a URL tail. None = rejected
-    (absolute or `..` segments — the write path must never escape the
-    workspace root)."""
-    identity = Path(tail).as_posix().strip("/")
-    parts = Path(identity).parts
-    if not identity or identity.startswith("/") or ".." in parts or ":" in identity:
-        return None
-    return identity
 
 
 def _etag(path: Path) -> str | None:
@@ -140,6 +279,38 @@ async def _json_object(request: Request) -> dict[str, Any] | None:
 
 def _bad_request(message: str) -> Response:
     return json_response({"error": "bad_request", "message": message}, status=400)
+
+
+def _workspace_boundary(error: WorkspaceBoundaryError) -> Response:
+    return json_response(
+        {"error": error.reason, "message": str(error)},
+        status=400,
+    )
+
+
+def _write_failure(path: Path, error: OSError) -> Response:
+    detail = error.strerror or type(error).__name__
+    return json_response(
+        {
+            "error": "write_failed",
+            "message": f"could not save {path.name}: {detail}",
+        },
+        status=507,
+    )
+
+
+def _copy_clone_file(source: str, destination: str) -> str:
+    """Copy flow sources through the same durable primitive as editor saves."""
+    source_path = Path(source)
+    destination_path = Path(destination)
+    if source_path.name in {"flow.yaml", "nodes.py"}:
+        atomic_write_text(
+            destination_path,
+            source_path.read_text(encoding="utf-8"),
+        )
+        shutil.copystat(source_path, destination_path)
+        return str(destination_path)
+    return shutil.copy2(source, destination)
 
 
 def _flow_summary(ref: Any) -> dict[str, Any]:
@@ -290,6 +461,9 @@ def build_app(workspace: Workspace) -> Application:
     router = Router()
     app = Application(router=router)
     manager = RunManager()
+    writes = _SourceWriteCoordinator()
+    resolver = workspace.resolver
+    app.middlewares.append(_LocalRequestBoundary())
     app.services.register(RunManager, instance=manager)  # test access
     manifest = workspace.manifest.model
     root = workspace.root
@@ -325,11 +499,13 @@ def build_app(workspace: Workspace) -> Application:
         mid-edit invalid (e.g. E008 while the python function is still
         being written) — only RUNS are gated on E-codes. Load failures
         still 400: there is no model to return."""
-        identity = _safe_identity(request.route_values["tail"])
-        if identity is None:
-            return _bad_request("flow identity escapes the workspace")
-        flow_dir = root / Path(identity)
-        file = flow_dir / "flow.yaml"
+        try:
+            identity = resolver.normalize_identity(request.route_values["tail"])
+            file = resolver.flow_file(identity)
+            code_file = resolver.source_file(identity, "nodes.py")
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
+        flow_dir = file.parent
         if not file.is_file():
             return json_response(
                 {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
@@ -360,8 +536,8 @@ def build_app(workspace: Workspace) -> Application:
                 ),
                 "diagnostics": [_diag_payload(d, root) for d in diagnostics],
                 # optimistic-concurrency tokens for the write path
-                "etag": _etag(flow_dir / "flow.yaml"),
-                "code_etag": _etag(flow_dir / "nodes.py"),
+                "etag": _etag(file),
+                "code_etag": _etag(code_file),
                 # the canvas python-function dropdown (EC14, AST-only);
                 # None = no nodes.py or unparseable
                 "functions": python_functions(flow_dir),
@@ -400,75 +576,85 @@ def build_app(workspace: Workspace) -> Application:
         a mismatch means someone else wrote the file since the client
         loaded it (409, client reloads or retries with `force`,
         last-write-wins per FR-1004's ceiling)."""
-        identity = _safe_identity(request.route_values["tail"])
-        if identity is None:
-            return _bad_request("flow identity escapes the workspace")
+        try:
+            identity = resolver.normalize_identity(request.route_values["tail"])
+            file = resolver.flow_file(identity)
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
         body = await _json_object(request)
         if body is None or not isinstance(body.get("flow"), dict):
             return _bad_request('body must be {"flow": {...}, "base_etag"?, "force"?}')
-        file = root / Path(identity) / "flow.yaml"
-        if not file.is_file():
-            return json_response(
-                {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
-                status=404,
+        async with writes.lock(file):
+            if not file.is_file():
+                return json_response(
+                    {
+                        "error": "flow_not_found",
+                        "message": f"no flow at {identity!r}",
+                    },
+                    status=404,
+                )
+            current = _etag(file)
+            if not body.get("force") and body.get("base_etag") != current:
+                return json_response(
+                    {"error": "etag_conflict", "etag": current}, status=409
+                )
+            try:
+                model = validate_flow_payload(body["flow"], file)
+            except LoadError as e:
+                return json_response(
+                    {
+                        "error": "validation",
+                        "message": "flow payload failed validation",
+                        "diagnostics": [
+                            _diag_payload(d, root)
+                            for d in diagnostics_from_load_error(e)
+                        ],
+                    },
+                    status=400,
+                )
+            try:
+                doc = load_document(file)
+            except LoadError:
+                doc = None
+            if not isinstance(doc, CommentedMap):
+                # An already-corrupt source can be recovered from the validated
+                # canvas model; its comments were unavailable before this save.
+                doc = CommentedMap()
+            merge_flow_document(
+                doc, model.model_dump(mode="json", by_alias=True, exclude_unset=True)
             )
-        current = _etag(file)
-        if not body.get("force") and body.get("base_etag") != current:
-            return json_response(
-                {"error": "etag_conflict", "etag": current}, status=409
-            )
-        try:
-            model = validate_flow_payload(body["flow"], file)
-        except LoadError as e:
+            try:
+                save_document(doc, file)
+            except OSError as e:
+                return _write_failure(file, e)
+            # Keep diagnostics and response metadata in the same critical
+            # section as the source version they describe.
+            loaded = load_flow(file)
+            diagnostics = check_run_closure(loaded, identity, workspace)
             return json_response(
                 {
-                    "error": "validation",
-                    "message": "flow payload failed validation",
-                    "diagnostics": [
-                        _diag_payload(d, root) for d in diagnostics_from_load_error(e)
-                    ],
-                },
-                status=400,
+                    "identity": identity,
+                    "etag": _etag(file),
+                    "diagnostics": [_diag_payload(d, root) for d in diagnostics],
+                }
             )
-        try:
-            doc = load_document(file)
-        except LoadError:
-            doc = None
-        if not isinstance(doc, CommentedMap):
-            # unparseable/corrupt on disk — a fresh doc lets the canvas
-            # recover the flow (comments are already lost to the corruption)
-            doc = CommentedMap()
-        merge_flow_document(
-            doc, model.model_dump(mode="json", by_alias=True, exclude_unset=True)
-        )
-        save_document(doc, file)
-        # saved state feedback: fresh etag + check diagnostics (a save
-        # with warnings is legal — E-codes only block RUNS, not saves;
-        # the canvas must be able to persist work-in-progress flows)
-        loaded = load_flow(file)
-        diagnostics = check_run_closure(loaded, identity, workspace)
-        return json_response(
-            {
-                "identity": identity,
-                "etag": _etag(file),
-                "diagnostics": [_diag_payload(d, root) for d in diagnostics],
-            }
-        )
 
     @router.get("/api/code/*")
     async def get_code(request: Request) -> Response:
         """The flow's nodes.py for the code editor — whole-file
         read/write (owner fork, 2026-07-06)."""
-        identity = _safe_identity(request.route_values["tail"])
-        if identity is None:
-            return _bad_request("flow identity escapes the workspace")
-        flow_dir = root / Path(identity)
-        if not (flow_dir / "flow.yaml").is_file():
+        try:
+            identity = resolver.normalize_identity(request.route_values["tail"])
+            flow_file = resolver.flow_file(identity)
+            path = resolver.source_file(identity, "nodes.py")
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
+        flow_dir = flow_file.parent
+        if not flow_file.is_file():
             return json_response(
                 {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
                 status=404,
             )
-        path = flow_dir / "nodes.py"
         exists = path.is_file()
         code = path.read_text(encoding="utf-8") if exists else ""
         return json_response(
@@ -488,45 +674,55 @@ def build_app(workspace: Workspace) -> Application:
         file is SAVED ANYWAY (last-write-wins; the editor must never
         hold user code hostage) — broken code simply surfaces as E008
         on the canvas until fixed."""
-        identity = _safe_identity(request.route_values["tail"])
-        if identity is None:
-            return _bad_request("flow identity escapes the workspace")
+        try:
+            identity = resolver.normalize_identity(request.route_values["tail"])
+            flow_file = resolver.flow_file(identity)
+            path = resolver.source_file(identity, "nodes.py")
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
         body = await _json_object(request)
         if body is None or not isinstance(body.get("code"), str):
             return _bad_request('body must be {"code": "...", "base_etag"?, "force"?}')
-        flow_dir = root / Path(identity)
-        if not (flow_dir / "flow.yaml").is_file():
-            return json_response(
-                {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
-                status=404,
-            )
-        path = flow_dir / "nodes.py"
-        current = _etag(path)
-        if not body.get("force") and body.get("base_etag") != current:
-            return json_response(
-                {"error": "etag_conflict", "etag": current}, status=409
-            )
+        flow_dir = flow_file.parent
         code = body["code"]
-        with path.open("w", encoding="utf-8", newline="\n") as f:
-            f.write(code)
-        return json_response(
-            {
-                "identity": identity,
-                "etag": _etag(path),
-                "syntax_error": _syntax_diagnostic(code),
-                "functions": python_functions(flow_dir),
-            }
-        )
+        async with writes.lock(path):
+            if not flow_file.is_file():
+                return json_response(
+                    {
+                        "error": "flow_not_found",
+                        "message": f"no flow at {identity!r}",
+                    },
+                    status=404,
+                )
+            current = _etag(path)
+            if not body.get("force") and body.get("base_etag") != current:
+                return json_response(
+                    {"error": "etag_conflict", "etag": current}, status=409
+                )
+            try:
+                atomic_write_text(path, code)
+            except OSError as e:
+                return _write_failure(path, e)
+            return json_response(
+                {
+                    "identity": identity,
+                    "etag": _etag(path),
+                    "syntax_error": _syntax_diagnostic(code),
+                    "functions": python_functions(flow_dir),
+                }
+            )
 
     @router.get("/api/etags/*")
     async def get_etags(request: Request) -> Response:
         """Cheap poll target for external-change detection (FR-1004's
         v1 shape: the canvas polls, prompts on drift)."""
-        identity = _safe_identity(request.route_values["tail"])
-        if identity is None:
-            return _bad_request("flow identity escapes the workspace")
-        flow_dir = root / Path(identity)
-        if not (flow_dir / "flow.yaml").is_file():
+        try:
+            identity = resolver.normalize_identity(request.route_values["tail"])
+            flow_file = resolver.flow_file(identity)
+            code_file = resolver.source_file(identity, "nodes.py")
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
+        if not flow_file.is_file():
             return json_response(
                 {"error": "flow_not_found", "message": f"no flow at {identity!r}"},
                 status=404,
@@ -534,8 +730,8 @@ def build_app(workspace: Workspace) -> Application:
         return json_response(
             {
                 "identity": identity,
-                "etag": _etag(flow_dir / "flow.yaml"),
-                "code_etag": _etag(flow_dir / "nodes.py"),
+                "etag": _etag(flow_file),
+                "code_etag": _etag(code_file),
             }
         )
 
@@ -552,29 +748,42 @@ def build_app(workspace: Workspace) -> Application:
             or not isinstance(body.get("dest"), str)
         ):
             return _bad_request('body must be {"source": "flows/…", "dest": "flows/…"}')
-        source = _safe_identity(body["source"])
-        dest = _safe_identity(body["dest"])
-        if source is None or dest is None:
-            return _bad_request("flow identity escapes the workspace")
-        source_dir = root / Path(source)
-        dest_dir = root / Path(dest)
-        if not (source_dir / "flow.yaml").is_file():
+        try:
+            source = resolver.normalize_identity(body["source"], label="source flow")
+            dest = resolver.normalize_identity(body["dest"], label="destination flow")
+            source_dir = resolver.clone_source(source)
+            dest_dir = resolver.clone_destination(dest)
+            source_file = resolver.source_file(source, "flow.yaml")
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
+        if not source_file.is_file():
             return json_response(
                 {"error": "flow_not_found", "message": f"no flow at {source!r}"},
                 status=404,
             )
-        if not dest_dir.is_relative_to(workspace.flows_root):
-            return _bad_request(
-                f"dest must live under {manifest.flows.root!r} to be discoverable"
-            )
         if dest_dir == source_dir or dest_dir.is_relative_to(source_dir):
             return _bad_request("dest must not be the source or inside it")
-        if dest_dir.exists():
-            return json_response(
-                {"error": "dest_exists", "message": f"{dest!r} already exists"},
-                status=409,
-            )
-        shutil.copytree(source_dir, dest_dir)
+        async with writes.lock(dest_dir):
+            if dest_dir.exists():
+                return json_response(
+                    {"error": "dest_exists", "message": f"{dest!r} already exists"},
+                    status=409,
+                )
+            # Preserve nested symlinks as links. Dereferencing them here could
+            # read outside the workspace even though later resolver access
+            # would reject the copied path. Source files themselves use the
+            # shared fsync+replace primitive; failed clones are removed before
+            # they can be mistaken for accepted destinations.
+            try:
+                shutil.copytree(
+                    source_dir,
+                    dest_dir,
+                    symlinks=True,
+                    copy_function=_copy_clone_file,
+                )
+            except OSError as e:
+                shutil.rmtree(dest_dir, ignore_errors=True)
+                return _write_failure(dest_dir, e)
         return json_response({"identity": dest}, status=201)
 
     @router.post("/api/runs")
@@ -599,7 +808,10 @@ def build_app(workspace: Workspace) -> Application:
             prepared = prepare_run(workspace, body["flow"], env)
         except RunPrepError as e:
             return _prep_error(e, root)
-        run = manager.start(workspace, prepared, inputs)
+        try:
+            run = manager.start(workspace, prepared, inputs)
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
         return json_response(
             {
                 "run_id": run.run_id,
@@ -614,11 +826,18 @@ def build_app(workspace: Workspace) -> Application:
 
     @router.get("/api/runs")
     async def list_runs(flow: str) -> Response:
-        identity = Path(flow).as_posix().strip("/")
-        runs_dir = root / ".napflow" / "runs" / Path(identity)
+        try:
+            identity = resolver.normalize_identity(flow)
+            runs_dir = resolver.runs_dir(identity)
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
         entries = []
-        for log in sorted(runs_dir.glob("*.jsonl"), reverse=True):
-            run_id = log.stem
+        for candidate in sorted(runs_dir.glob("*.jsonl"), reverse=True):
+            try:
+                run_id = resolver.validate_run_id(candidate.stem)
+                log = resolver.run_log(identity, run_id)
+            except WorkspaceBoundaryError as e:
+                return _workspace_boundary(e)
             live = manager.get(run_id)
             if live is not None and not live.finished:
                 entries.append({"run_id": run_id, "state": "running"})
@@ -635,6 +854,10 @@ def build_app(workspace: Workspace) -> Application:
 
     @router.get("/api/runs/{run_id}")
     async def get_run(run_id: str) -> Response:
+        try:
+            run_id = resolver.validate_run_id(run_id)
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
         run = manager.get(run_id)
         if run is None:
             return json_response(
@@ -646,9 +869,16 @@ def build_app(workspace: Workspace) -> Application:
     async def get_run_events(run_id: str, request: Request) -> Response:
         """Replay = re-read the JSONL (D13) — live runs replay their
         flushed prefix. Runs not in the registry need `?flow=`."""
+        try:
+            run_id = resolver.validate_run_id(run_id)
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
         run = manager.get(run_id)
         if run is not None:
-            log_path = run.log_path
+            try:
+                log_path = resolver.run_log(run.identity, run_id)
+            except WorkspaceBoundaryError as e:
+                return _workspace_boundary(e)
         else:
             flow = request.query.get("flow")
             if not flow:
@@ -656,8 +886,11 @@ def build_app(workspace: Workspace) -> Application:
                     {"error": "unknown_run", "message": "unknown run — pass ?flow="},
                     status=404,
                 )
-            identity = Path(flow[0]).as_posix().strip("/")
-            log_path = root / ".napflow" / "runs" / Path(identity) / f"{run_id}.jsonl"
+            try:
+                identity = resolver.normalize_identity(flow[0])
+                log_path = resolver.run_log(identity, run_id)
+            except WorkspaceBoundaryError as e:
+                return _workspace_boundary(e)
         if not log_path.is_file():
             return json_response(
                 {"error": "unknown_run", "message": f"no run log for {run_id!r}"},
@@ -674,6 +907,10 @@ def build_app(workspace: Workspace) -> Application:
 
     @router.post("/api/runs/{run_id}/abort")
     async def abort_run(run_id: str) -> Response:
+        try:
+            run_id = resolver.validate_run_id(run_id)
+        except WorkspaceBoundaryError as e:
+            return _workspace_boundary(e)
         run = manager.get(run_id)
         if run is None:
             return json_response(
@@ -690,6 +927,11 @@ def build_app(workspace: Workspace) -> Application:
         replay the buffered prefix, then stream until run end (normal
         close). Finished runs: replay the file, then close. Unknown:
         close 4404."""
+        try:
+            run_id = resolver.validate_run_id(run_id)
+        except WorkspaceBoundaryError:
+            await websocket.close(WS_WORKSPACE_BOUNDARY, "workspace_boundary")
+            return
         await websocket.accept()
         run = manager.get(run_id)
         if run is None:
@@ -697,7 +939,11 @@ def build_app(workspace: Workspace) -> Application:
             return
         if run.finished:
             try:
-                records = _read_records(run.log_path)
+                log_path = resolver.run_log(run.identity, run_id)
+                records = _read_records(log_path)
+            except WorkspaceBoundaryError:
+                await websocket.close(WS_WORKSPACE_BOUNDARY, "workspace_boundary")
+                return
             except HistoryFormatError as e:
                 await websocket.close(WS_HISTORY_FORMAT, _ws_close_reason(str(e)))
                 return

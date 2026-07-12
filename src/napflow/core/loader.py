@@ -38,6 +38,7 @@ from ruamel.yaml.scalarstring import (
     LiteralScalarString,
 )
 
+from napflow.core.files import atomic_write_text
 from napflow.core.models import FlowFile, Manifest
 
 # --------------------------------------------------------------------------
@@ -269,8 +270,7 @@ def emit_document(doc: Any) -> str:
 def save_document(doc: Any, path: Path) -> None:
     """Write the document to disk: UTF-8, LF, single trailing newline."""
     text = emit_document(doc)
-    with path.open("w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+    atomic_write_text(path, text)
 
 
 # --------------------------------------------------------------------------

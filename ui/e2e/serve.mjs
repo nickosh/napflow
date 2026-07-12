@@ -95,6 +95,29 @@ cpSync(join(workspace, "flows", "smoke"), join(workspace, "flows", "passcase"), 
   recursive: true,
 });
 
+// Portable URL-transport fixture for M1/FR-1111. Spaces, #, and % are
+// legal on all three target filesystems but must be encoded per URL segment.
+cpSync(
+  join(workspace, "flows", "main"),
+  join(workspace, "flows", "encoded name #100%"),
+  { recursive: true },
+);
+
+// These valid workspace-relative identities would collide with the API and
+// static surfaces if canvas deep links used the identity at URL root. They
+// are intentionally outside the default discovery root: direct/reference
+// identities still need to work through /flow/<identity>.
+for (const identity of [
+  ["api", "workspace"],
+  ["assets", "canvas"],
+]) {
+  const parent = join(workspace, identity[0]);
+  mkdirSync(parent, { recursive: true });
+  cpSync(join(workspace, "flows", "main"), join(parent, identity[1]), {
+    recursive: true,
+  });
+}
+
 // two extra flows the diagnostics e2e needs (FR-1006 check half):
 // flows/warn — warning-only: W103, the request's error port is
 // unwired (never runs; the URL is a placeholder)

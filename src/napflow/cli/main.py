@@ -27,6 +27,7 @@ from napflow.core.models import EndNode, StartNode
 from napflow.core.runprep import RunPrepError, open_run_stream, prepare_run
 from napflow.core.workspace import (
     Workspace,
+    WorkspaceBoundaryError,
     WorkspaceNotFoundError,
     load_workspace,
 )
@@ -62,7 +63,7 @@ def _main(
 def _workspace() -> Workspace:
     try:
         return load_workspace()
-    except WorkspaceNotFoundError as e:
+    except (WorkspaceNotFoundError, WorkspaceBoundaryError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(2) from e
 
@@ -198,7 +199,11 @@ def run(
     identity = prepared.identity
 
     collect = ListSink()
-    opened = open_run_stream(ws, prepared, extra_sinks=[collect, _LogEcho()])
+    try:
+        opened = open_run_stream(ws, prepared, extra_sinks=[collect, _LogEcho()])
+    except WorkspaceBoundaryError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(2) from e
     run_id, log_path, stream = opened.run_id, opened.log_path, opened.stream
 
     flow_run = FlowRun(
@@ -210,8 +215,9 @@ def run(
         inputs=bound,
         stream=stream,
         run_timeout_s=timeout,
-        flow_dir=ws.root / Path(identity),
+        flow_dir=ws.resolver.flow_dir(identity),
         workspace_root=ws.root,
+        workspace_resolver=ws.resolver,
     )
 
     async def _execute():
