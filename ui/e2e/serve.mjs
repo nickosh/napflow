@@ -9,7 +9,6 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
-  rmSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
@@ -17,25 +16,15 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { createWorkspaceCleanup } from "./workspace-cleanup.mjs";
+
 const repo = resolve(import.meta.dirname, "..", "..");
 const port = process.env.NAPF_E2E_PORT ?? "46273";
 
 const workspace = mkdtempSync(join(tmpdir(), "napf-e2e-"));
-let workspaceCleaned = false;
 let server = null;
 let finishing = false;
-function cleanupWorkspace() {
-  if (workspaceCleaned) return;
-  try {
-    rmSync(workspace, { recursive: true, force: true });
-    workspaceCleaned = true;
-  } catch (error) {
-    // In particular, Windows can transiently reject removal while the
-    // child server still owns this directory. Leave the flag clear so the
-    // child-exit/parent-exit path can retry after the handle is released.
-    console.error(`could not clean e2e workspace ${workspace}:`, error);
-  }
-}
+const cleanupWorkspace = createWorkspaceCleanup(workspace);
 // Covers normal child exit, Playwright SIGTERM, spawn/init failure, and an
 // exception while generating the opt-in 110MiB fixture.
 process.once("exit", cleanupWorkspace);

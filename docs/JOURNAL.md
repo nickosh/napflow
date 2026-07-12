@@ -4,6 +4,14 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-12 — v0.2 M0 follow-up coverage
+
+- Added REST/WS rejection for malformed first-record JSON and a paired
+  trailing-partial replay regression; isolated/tested e2e port allocation and cleanup.
+- Verified: 354 pytest passes + 35 Vitest; production build and a real
+  Playwright start/shutdown cycle green with its port and workspace released.
+- Next: M1 — central workspace boundary, Host/Origin, atomic writes, save queue.
+
 ## 2026-07-12 — v0.2 M0 adversarial closeout
 
 - Done: protected/enforced `napflow-run/1` across emission + REST/WS replay;

@@ -305,6 +305,48 @@ def test_empty_live_history_prefix_is_readable(tmp_path):
     assert _read_records(log_path, allow_empty=True) == []
 
 
+def test_history_replay_rejects_malformed_first_json_record(tmp_path):
+    """A corrupt first nonblank line is an invalid envelope, not an empty or
+    partially flushed live history. Both public replay surfaces must reject
+    it through the stable history-format contract."""
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        started = await start_run(client, "flows/smoke")
+        await wait_finished(client, started["run_id"])
+        log_path = ws.root / started["log"]
+        log_path.write_text("\n{not-json}\n", encoding="utf-8")
+
+        replay = await client.get(f"/api/runs/{started['run_id']}/events")
+        assert replay.status == 422
+        payload = await replay.json()
+        assert payload["error"] == "history_format"
+        assert "valid JSON envelope" in payload["message"]
+
+        async with client.websocket_connect(f"/ws/runs/{started['run_id']}") as sock:
+            message = await sock.receive()
+            assert message["type"] == "websocket.close"
+            assert message["code"] == WS_HISTORY_FORMAT
+            assert "valid JSON envelope" in message["reason"]
+
+    with_client(ws, scenario)
+
+
+def test_history_reader_tolerates_a_trailing_partial_record(tmp_path):
+    header = {
+        "event": "run_started",
+        "seq": 1,
+        "format": HISTORY_FORMAT,
+        "features": [],
+    }
+    log_path = tmp_path / "partial.jsonl"
+    log_path.write_text(
+        f"{json.dumps(header)}\n" + '{"event":"node_fired"',
+        encoding="utf-8",
+    )
+    assert _read_records(log_path) == [header]
+
+
 def test_prepare_gate_maps_to_http_statuses(tmp_path):
     ws = make_scaffold_ws(tmp_path)
     # E004: two edges into one input — a check error, blocks with 400

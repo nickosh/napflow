@@ -18,6 +18,6 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.test.ts"], // e2e/ belongs to Playwright
+    include: ["src/**/*.test.ts", "harness-tests/**/*.test.ts"],
   },
 });
