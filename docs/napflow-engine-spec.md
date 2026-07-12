@@ -672,6 +672,64 @@ Pins made at S2/M2 (2026-07-05, `core/events.py`):
   a longer secret masks fully); dict keys are scanned too ("wherever
   they appear").
 
+## 7a. Run-history format contract (v0.2 — FR-1101, D34)
+
+This section pins the run-history on-disk format **before** v0.2 changes
+storage, so every run written from M0 on is self-identifying and later
+readers can gate cleanly. The format-version marker landed in M0
+(`core/events.py`); the blob/index machinery it describes lands in
+M3–M5. Until then a `napflow-run/1` log is a pure inline JSONL stream —
+the blob-reference and index shapes below are the reserved contract those
+milestones fill in, not yet-emitted records.
+
+**Envelope + version.** `run_started` is the envelope header: it is
+always `seq` 1 and carries `format: "napflow-run/<major>"`
+(`HISTORY_FORMAT`). A reader reads that field first:
+
+- equal or older major ⇒ readable (major 0 = a pre-versioning v0.1 log
+  with no `format` field, read best-effort per D33);
+- newer major ⇒ **refuse or open metadata-only** — never silently
+  misparse (`is_supported` / `parse_history_format`, `HistoryFormatError`);
+- the major bumps only on a breaking change to the rules below.
+
+**Canonical ordering.** The append-only JSONL is the source of truth for
+event order. `seq` is a total order starting at 1; a consumer sorts and
+seeks by `seq`, never by `ts` (clocks are for display/scrubbing, not
+ordering). Replay is re-reading — never re-execution (D13).
+
+**Inline vs blob threshold.** Small JSON-compatible values stay inline in
+the event. A value whose serialized size exceeds the inline threshold is
+written once to a content-addressed blob and referenced from the event.
+The threshold is a soft local default (measured in M0, tuned in M4); it
+is not a correctness boundary — moving a value to a blob must never change
+the value a flow delivers (runtime value ≠ persisted representation).
+
+**Blob-reference shape (reserved).** A referenced payload is recorded as
+a typed object, not a raw string:
+
+```
+{"__blob__": true, "hash": "sha256:<hex>", "bytes": <int>,
+ "media_type": "<mime>", "encoding": "utf-8"|"base64"|"json"}
+```
+
+- `hash` is `sha256:` over the exact stored bytes; storing then reading a
+  blob is byte-identical (verified on read).
+- The same bytes appearing more than once in a run reference one blob
+  (dedup by hash) — bytes are never duplicated.
+- An omission under an explicit CI hard limit is itself an explicit
+  record (reason + size + hash), never a plausible-looking prefix.
+
+**Retention unit.** A run is one atomic retention unit: its JSONL, blobs,
+indexes, and reports are created and deleted together. Retention operates
+on completed runs only, ordered by a truly chronological id/metadata
+(the same-second ambiguity in the `token_hex` suffix is fixed in M3), and
+never touches an active or newer run.
+
+**Disposable indexes.** Byte-offset / `seq` / frame / node indexes and
+per-frame summaries are DERIVED, rebuildable acceleration structures.
+They may be deleted at any time and regenerated from the JSONL + blobs;
+they are never authoritative and never a substitute for a source event.
+
 ## 8. `napf check` rules (v0.1)
 
 ```

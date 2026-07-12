@@ -10,9 +10,12 @@ import pytest
 
 from napflow.core.events import (
     EVENT_TYPES,
+    HISTORY_FORMAT,
+    HISTORY_FORMAT_MAJOR,
     MASK,
     AssertResult,
     EventStream,
+    HistoryFormatError,
     JsonlSink,
     LogEvent,
     NodeFired,
@@ -20,7 +23,9 @@ from napflow.core.events import (
     RunStarted,
     SecretMasker,
     apply_retention,
+    is_supported,
     new_run_id,
+    parse_history_format,
     run_log_path,
 )
 
@@ -84,6 +89,31 @@ def test_seq_increments_per_run():
     for i in range(3):
         s.emit(NodeFired(frame="f-0", node="n", firing_no=i))
     assert [r["seq"] for r in sink.records] == [1, 2, 3]
+
+
+def test_run_started_carries_history_format_marker():
+    # FR-1101: run_started is the envelope header — seq 1, self-identifying
+    # via `format`. Every run written is now version-stamped.
+    s, sink = stream()
+    s.emit(
+        RunStarted(flow="flows/demo", env_name="dev", inputs={}, engine_version="0.2")
+    )
+    record = sink.records[0]
+    assert record["seq"] == 1
+    assert record["format"] == HISTORY_FORMAT == "napflow-run/1"
+
+
+def test_history_format_reader_gate():
+    # A reader identifies the on-disk contract before parsing (FR-1101):
+    # older/equal majors readable, a newer major refused, a pre-versioning
+    # v0.1 log (no marker) read best-effort as major 0.
+    assert parse_history_format("napflow-run/1") == HISTORY_FORMAT_MAJOR == 1
+    assert parse_history_format(None) == 0  # v0.1 log, best-effort (D33)
+    assert is_supported("napflow-run/1") is True
+    assert is_supported(None) is True
+    assert is_supported("napflow-run/2") is False  # newer major refused
+    with pytest.raises(HistoryFormatError):
+        parse_history_format("postman-run/1")
 
 
 def test_unset_frame_and_node_omitted():

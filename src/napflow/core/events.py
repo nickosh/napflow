@@ -33,6 +33,54 @@ from typing import Any, ClassVar, Literal
 MASK = "***"
 
 # --------------------------------------------------------------------------
+# Run-history format version (FR-1101, D34)
+#
+# The `run_started` event is the run-history ENVELOPE HEADER: it is always
+# seq 1, and it carries `format` = HISTORY_FORMAT. A reader identifies the
+# on-disk contract from that field before interpreting the rest of the log.
+#
+# `napflow-run/<major>`: the major bumps on a breaking change to event
+# ordering, the blob-reference shape, inline-threshold semantics, or the
+# byte/hash rules pinned in the engine spec (§7a). A newer MAJOR than this
+# reader supports is refused (`is_supported` False → callers fail clearly
+# or open metadata-only, FR-1101); a log with no `format` field predates
+# versioning and is read best-effort as major 0 (v0.1 logs, D33).
+#
+# v0.2 storage (blobs/indexes) lands in later milestones; the marker is
+# pinned here, BEFORE the format changes, so every run written from now on
+# is self-identifying.
+
+HISTORY_FORMAT = "napflow-run/1"
+HISTORY_FORMAT_MAJOR = 1
+
+
+class HistoryFormatError(ValueError):
+    """A run log declares a history format this build cannot read."""
+
+
+def parse_history_format(value: str | None) -> int:
+    """Major version from a `napflow-run/<major>` marker. A missing marker
+    (`None`) is a pre-versioning v0.1 log ⇒ major 0. A malformed marker
+    raises `HistoryFormatError`."""
+    if value is None:
+        return 0
+    prefix, sep, major = value.partition("/")
+    if prefix != "napflow-run" or not sep or not major.isdigit():
+        raise HistoryFormatError(f"unrecognized run-history format {value!r}")
+    return int(major)
+
+
+def is_supported(value: str | None) -> bool:
+    """True when this build can read a run log declaring `value`. Older or
+    equal majors are readable (best-effort for major 0); a newer major is
+    not."""
+    try:
+        return parse_history_format(value) <= HISTORY_FORMAT_MAJOR
+    except HistoryFormatError:
+        return False
+
+
+# --------------------------------------------------------------------------
 # Vocabulary (EN §7) — one dataclass per event type
 
 
@@ -48,7 +96,12 @@ class Event:
 
 @dataclass(kw_only=True)
 class RunStarted(Event):
+    """The run-history envelope header (seq 1). `format` self-identifies
+    the on-disk contract (FR-1101) so any reader can gate before parsing
+    the rest of the log."""
+
     event: ClassVar[str] = "run_started"
+    format: str = HISTORY_FORMAT
     flow: str
     env_name: str | None
     inputs: dict[str, Any]
