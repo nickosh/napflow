@@ -43,9 +43,12 @@ in the same PR as the code change.
 Documentation workflow:
 - Before non-trivial implementation work, read `docs/PLAN.md`,
   `docs/JOURNAL.md`, and the relevant authoritative specs above.
+- At the end of each state-changing session and after each milestone or PR-sized
+  change, use the repo-scoped `$napflow-closeout` skill in
+  `.agents/skills/napflow-closeout/` to reconcile project memory from evidence.
 - After behavior or schema changes, update the matching spec in the same
   change.
-- After each milestone or PR-sized commit, append a dated entry to
+- For each session or milestone closeout, prepend a dated entry to
   `docs/JOURNAL.md` (done / decided / next) — it is the cross-session
   progress log; keep entries to 2–5 lines.
 - Update `docs/REQUIREMENTS.md` only when a requirement actually lands with a

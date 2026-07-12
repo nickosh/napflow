@@ -4,6 +4,20 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-12 — repo-scoped closeout skill + Claude discovery
+
+- Done: added `.agents/skills/napflow-closeout` with session, milestone, and
+  no-update modes plus an evidence-driven memory reconciliation matrix; linked
+  `.claude/skills` → `../.agents/skills` so both agents share one canonical copy.
+- Decided: closeout audits every memory surface but edits only affected files;
+  milestone and requirement completion require implementation + tests.
+- Updated: AGENTS and PLAN now invoke the skill after state-changing sessions
+  and use the journal's actual newest-first/prepend convention.
+- Verified: skill validation, symlink resolution through Claude's path, metadata
+  inspection, and diff checks.
+- Next: use `$napflow-closeout` after the next v0.2 M1 work session and refine
+  only if real usage exposes friction.
+
 ## 2026-07-12 — v0.2 M0 session handoff
 
 - Landed M0 code/tests `9a08209` → `fd25ccb` on `feat/v0.2`; no code changes remain.

@@ -685,8 +685,9 @@ release stays bounded:
 - Conventional commits (`type(scope): subject`) — they feed git-cliff.
 - Spec updates land in the same PR as the behavior change (AGENTS.md).
 - Tick REQUIREMENTS checkboxes in the landing PR, with a test.
-- One dated journal entry per milestone: `docs/JOURNAL.md`
-  (done / decided / next).
+- Run `$napflow-closeout` after each state-changing session and milestone; add
+  one dated `docs/JOURNAL.md` entry (done / decided / next) when the closeout
+  produced a durable change or useful handoff.
 - New edge cases → `EDGE_CASES.md` (EC52+); new decisions →
   `DECISIONS.md` (D38+).
 - v0.x releases are experimental (D33), tag-driven, and require exact

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Napflow Closeout"
+  short_description: "Close sessions and milestones with evidence"
+  default_prompt: "Use $napflow-closeout to close the current napflow session or milestone and update the appropriate project memory."
+policy:
+  allow_implicit_invocation: true
