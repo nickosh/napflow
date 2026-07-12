@@ -4,6 +4,16 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-12 — v0.2 M0 adversarial closeout
+
+- Done: protected/enforced `napflow-run/1` across emission + REST/WS replay;
+  pinned collision-safe persisted-value/byte rules; hardened all audit probes.
+- Verified: clean-tag v0.1 wheel/install/smoke; 352 pytest passes + 31 Vitest + 32
+  Playwright; 10 Python perf + 2 browser perf; Ruff/import contracts green.
+- Recorded: exact 1KB/100KB/10MB worker, 100/10k/100k loop, and 10/100MB
+  server/browser baselines; FR-1101 and NFR-08/18 remain open until M3–M7.
+- Next: M1 — central workspace boundary, Host/Origin, atomic writes, save queue.
+
 ## 2026-07-12 — v0.2 M0 baseline (format marker + audit probes + perf)
 
 - Done: `feat/v0.2` branch. **Box 2** — run-history is version-marked
@@ -274,8 +284,6 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 - Next: S4/M4 — editing + write path (connect rules E004, node
   add/delete, config forms + Monaco, Start/End port editing, save via
   server-side canonical serializer, golden canvas-diff test, FS watch).
-
-## 2026-07-06 — S4/M2 UI scaffold + wheel walking skeleton
 
 ## 2026-07-06 — S4/M2 UI scaffold + wheel walking skeleton
 

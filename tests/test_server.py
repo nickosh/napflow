@@ -20,8 +20,10 @@ from blacksheep.testing import TestClient
 
 from napflow.cli.main import DEFAULT_UI_PORT, _pick_ui_port
 from napflow.cli.scaffold import scaffold_workspace
+from napflow.core.events import HISTORY_FEATURE_CONTENT_BLOBS, HISTORY_FORMAT
 from napflow.core.workspace import Workspace, load_workspace
 from napflow.server import build_app
+from napflow.server.app import WS_HISTORY_FORMAT, _read_records
 
 # --------------------------------------------------------------------------
 # Harness — suite style: sync tests drive async scenarios via asyncio.run
@@ -172,6 +174,135 @@ def test_run_smoke_flow_to_passed_with_replay(tmp_path):
         assert {"run_id": started["run_id"], "state": "passed"} in runs
 
     with_client(ws, scenario)
+
+
+@pytest.mark.parametrize(
+    ("case", "accepted"),
+    [
+        ("supported", True),
+        ("missing", True),
+        ("legacy-with-features", False),
+        ("missing-features", True),
+        ("newer", False),
+        ("malformed", False),
+        ("non-string", False),
+        ("null-format", False),
+        ("long-malformed", False),
+        ("bad-seq", False),
+        ("bool-seq", False),
+        ("float-seq", False),
+        ("wrong-event", False),
+        ("unknown-feature", False),
+        ("surrogate-feature", False),
+        ("null-features", False),
+        ("duplicate-features", False),
+    ],
+)
+def test_history_replay_validates_envelope_for_rest_and_finished_ws(
+    tmp_path, case, accepted
+):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        started = await start_run(client, "flows/smoke")
+        await wait_finished(client, started["run_id"])
+        log_path = ws.root / started["log"]
+        records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if case == "missing":
+            records[0].pop("format")
+            records[0].pop("features")
+        elif case == "legacy-with-features":
+            records[0].pop("format")
+        elif case == "missing-features":
+            records[0].pop("features")
+        elif case == "newer":
+            records[0]["format"] = "napflow-run/2"
+        elif case == "malformed":
+            records[0]["format"] = "postman-run/1"
+        elif case == "non-string":
+            records[0]["format"] = 1
+        elif case == "null-format":
+            records[0]["format"] = None
+        elif case == "long-malformed":
+            records[0]["format"] = "x" * 1_000
+        elif case == "bad-seq":
+            records[0]["seq"] = 2
+        elif case == "bool-seq":
+            records[0]["seq"] = True
+        elif case == "float-seq":
+            records[0]["seq"] = 1.0
+        elif case == "wrong-event":
+            records[0]["event"] = "node_fired"
+        elif case == "unknown-feature":
+            records[0]["features"] = [HISTORY_FEATURE_CONTENT_BLOBS]
+        elif case == "surrogate-feature":
+            records[0]["features"] = ["\ud800"]
+        elif case == "null-features":
+            records[0]["features"] = None
+        elif case == "duplicate-features":
+            records[0]["features"] = ["x/1", "x/1"]
+        else:
+            assert records[0]["format"] == HISTORY_FORMAT
+        log_path.write_text(
+            "".join(f"{json.dumps(record)}\n" for record in records),
+            encoding="utf-8",
+        )
+
+        replay = await client.get(f"/api/runs/{started['run_id']}/events")
+        if accepted:
+            assert replay.status == 200
+            assert (await replay.json())["events"] == records
+        else:
+            assert replay.status == 422
+            payload = await replay.json()
+            assert payload["error"] == "history_format"
+            assert payload["message"]
+
+        async with client.websocket_connect(f"/ws/runs/{started['run_id']}") as sock:
+            frames = []
+            while True:
+                message = await sock.receive()
+                if message["type"] == "websocket.close":
+                    if accepted:
+                        assert message["code"] == 1000
+                    else:
+                        assert message["code"] == WS_HISTORY_FORMAT
+                        assert message["reason"]
+                        assert len(message["reason"].encode("utf-8")) <= 123
+                    break
+                frames.append(json.loads(message["text"]))
+        assert frames == (records if accepted else [])
+
+    with_client(ws, scenario)
+
+
+def test_empty_completed_history_is_rejected(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    run_id = "19700101-000000-eeeeee"
+    log_path = ws.root / ".napflow" / "runs" / "flows" / "smoke" / f"{run_id}.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch()
+
+    async def scenario(client):
+        replay = await client.get(
+            f"/api/runs/{run_id}/events", query={"flow": "flows/smoke"}
+        )
+        assert replay.status == 422
+        payload = await replay.json()
+        assert payload["error"] == "history_format"
+        assert "empty" in payload["message"]
+
+    with_client(ws, scenario)
+
+
+def test_empty_live_history_prefix_is_readable(tmp_path):
+    log_path = tmp_path / "live.jsonl"
+    log_path.touch()
+    assert _read_records(log_path, allow_empty=True) == []
 
 
 def test_prepare_gate_maps_to_http_statuses(tmp_path):

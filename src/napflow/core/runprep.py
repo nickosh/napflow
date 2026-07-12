@@ -27,7 +27,14 @@ from napflow.core.events import (
 from napflow.core.loader import LoadedFlow, LoadError, load_flow
 from napflow.core.workspace import EnvFileError, Workspace, layer_env, parse_env_file
 
-PrepFailure = Literal["flow_not_found", "load", "check", "env_not_found", "env_invalid"]
+PrepFailure = Literal[
+    "flow_not_found",
+    "workspace_boundary",
+    "load",
+    "check",
+    "env_not_found",
+    "env_invalid",
+]
 
 
 class RunPrepError(Exception):

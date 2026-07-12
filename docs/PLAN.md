@@ -388,49 +388,62 @@ discarded. This mapping is the continuity ledger:
       — shipped 2026-07-11 via release.yml: tag↔version hard gate, PyPI
       trusted publishing, and `docs/release-notes-preamble-v0.md`
       prepended to every v0.x release's notes (the required wording,
-      automated)
+      automated). Reproduced again from a clean `git archive v0.1.0` on
+      2026-07-12: UI build + sdist/wheel, exact `0.1.0` metadata/tag, UI
+      bundle membership, isolated install, `napf init`, and smoke run green.
 - [x] Add a version to the run-history envelope/manifest before changing
       storage. Pin canonical event ordering, blob-reference shape,
       inline threshold semantics, byte/hash rules, and the disposable
       index contract in the engine spec. (FR-1101, D34) — `run_started`
       is now the versioned envelope header (`format: "napflow-run/1"`,
-      `HISTORY_FORMAT`) with a reader gate (`parse_history_format` /
-      `is_supported` / `HistoryFormatError`) + tests; contract pinned in
-      engine spec §7a. FR-1101 itself stays open — blobs/indexes are real
-      in M3–M5.
+      `HISTORY_FORMAT`). Structural envelope fields bypass secret masking;
+      malformed/newer formats fail through REST and finished-run WebSocket
+      replay; the parser accepts only ASCII majors and raises one stable
+      `HistoryFormatError` family. The envelope feature registry is empty in
+      M0 and rejects future `content-blobs/1` histories until M4 can resolve
+      them. Engine spec §7a pins canonical order, collision-safe `$napflow`
+      blob/literal/omitted envelopes, exact byte codecs/hash/threshold rules,
+      retention units, and disposable indexes.
+      FR-1101 itself stays open — blobs/indexes become real in M3–M5.
 - [x] Turn the audit probes into failing tests: public import; clean-tree
       wheel; entry/ref/fixture/history traversal and symlinks; inline
       deadline/abort; 70KB worker response; late timeout side effect;
       external cancellation cleanup; capture bypass; secret value
       `passed`; >64KB final event; same-second retention; immediate
       navigation/close during autosave; overlapping saves. (TR-11–22)
-      — `tests/test_v02_audit.py`: 8 backend probes reproduced as
-      `xfail(strict)` (public import, symlink escape, 70KB worker crash,
-      external-cancel worker leak, Log capture bypass, secret-value
-      `passed`/`error` corruption, >64KB final event, same-second
-      retention); 5 non-headless probes routed as explicit-owner `skip`s
-      (inline-cycle deadline → M2, late-side-effect → M2, clean-tree wheel
-      → M6, nav-during-save → M1, overlapping-saves → M1).
-- [x] Record before-change manual performance baselines for: guarded
-      inline message throughput, worker round trips at 1KB/100KB/10MB,
-      parallel loops at 100/10k/100k items, and 10MB/100MB history first
-      render/replay memory. Baselines inform batching and inline-blob
-      thresholds; they are not correctness gates. (NFR-08, NFR-18)
-      — `tests/test_perf_baselines.py` (opt-in `perf` marker, CI-excluded)
-      + `docs/perf-baselines.md`. Before-numbers: ~42k guarded laps/s;
-      ~20ms spawn-dominated worker round trip (≥70KB crashes, TR-14); 100k
-      parallel loop 489 MB peak heap; 10MB replay read 19 MB peak. Worker
-      ≥70KB and 10/100MB browser first-render deferred (M2 / manual
-      window). NFR-08/18 tick at M7 after the corrected design.
+      — `tests/test_v02_audit.py`: 9 strict-xfail cases cover public import,
+      entry symlink escape, 70KB worker failure, external-cancel cleanup,
+      Log persistence, `passed`/`error` protocol corruption, >64KB final
+      event, and same-second retention. Every probe constrains its expected
+      failure; the cancellation probe synchronizes with the child and always
+      reaps it. Twelve explicit-owner skips name the remaining M1/M2/M4/M6
+      boundary, lifecycle, blob-round-trip/collision, distribution, and
+      autosave cases, so none can disappear from the ledger silently.
+- [x] Record before-change performance behavior for guarded inline message
+      throughput; worker results at 1KB/100KB/10MB (successful timings where
+      supported, otherwise an explicit bounded failure baseline); parallel
+      loops at 100/10k/100k with uninstrumented timing separate from peak
+      heap; and 10MB/100MB server replay plus built-browser first-render/
+      retained memory. Baselines inform batching and inline-blob thresholds;
+      they are not correctness gates. (NFR-08, NFR-18)
+      — `tests/test_perf_baselines.py` + `npm run perf:history`, both opt-in
+      and ordinary-CI-excluded; full numbers in `docs/perf-baselines.md`.
+      Before headlines: ~44.6k guarded laps/s; teardown-inclusive 1KB worker
+      21.5ms, with 100KB/10MB reader-limit failure lifecycles at 22.2ms/4.04s;
+      100k loop 3.41s and 485.1MB peak; 100MB server replay 0.204s/194.4MB
+      peak; 100MB browser first render 810ms median/+99.8MB retained heap. NFR-08/18
+      still tick only at M7 after comparison with the corrected design.
 
 M0 DoD: v0.1 can be reproduced from its tag; v0.2 formats and invariants
 are written before implementation; every confirmed critical/high audit
 finding has a named failing test or an explicit later milestone owner.
-**Met 2026-07-12** (`feat/v0.2`): all four M0 boxes ticked — v0.1.0 is
-tagged; the format is version-marked in code and pinned in engine spec
-§7a; each audit finding is a strict `xfail` or an explicit-owner `skip`;
-the baselines are recorded. (PR scope, owner call 2026-07-12: v0.2 lands
-as larger feature PRs off `feat/v0.2`, not one branch per milestone.)
+**Met and adversarially revalidated 2026-07-12** (`feat/v0.2`): all four
+boxes are evidenced — clean-tag v0.1.0 artifact + first-touch run; protected
+and enforced history envelope plus collision-safe pre-storage contract; each
+audit finding a signal-correct strict `xfail` or explicit-owner `skip`; every
+named performance size measured with no deferred slot. (PR scope, owner call
+2026-07-12: v0.2 lands as larger feature PRs off `feat/v0.2`, not one branch
+per milestone.)
 
 ### M1 — workspace boundary and durable editing
 
@@ -439,7 +452,9 @@ as larger feature PRs off `feat/v0.2`, not one branch per milestone.)
       logs, source reads/writes, and clone destinations. Validate lexical
       identity and run-id format, resolve symlinks, and require resolved
       containment. Remove scattered raw `root / Path(user_value)` joins
-      and `_safe_identity` as a partial policy. (FR-1107, D37, EC38)
+      and `_safe_identity` as a partial policy. Rejections crossing this
+      boundary use the stable `workspace_boundary` preparation/API reason.
+      (FR-1107, D37, EC38)
 - [ ] Keep the server loopback-only; validate loopback Host and same-origin
       mutation/WebSocket requests. Do not add users, sessions, OAuth,
       capability-token lifecycle, or a public bind flag. (FR-1108, D37,

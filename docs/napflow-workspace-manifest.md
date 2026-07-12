@@ -252,12 +252,15 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
   outputs are read from the masked `run_finished` event, NEVER from
   this endpoint: unmasked outputs are `napf run` stdout's contract
   only) · `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
-  D13; `?flow=` locates runs the server process didn't start) ·
+  D13; `?flow=` locates runs the server process didn't start; v0.2 M0
+  validates the first `run_started` envelope before replay, accepts an
+  unmarked v0.1 log best-effort, and returns 422 `history_format` for a
+  malformed/newer format or unsupported declared feature) ·
   `POST /api/runs/{run_id}/abort` (202 aborting; on a finished run:
   200 + final state, idempotent no-op).
 - **Write path** (S4/M4, FR-1003; identities are `_safe_identity`-
-  guarded — absolute/`..`/drive-letter tails 400, the write path never
-  escapes the workspace root):
+  guarded — absolute/`..`/drive-letter tails 400, but symlinked parents
+  can still escape in v0.1 as the warning above records):
   `PUT /api/flows/<identity>` `{flow, base_etag?, force?}` — validate
   the FlowFile JSON (400 `validation` + pydantic diagnostics, nothing
   written) → etag gate (`base_etag` ≠ current ⇒ 409 `{error:
@@ -294,7 +297,9 @@ with `napf run` — one gate, one env-resolution rule, one stream wiring.
 - **WebSocket** `/ws/runs/{run_id}`: text frames are the JSONL lines
   VERBATIM (one `encode_record` — identical by construction, D13).
   Live run: replay the buffered prefix, then stream; server closes
-  normally after `run_finished`. Finished run: replay the file, close.
+  normally after `run_finished`. Finished run: validate the history
+  envelope, replay the file, close; malformed/newer/unsupported format:
+  close `4409`.
   Unknown run: close `4404`.
 - **Run registry**: runs the server started, in memory — live buffers
   drop at run end (JSONL is the durable record), finished summaries

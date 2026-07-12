@@ -3,7 +3,17 @@
 // serve it with the real server + the BUILT bundle. Cross-platform —
 // no shell-isms (NFR-02 applies to tooling too).
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -11,6 +21,71 @@ const repo = resolve(import.meta.dirname, "..", "..");
 const port = process.env.NAPF_E2E_PORT ?? "46273";
 
 const workspace = mkdtempSync(join(tmpdir(), "napf-e2e-"));
+let workspaceCleaned = false;
+let server = null;
+let finishing = false;
+function cleanupWorkspace() {
+  if (workspaceCleaned) return;
+  try {
+    rmSync(workspace, { recursive: true, force: true });
+    workspaceCleaned = true;
+  } catch (error) {
+    // In particular, Windows can transiently reject removal while the
+    // child server still owns this directory. Leave the flag clear so the
+    // child-exit/parent-exit path can retry after the handle is released.
+    console.error(`could not clean e2e workspace ${workspace}:`, error);
+  }
+}
+// Covers normal child exit, Playwright SIGTERM, spawn/init failure, and an
+// exception while generating the opt-in 110MiB fixture.
+process.once("exit", cleanupWorkspace);
+
+function portIsOpen() {
+  return new Promise((resolveOpen) => {
+    const socket = createConnection({ host: "127.0.0.1", port: Number(port) });
+    let resolved = false;
+    function finish(open) {
+      if (resolved) return;
+      resolved = true;
+      socket.destroy();
+      resolveOpen(open);
+    }
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(250, () => finish(false));
+  });
+}
+
+async function finishAfterServerStops(code) {
+  if (finishing) return;
+  finishing = true;
+  // `uv run` can release its ChildProcess just before the ASGI descendant
+  // drops the listening socket. Keep the harness alive for that short tail;
+  // it also lets Windows release the workspace cwd before removal.
+  for (let attempt = 0; attempt < 100 && (await portIsOpen()); attempt += 1) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+  }
+  cleanupWorkspace();
+  process.exit(code);
+}
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    // Install this before init/fixture generation: the perf fixture is
+    // 110MiB, and interruption during startup must not leak its workspace.
+    if (server !== null) {
+      // The child runs with the workspace as cwd; stop it before removal so
+      // this works on Windows as well as POSIX. Its exit handler cleans up.
+      if (!server.kill(signal)) {
+        void finishAfterServerStops(0);
+      }
+    } else {
+      cleanupWorkspace();
+      process.exit(0);
+    }
+  });
+}
+
 const init = spawnSync(
   "uv",
   ["run", "--project", repo, "napf", "init", workspace],
@@ -198,7 +273,82 @@ writeFileSync(
   "utf-8",
 );
 
-const server = spawn(
+// Opt-in M0 browser replay baselines. Ordinary Playwright never creates
+// these files; playwright.perf.config.ts sets NAPF_E2E_PERF=1. Generate
+// incrementally so the fixture itself does not need another 100MB buffer.
+if (process.env.NAPF_E2E_PERF === "1") {
+  const PERF_FLOW = `schema: "napflow/v1"
+flow: {name: "perf"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "end", type: "end", config: {ports: [{name: "done", required: false}]}}
+edges:
+  - {from: "start.out", to: "end.done"}
+`;
+  mkdirSync(join(workspace, "flows", "perf"));
+  writeFileSync(join(workspace, "flows", "perf", "flow.yaml"), PERF_FLOW, "utf-8");
+  const perfRuns = join(workspace, ".napflow", "runs", "flows", "perf");
+  mkdirSync(perfRuns, { recursive: true });
+
+  function writePerfHistory(runId, targetBytes) {
+    const fd = openSync(join(perfRuns, `${runId}.jsonl`), "w");
+    let seq = 1;
+    let written = 0;
+    function line(record) {
+      const encoded = `${JSON.stringify(record)}\n`;
+      writeSync(fd, encoded, undefined, "utf-8");
+      written += Buffer.byteLength(encoded);
+    }
+    line({
+      event: "run_started",
+      run_id: runId,
+      ts: "1970-01-01T00:00:00.000Z",
+      seq,
+      format: "napflow-run/1",
+      features: [],
+      flow: "flows/perf",
+      env_name: null,
+      inputs: {},
+      engine_version: "0.1.0",
+    });
+    const preview = "y".repeat(400);
+    while (written < targetBytes - 1_000) {
+      seq += 1;
+      line({
+        event: "message_emitted",
+        run_id: runId,
+        frame: "f-0",
+        node: "start",
+        ts: "1970-01-01T00:00:00.001Z",
+        seq,
+        from_port: "start.out",
+        to_node: "end",
+        to_port: "done",
+        msg_id: `m-${seq}`,
+        value_preview: preview,
+      });
+    }
+    seq += 1;
+    line({
+      event: "run_finished",
+      run_id: runId,
+      ts: "1970-01-01T00:00:01.000Z",
+      seq,
+      state: "passed",
+      duration_ms: 1000,
+      asserts: { passed: 0, failed: 0 },
+      unhandled_errors: [],
+      end_outputs: {},
+      nodes_never_fired: [],
+    });
+    closeSync(fd);
+  }
+
+  writePerfHistory("19700102-000000-100000", 10 * 1024 * 1024);
+  writePerfHistory("19700103-000000-100000", 100 * 1024 * 1024);
+}
+
+server = spawn(
   "uv",
   [
     "run",
@@ -212,7 +362,10 @@ const server = spawn(
   ],
   { cwd: workspace, stdio: "inherit" },
 );
-server.on("exit", (code) => process.exit(code ?? 0));
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => server.kill(signal));
-}
+server.on("error", (error) => {
+  console.error(error);
+  process.exit(1);
+});
+server.on("exit", (code) => {
+  void finishAfterServerStops(code ?? 0);
+});

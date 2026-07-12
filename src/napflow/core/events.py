@@ -2,8 +2,9 @@
 
 One JSON object per line/frame; the JSONL file and the future WebSocket
 stream carry IDENTICAL records (D13) — both are fed by `EventStream`,
-which stamps `run_id`/`ts`/`seq` and masks at emission: events are born
-masked (FR-106/704), so no consumer can ever see an unmasked record.
+which stamps `run_id`/`ts`/`seq` and masks payloads at emission. Structural
+envelope fields (`event`, run/frame/node identity, ordering, history format,
+and feature declarations) are never rewritten by masking.
 
 Wire shape: common fields `{event, run_id, frame, node, ts, seq}` then
 the event's payload fields in declaration order. Optional fields
@@ -11,19 +12,18 @@ the event's payload fields in declaration order. Optional fields
 unset; required nullable fields (e.g. run_started `env_name`) appear as
 null.
 
-Masking (D22): the VALUES of env vars whose names match
+Payload masking (D22): the VALUES of env vars whose names match
 `environments.secrets` glob patterns (layered active profile + process
-env) are replaced with `***` wherever they appear — substring scan over
-every string in the record (keys included), 5-char minimum, longest
-value first. Declared secrets only; runtime-acquired tokens are stored
-in full (roadmap).
+env) are replaced with `***` wherever they appear in payload fields —
+substring scan over strings and keys, 5-char minimum, longest value first.
+Declared secrets only; runtime-acquired tokens are stored in full (roadmap).
 """
 
 import json
 import secrets as _secrets
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict as _asdict
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from functools import lru_cache
@@ -39,12 +39,11 @@ MASK = "***"
 # seq 1, and it carries `format` = HISTORY_FORMAT. A reader identifies the
 # on-disk contract from that field before interpreting the rest of the log.
 #
-# `napflow-run/<major>`: the major bumps on a breaking change to event
-# ordering, the blob-reference shape, inline-threshold semantics, or the
-# byte/hash rules pinned in the engine spec (§7a). A newer MAJOR than this
-# reader supports is refused (`is_supported` False → callers fail clearly
-# or open metadata-only, FR-1101); a log with no `format` field predates
-# versioning and is read best-effort as major 0 (v0.1 logs, D33).
+# `napflow-run/<major>`: the major bumps on a breaking base event/envelope
+# change. Additive storage capabilities carry separately versioned feature
+# names. A newer major or unknown feature is refused before replay; a log
+# with no `format` field predates versioning and is read best-effort as major
+# 0 (v0.1 logs, D33).
 #
 # v0.2 storage (blobs/indexes) lands in later milestones; the marker is
 # pinned here, BEFORE the format changes, so every run written from now on
@@ -53,24 +52,60 @@ MASK = "***"
 HISTORY_FORMAT = "napflow-run/1"
 HISTORY_FORMAT_MAJOR = 1
 
+# Optional format capabilities are declared separately from the event-format
+# major. This M0 build writes/reads pure inline JSONL only. M4 will declare
+# `content-blobs/1` when it can both resolve and verify `$napflow` persisted-
+# value envelopes; older readers then reject the feature instead of silently
+# exposing descriptors as user data.
+HISTORY_FEATURE_CONTENT_BLOBS = "content-blobs/1"
+HISTORY_WRITE_FEATURES: tuple[str, ...] = ()
+HISTORY_SUPPORTED_FEATURES: frozenset[str] = frozenset()
+
 
 class HistoryFormatError(ValueError):
     """A run log declares a history format this build cannot read."""
 
 
-def parse_history_format(value: str | None) -> int:
-    """Major version from a `napflow-run/<major>` marker. A missing marker
-    (`None`) is a pre-versioning v0.1 log ⇒ major 0. A malformed marker
-    raises `HistoryFormatError`."""
+def _marker_repr(value: Any, limit: int = 96) -> str:
+    """Bounded diagnostic representation for untrusted history metadata."""
+    shown = repr(value)
+    return shown if len(shown) <= limit else f"{shown[: limit - 3]}..."
+
+
+def parse_history_format(value: Any) -> int:
+    """Major version from a `napflow-run/<major>` marker.
+
+    The envelope reader passes `None` only for a missing legacy marker;
+    explicitly present null is rejected before this helper. A malformed
+    marker raises `HistoryFormatError`.
+    """
     if value is None:
         return 0
+    if not isinstance(value, str):
+        raise HistoryFormatError(
+            f"run-history format must be a string, not {type(value).__name__}"
+        )
     prefix, sep, major = value.partition("/")
-    if prefix != "napflow-run" or not sep or not major.isdigit():
-        raise HistoryFormatError(f"unrecognized run-history format {value!r}")
-    return int(major)
+    if (
+        prefix != "napflow-run"
+        or not sep
+        or not major
+        or any(char < "0" or char > "9" for char in major)
+    ):
+        raise HistoryFormatError(
+            f"unrecognized run-history format {_marker_repr(value)}"
+        )
+    try:
+        return int(major)
+    except ValueError as e:
+        # CPython bounds decimal conversion length; even an all-ASCII digit
+        # marker must still fail through the public format-error contract.
+        raise HistoryFormatError(
+            f"unrecognized run-history format {_marker_repr(value)}"
+        ) from e
 
 
-def is_supported(value: str | None) -> bool:
+def is_supported(value: Any) -> bool:
     """True when this build can read a run log declaring `value`. Older or
     equal majors are readable (best-effort for major 0); a newer major is
     not."""
@@ -78,6 +113,23 @@ def is_supported(value: str | None) -> bool:
         return parse_history_format(value) <= HISTORY_FORMAT_MAJOR
     except HistoryFormatError:
         return False
+
+
+def parse_history_features(value: Any) -> frozenset[str]:
+    """Validate an explicitly present history feature list.
+
+    A missing field is handled by the envelope reader as the legacy empty
+    set. Explicit null is not a list and is therefore malformed.
+    """
+    if not isinstance(value, list):
+        raise HistoryFormatError(
+            f"run-history features must be an array, not {type(value).__name__}"
+        )
+    if any(not isinstance(item, str) or not item for item in value):
+        raise HistoryFormatError("run-history features must be non-empty strings")
+    if len(set(value)) != len(value):
+        raise HistoryFormatError("run-history features must not contain duplicates")
+    return frozenset(value)
 
 
 # --------------------------------------------------------------------------
@@ -106,6 +158,7 @@ class RunStarted(Event):
     env_name: str | None
     inputs: dict[str, Any]
     engine_version: str
+    features: list[str] = field(default_factory=lambda: list(HISTORY_WRITE_FEATURES))
 
 
 @dataclass(kw_only=True)
@@ -372,8 +425,9 @@ class EventStream:
         self._seq = 0
 
     def emit(self, event: Event) -> dict[str, Any]:
-        """Serialize + mask + fan out; returns the wire record (born
-        masked — sinks and callers never see secrets)."""
+        """Serialize + mask payloads + fan out; returns the wire record.
+        Protocol-envelope fields are structural and never rewritten by
+        masking."""
         self._seq += 1
         data = _asdict(event)
         record: dict[str, Any] = {"event": type(event).event, "run_id": self.run_id}
@@ -383,12 +437,19 @@ class EventStream:
                 record[common] = value
         record["ts"] = isoformat_ms(self._clock())
         record["seq"] = self._seq
+        # `format`/`features` are part of the run_started envelope, not user
+        # payload. Keep them outside recursive masking just like event/run_id/
+        # seq: a declared secret must not destroy the reader gate.
+        if isinstance(event, RunStarted):
+            record["format"] = data.pop("format")
+            record["features"] = data.pop("features")
         omittable = _omit_if_none(type(event))
+        payload: dict[str, Any] = {}
         for key, value in data.items():
             if value is None and key in omittable:
                 continue
-            record[key] = value
-        record = self._masker.mask(record)
+            payload[key] = value
+        record.update(self._masker.mask(payload))
         for sink in self._sinks:
             sink.write(record)
         return record

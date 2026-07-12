@@ -10,8 +10,11 @@ import pytest
 
 from napflow.core.events import (
     EVENT_TYPES,
+    HISTORY_FEATURE_CONTENT_BLOBS,
     HISTORY_FORMAT,
     HISTORY_FORMAT_MAJOR,
+    HISTORY_SUPPORTED_FEATURES,
+    HISTORY_WRITE_FEATURES,
     MASK,
     AssertResult,
     EventStream,
@@ -25,6 +28,7 @@ from napflow.core.events import (
     apply_retention,
     is_supported,
     new_run_id,
+    parse_history_features,
     parse_history_format,
     run_log_path,
 )
@@ -101,6 +105,7 @@ def test_run_started_carries_history_format_marker():
     record = sink.records[0]
     assert record["seq"] == 1
     assert record["format"] == HISTORY_FORMAT == "napflow-run/1"
+    assert record["features"] == list(HISTORY_WRITE_FEATURES) == []
 
 
 def test_history_format_reader_gate():
@@ -114,6 +119,37 @@ def test_history_format_reader_gate():
     assert is_supported("napflow-run/2") is False  # newer major refused
     with pytest.raises(HistoryFormatError):
         parse_history_format("postman-run/1")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1,
+        True,
+        1.5,
+        [],
+        {},
+        "napflow-run/²",
+        "napflow-run/-1",
+        "napflow-run/" + "9" * 5_000,
+    ],
+)
+def test_history_format_reader_gate_rejects_arbitrary_json(value):
+    with pytest.raises(HistoryFormatError):
+        parse_history_format(value)
+    assert is_supported(value) is False
+
+
+def test_history_feature_reader_gate():
+    assert parse_history_features([]) == HISTORY_SUPPORTED_FEATURES == frozenset()
+    with pytest.raises(HistoryFormatError):
+        parse_history_features(None)
+    with pytest.raises(HistoryFormatError):
+        parse_history_features(
+            [HISTORY_FEATURE_CONTENT_BLOBS, HISTORY_FEATURE_CONTENT_BLOBS]
+        )
+    with pytest.raises(HistoryFormatError):
+        parse_history_features([1])
 
 
 def test_unset_frame_and_node_omitted():
@@ -199,6 +235,43 @@ def test_events_born_masked():
     record = s.emit(LogEvent(node="log1", value={"auth": "Bearer s3cr3t-value"}))
     assert record["value"]["auth"] == f"Bearer {MASK}"
     assert sink.records[0] == record  # the sink never saw the secret
+
+
+@pytest.mark.parametrize("secret", ["format", "features", HISTORY_FORMAT])
+def test_run_started_envelope_is_never_masked(secret):
+    m = SecretMasker(["TOKEN"], {"TOKEN": secret})
+    sink = CaptureSink()
+    s = EventStream("r", m, [sink], FIXED_CLOCK)
+    record = s.emit(
+        RunStarted(
+            flow="flows/demo",
+            env_name="dev",
+            inputs={"value": secret},
+            engine_version="0.2",
+        )
+    )
+
+    assert record["event"] == "run_started"
+    assert record["run_id"] == "r"
+    assert record["seq"] == 1
+    assert record["format"] == HISTORY_FORMAT
+    assert record["features"] == []
+    assert record["inputs"]["value"] == MASK  # payload masking still applies
+
+
+def test_run_started_feature_names_are_never_masked():
+    feature = HISTORY_FEATURE_CONTENT_BLOBS
+    s = EventStream("r", SecretMasker(["TOKEN"], {"TOKEN": feature}), [], FIXED_CLOCK)
+    record = s.emit(
+        RunStarted(
+            flow="flows/demo",
+            env_name=None,
+            inputs={},
+            engine_version="0.2",
+            features=[feature],
+        )
+    )
+    assert record["features"] == [feature]
 
 
 # --------------------------------------------------------------------------

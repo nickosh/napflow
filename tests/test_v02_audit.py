@@ -16,18 +16,25 @@ these skips keep that ledger visible in the suite itself.
 """
 
 import asyncio
+import hashlib
 import json
 import os
-import tempfile
 import textwrap
-from pathlib import Path
 
 import pytest
 
-from napflow.core.engine import FlowRun
-from napflow.core.events import EventStream, SecretMasker, apply_retention
+from napflow.core.engine import FlowRun, execute_flow
+from napflow.core.events import (
+    HISTORY_FEATURE_CONTENT_BLOBS,
+    EventStream,
+    JsonlSink,
+    SecretMasker,
+    apply_retention,
+)
 from napflow.core.models.manifest import Manifest
-from test_engine import end, flow, manifest, run, start
+from napflow.core.runprep import RunPrepError, prepare_run
+from napflow.core.workspace import load_workspace
+from test_engine import end, flow, run, start
 
 
 def py(node_id, function, outputs=(), **extra):
@@ -44,45 +51,76 @@ def write_nodes(tmp_path, source):
 # TR-11 — public core API (FR-1112, EC42; owner: M6)
 
 
-@pytest.mark.xfail(strict=True, reason="FR-1112/M6: no public run_flow wrapper yet")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AttributeError,
+    reason="FR-1112/M6: no public run_flow wrapper yet",
+)
 def test_public_run_flow_import():
     """`from napflow.core import run_flow` is the documented pytest entry
     point (D32 note); today core exposes no such wrapper."""
-    from napflow.core import run_flow  # noqa: F401
+    import napflow.core as core
+
+    run_flow = core.run_flow
+    assert callable(run_flow)
 
 
 # --------------------------------------------------------------------------
 # TR-12 — workspace boundary is symlink-aware (D37, EC38; owner: M1)
 
 
-@pytest.mark.xfail(strict=True, reason="EC38/M1: lexical guard ignores symlinks")
-def test_identity_resolution_is_symlink_contained():
-    """A lexically-clean identity that resolves (through a symlink) outside
-    the workspace must be rejected or contained. `_safe_identity` only
-    screens `..`/`:`, so `flows/evil/secret` escapes on resolve."""
-    from napflow.server.app import _safe_identity
-
-    root = Path(tempfile.mkdtemp())
-    outside = Path(tempfile.mkdtemp())
-    (outside / "secret.txt").write_text("SECRET")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="EC38/M1: entry-flow resolution follows symlinks outside workspace",
+)
+def test_entry_flow_resolution_is_symlink_contained(tmp_path):
+    """Run preparation is a stable entry-flow behavior surface. A clean
+    identity that resolves through a symlink outside the workspace must be
+    rejected there; replacing the old `_safe_identity` helper must not leave
+    this probe xfailed merely because that private helper disappeared."""
+    root = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "napflow.yaml").write_text("schema: napflow/v1\n", encoding="utf-8")
+    (outside / "flow.yaml").write_text(
+        "schema: napflow/v1\n"
+        "flow: {name: outside}\n"
+        "nodes:\n"
+        "  - {id: start, type: start}\n"
+        "  - {id: end, type: end}\n",
+        encoding="utf-8",
+    )
     (root / "flows").mkdir()
     try:
-        (root / "flows" / "evil").symlink_to(outside)
+        (root / "flows" / "evil").symlink_to(outside, target_is_directory=True)
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable on this platform/privilege level")
 
-    identity = _safe_identity("flows/evil/secret.txt")
-    # the boundary must NOT hand back an identity that escapes root
-    if identity is not None:
-        resolved = (root / Path(identity)).resolve()
-        assert resolved.is_relative_to(root.resolve()), f"escaped to {resolved}"
+    workspace = load_workspace(root)
+    try:
+        prepare_run(workspace, "flows/evil")
+    except RunPrepError as error:
+        if error.reason != "workspace_boundary":
+            # RuntimeError is outside the expected current AssertionError;
+            # an unrelated load/check/env failure must never false-XPASS.
+            raise RuntimeError(
+                f"entry flow failed for non-boundary reason {error.reason!r}"
+            ) from error
+        return  # correct target behavior: the entry identity was rejected
+    raise AssertionError("entry flow resolved through a symlink outside workspace")
 
 
 # --------------------------------------------------------------------------
 # TR-14 — worker protocol handles large results (D36; owner: M2)
 
 
-@pytest.mark.xfail(strict=True, reason="M2: asyncio 64KB reader limit crashes reads")
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="M2: asyncio 64KB reader limit crashes reads",
+)
 def test_worker_large_result_completes(tmp_path):
     """A valid ~70KB Python result must complete (or fail as a documented
     node error) — today the parent's default 64KB StreamReader limit makes
@@ -90,7 +128,7 @@ def test_worker_large_result_completes(tmp_path):
     write_nodes(tmp_path, "def big(seed):\n    return {'data': 'x' * 70000}\n")
     f = flow(
         start(),
-        py("p", "big", ["data"], max_seconds=10),
+        py("p", "big", ["data"], max_seconds=2),
         end({"name": "out"}),
         edges=[("start.out", "p.seed"), ("p.data", "end.out")],
     )
@@ -103,12 +141,27 @@ def test_worker_large_result_completes(tmp_path):
 # TR-15 — external cancellation leaves no worker behind (NFR-13; owner: M2)
 
 
-@pytest.mark.xfail(strict=True, reason="NFR-13/M2: cleanup not in finally")
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="NFR-13/M2: cleanup not in finally",
+)
 def test_external_cancellation_kills_workers(tmp_path):
     """Cancelling the run coroutine mid-flight must tear down the worker.
     Today `_workers.close()` runs after the pump but not in a `finally`,
     so an external `CancelledError` leaks the subprocess."""
-    write_nodes(tmp_path, "import time\ndef slow(seed):\n    time.sleep(30)\n")
+    entered = tmp_path / "worker-entered"
+    write_nodes(
+        tmp_path,
+        f"""
+        import time
+        from pathlib import Path
+
+        def slow(seed):
+            Path({str(entered)!r}).write_text("entered", encoding="utf-8")
+            time.sleep(30)
+        """,
+    )
     f = flow(
         start(),
         py("p", "slow", [], max_seconds=60),
@@ -130,18 +183,54 @@ def test_external_cancellation_kills_workers(tmp_path):
             workspace_root=tmp_path,
         )
         task = asyncio.ensure_future(run_obj.execute())
-        await asyncio.sleep(1.5)  # let the worker spawn and enter sleep()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        await asyncio.sleep(0.5)
-        pool = run_obj._workers
-        live = [
-            w
-            for w in (pool._workers.values() if pool else [])
-            if w._proc is not None and w._proc.returncode is None
-        ]
-        return live
+        live_at_return = []
+        try:
+            # Synchronize on the child entering user code instead of sleeping for
+            # a guessed duration (which could false-XPASS on a slow runner).
+            async with asyncio.timeout(5):
+                while not entered.exists():
+                    await asyncio.sleep(0.01)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            pool = run_obj._workers
+            workers = list(pool._workers.values()) if pool else []
+            live_at_return = [
+                worker
+                for worker in workers
+                if worker._proc is not None and worker._proc.returncode is None
+            ]
+        finally:
+            # Cleanup is outermost: marker timeout, cancellation mismatch, or
+            # inspection failure must still reap every test-owned process.
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            pool = run_obj._workers
+            workers = list(pool._workers.values()) if pool else []
+            cleanup = await asyncio.gather(
+                *(worker.kill() for worker in workers), return_exceptions=True
+            )
+            if pool is not None:
+                cleanup.extend(
+                    await asyncio.gather(pool.close(), return_exceptions=True)
+                )
+            cleanup_errors = [
+                item for item in cleanup if isinstance(item, BaseException)
+            ]
+            still_live = [
+                worker
+                for worker in workers
+                if worker._proc is not None and worker._proc.returncode is None
+            ]
+            if cleanup_errors or still_live:
+                # RuntimeError is outside this probe's expected AssertionError,
+                # so broken cleanup is a real failure—not a concealed orphan.
+                raise RuntimeError(
+                    f"audit-probe cleanup failed: errors={cleanup_errors!r}, "
+                    f"live_workers={len(still_live)}"
+                )
+        return live_at_return
 
     live = asyncio.run(scenario())
     assert live == [], f"leaked {len(live)} worker subprocess(es)"
@@ -152,12 +241,15 @@ def test_external_cancellation_kills_workers(tmp_path):
 
 
 @pytest.mark.xfail(
-    strict=True, reason="EC32/M4: capture valve only covers request bodies"
+    strict=True,
+    raises=AssertionError,
+    reason="EC32/M4: large Log values are still persisted inline",
 )
-def test_log_value_respects_capture_budget():
-    """The run capture budget is meant to bound persisted bytes, but the
-    valve only wraps request bodies — a large value through Log (or End) is
-    written in full. Under D34 it becomes a store-once blob reference."""
+def test_large_log_value_uses_typed_reference_without_changing_runtime(tmp_path):
+    """D34 moves persisted large values to typed content references without
+    changing the value delivered through the flow. This probe validates the
+    collision-safe reference shape; the M4-owned round-trip integration test
+    remains an explicit placeholder below until a blob reader exists."""
     big = "z" * 200_000
     f = flow(
         start({"name": "p", "type": "any"}),
@@ -165,12 +257,51 @@ def test_log_value_respects_capture_budget():
         end({"name": "out"}),
         edges=[("start.p", "lg.in"), ("lg.out", "end.out")],
     )
-    _, records = run(
-        f, inputs={"p": big}, mani=manifest(body_capture_mb=0.001, run_capture_mb=0.001)
-    )
+    log_path = tmp_path / "run.jsonl"
+    stream = EventStream("test-run", SecretMasker([], {}), [JsonlSink(log_path)])
+    try:
+        result = asyncio.run(
+            execute_flow(
+                f,
+                flow_identity="flows/t",
+                manifest=Manifest.model_validate({"schema": "napflow/v1"}),
+                env={},
+                env_name="dev",
+                inputs={"p": big},
+                stream=stream,
+                flow_dir=tmp_path,
+                workspace_root=tmp_path,
+            )
+        )
+    finally:
+        stream.close()
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert result.end_outputs["out"] == big  # persisted form never changes runtime data
     logrec = next(r for r in records if r["event"] == "log")
-    persisted = json.dumps(logrec["value"])
-    assert len(persisted) < len(big), "log value persisted in full — capture bypassed"
+    ref = logrec["value"]
+    raw = big.encode("utf-8")
+    assert isinstance(ref, dict), "large Log value is still persisted inline"
+    assert set(ref) == {"$napflow"}
+    descriptor = ref["$napflow"]
+    assert descriptor.get("kind") == "blob"
+    assert descriptor.get("hash") == f"sha256:{hashlib.sha256(raw).hexdigest()}"
+    assert descriptor.get("bytes") == len(raw)
+    assert descriptor.get("codec") == "utf-8"
+    assert isinstance(descriptor.get("media_type"), str) and descriptor["media_type"]
+    stored = [
+        path
+        for path in tmp_path.rglob("*")
+        if path.is_file() and path != log_path and path.read_bytes() == raw
+    ]
+    assert len(stored) == 1, "typed reference has no unique byte-identical blob"
+    assert hashlib.sha256(stored[0].read_bytes()).hexdigest() == descriptor[
+        "hash"
+    ].removeprefix("sha256:")
+    assert HISTORY_FEATURE_CONTENT_BLOBS in records[0]["features"]
 
 
 # --------------------------------------------------------------------------
@@ -178,21 +309,39 @@ def test_log_value_respects_capture_budget():
 
 
 @pytest.mark.xfail(
-    strict=True, reason="EC45/M4: substring masking hits schema/state text"
+    strict=True,
+    raises=AssertionError,
+    reason="EC45/M4: substring masking hits schema/state text",
 )
-def test_secret_value_does_not_corrupt_state_vocabulary():
+@pytest.mark.parametrize(
+    ("secret_value", "record"),
+    [
+        (
+            "passed",
+            {
+                "event": "run_finished",
+                "state": "passed",
+                "asserts": {"passed": 1, "failed": 0},
+            },
+        ),
+        (
+            "error",
+            {
+                "event": "run_finished",
+                "state": "error",
+                "error_reason": "run_timeout",
+                "unhandled_errors": [],
+            },
+        ),
+    ],
+)
+def test_secret_value_does_not_corrupt_state_vocabulary(secret_value, record):
     """A declared secret whose VALUE happens to equal a protocol token
     ('passed', 'error') must not rewrite event state, schema keys, or enum
     values. Today the substring masker replaces them wherever they appear."""
-    masker = SecretMasker(["TOKEN"], {"TOKEN": "passed"})
-    record = {
-        "event": "run_finished",
-        "state": "passed",
-        "asserts": {"passed": 1, "failed": 0},
-    }
+    masker = SecretMasker(["TOKEN"], {"TOKEN": secret_value})
     masked = masker.mask(record)
-    assert masked["state"] == "passed"  # run state must survive
-    assert "passed" in masked["asserts"]  # schema key must survive
+    assert masked == record  # protocol enums, names, and keys must all survive
 
 
 # --------------------------------------------------------------------------
@@ -200,16 +349,17 @@ def test_secret_value_does_not_corrupt_state_vocabulary():
 
 
 @pytest.mark.xfail(
-    strict=True, reason="M5: fixed 64KB tail window drops a large final line"
+    strict=True,
+    raises=AssertionError,
+    reason="M5: fixed 64KB tail window drops a large final line",
 )
-def test_large_final_event_is_recognized():
+def test_large_final_event_is_recognized(tmp_path):
     """A `run_finished` line larger than the 64KB tail window makes the
     server report a completed run as 'incomplete'. Needs a durable summary
     or a robust backward record reader, not a fixed-size tail read."""
     from napflow.server.app import _tail_record
 
-    d = Path(tempfile.mkdtemp())
-    log = d / "r.jsonl"
+    log = tmp_path / "r.jsonl"
     with log.open("w", encoding="utf-8") as f:
         f.write(json.dumps({"event": "run_started", "seq": 1}) + "\n")
         f.write(
@@ -226,12 +376,17 @@ def test_large_final_event_is_recognized():
 # EC47 — retention is truly chronological within a second (owner: M3)
 
 
-@pytest.mark.xfail(strict=True, reason="EC47/M3: same-second runs sort by random hex")
-def test_retention_keeps_newest_within_same_second():
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="EC47/M3: same-second runs sort by random hex",
+)
+def test_retention_keeps_newest_within_same_second(tmp_path):
     """Two runs in the same wall-clock second get run ids differing only in
     a random hex suffix, so filename sort ≠ creation order. Retention must
     keep the newer run; today it can delete it."""
-    d = Path(tempfile.mkdtemp())
+    d = tmp_path / "runs"
+    d.mkdir()
     older = d / "20260712-100000-ffffff.jsonl"  # created first, hex sorts last
     newer = d / "20260712-100000-000000.jsonl"  # created second, hex sorts first
     older.write_text("{}")
@@ -250,6 +405,34 @@ def test_retention_keeps_newest_within_same_second():
 
 
 @pytest.mark.skip(
+    reason="TR-12/FR-1107 owner M1: entry-flow absolute/parent/drive/encoded "
+    "identity matrix lands with the central WorkspaceResolver"
+)
+def test_entry_flow_boundary_matrix(): ...
+
+
+@pytest.mark.skip(
+    reason="TR-12/FR-1107 owner M1: flow/loop reference traversal and symlink "
+    "matrix lands with the central WorkspaceResolver"
+)
+def test_flow_and_loop_reference_boundary_matrix(): ...
+
+
+@pytest.mark.skip(
+    reason="TR-12/FR-1107 owner M1: fixture traversal and symlink matrix lands "
+    "with the central WorkspaceResolver"
+)
+def test_fixture_boundary_matrix(): ...
+
+
+@pytest.mark.skip(
+    reason="TR-12/FR-1107 owner M1: history identity/run-id traversal and "
+    "symlink matrix lands with the central WorkspaceResolver"
+)
+def test_history_boundary_matrix(): ...
+
+
+@pytest.mark.skip(
     reason="TR-13/NFR-12 owner M2: deadline under inline cycle needs the "
     "cooperative-batch scheduler redesign; contract pinned there"
 )
@@ -257,10 +440,32 @@ def test_inline_cycle_respects_deadline(): ...
 
 
 @pytest.mark.skip(
+    reason="TR-13/NFR-12 owner M2: abort under a tight inline cycle needs the "
+    "cooperative-batch scheduler redesign; contract pinned there"
+)
+def test_inline_cycle_observes_abort(): ...
+
+
+@pytest.mark.skip(
     reason="TR-14 owner M2: timed-out worker late-side-effect window is "
     "racy to reproduce; covered by the M2 terminate→grace→kill rewrite"
 )
 def test_timed_out_worker_no_late_side_effect(): ...
+
+
+@pytest.mark.skip(
+    reason="TR-16/FR-1102 owner M4: replace with a persisted blob-store "
+    "write/read/hash verification once the content-store API exists"
+)
+def test_large_log_blob_round_trip(): ...
+
+
+@pytest.mark.skip(
+    reason="TR-16/FR-1102 owner M4: collision-shaped user objects must use "
+    "the $napflow literal escape and round-trip byte-for-byte once the "
+    "persisted-value codec exists"
+)
+def test_blob_marker_shaped_user_payload_round_trips_as_literal(): ...
 
 
 @pytest.mark.skip(

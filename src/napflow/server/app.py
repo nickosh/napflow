@@ -30,7 +30,14 @@ from napflow.core.checker import (
     template_refs,
     used_by,
 )
-from napflow.core.events import encode_record
+from napflow.core.events import (
+    HISTORY_FORMAT_MAJOR,
+    HISTORY_SUPPORTED_FEATURES,
+    HistoryFormatError,
+    encode_record,
+    parse_history_features,
+    parse_history_format,
+)
 from napflow.core.loader import (
     LoadError,
     load_document,
@@ -55,6 +62,7 @@ bundle. The API is live under <code>/api</code>.</p>
 
 # WebSocket close codes (4xxx = application-defined)
 WS_UNKNOWN_RUN = 4404
+WS_HISTORY_FORMAT = 4409
 
 
 def _diag_payload(diag: CheckDiagnostic, root: Path) -> dict[str, Any]:
@@ -191,18 +199,88 @@ def _tail_record(path: Path) -> dict[str, Any] | None:
     return None
 
 
-def _read_records(path: Path) -> list[dict[str, Any]]:
-    """Full JSONL replay; a trailing partial line is tolerated (EC20)."""
+def _validate_history_envelope(record: Any) -> None:
+    """Validate the first nonblank history record before replaying data."""
+    if (
+        not isinstance(record, dict)
+        or record.get("event") != "run_started"
+        or type(record.get("seq")) is not int
+        or record["seq"] != 1
+    ):
+        raise HistoryFormatError(
+            "run history must begin with a run_started envelope at seq 1"
+        )
+    has_format = "format" in record
+    if has_format and record["format"] is None:
+        raise HistoryFormatError(
+            "run-history format must be omitted for v0.1 or contain a string"
+        )
+    if not has_format and "features" in record:
+        raise HistoryFormatError(
+            "pre-versioning run history must omit both format and features"
+        )
+    marker = record.get("format")
+    major = parse_history_format(marker)
+    if major > HISTORY_FORMAT_MAJOR:
+        raise HistoryFormatError(
+            "unsupported newer run-history major; "
+            f"this build supports up to napflow-run/{HISTORY_FORMAT_MAJOR}"
+        )
+    features = (
+        parse_history_features(record["features"])
+        if "features" in record
+        else frozenset()
+    )
+    unsupported = features - HISTORY_SUPPORTED_FEATURES
+    if unsupported:
+        # repr() escapes malformed Unicode (including lone surrogates), so
+        # untrusted feature names cannot break either JSON or WebSocket UTF-8.
+        shown = ", ".join(repr(feature) for feature in sorted(unsupported))
+        raise HistoryFormatError(f"unsupported run-history feature(s): {shown}")
+
+
+def _read_records(
+    path: Path, *, validate_history: bool = True, allow_empty: bool = False
+) -> list[dict[str, Any]]:
+    """Full JSONL replay; a trailing partial line is tolerated (EC20).
+
+    The envelope is validated by default before later records are interpreted.
+    `allow_empty` is only for the brief live-run prefix before run_started has
+    flushed; an empty completed/imported history is invalid.
+    """
     records = []
     with path.open(encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
             try:
-                records.append(json.loads(line))
-            except ValueError:
+                record = json.loads(line)
+            except ValueError as e:
+                if validate_history and not records:
+                    raise HistoryFormatError(
+                        "run history does not begin with a valid JSON envelope"
+                    ) from e
                 break  # flushed-per-line: only the last line can be cut
+            if validate_history and not records:
+                _validate_history_envelope(record)
+            records.append(record)
+    if validate_history and not records and not allow_empty:
+        raise HistoryFormatError("run history is empty; no run_started envelope")
     return records
+
+
+def _history_format_response(error: HistoryFormatError) -> Response:
+    message = str(error).encode("utf-8", errors="backslashreplace").decode("utf-8")
+    return json_response({"error": "history_format", "message": message}, status=422)
+
+
+def _ws_close_reason(message: str, limit: int = 120) -> str:
+    """Application close reasons must fit the WebSocket control frame."""
+    safe = message.encode("utf-8", errors="backslashreplace").decode("utf-8")
+    encoded = safe.encode("utf-8")
+    if len(encoded) <= limit:
+        return safe
+    return encoded[: limit - 3].decode("utf-8", errors="ignore") + "..."
 
 
 def build_app(workspace: Workspace) -> Application:
@@ -585,7 +663,14 @@ def build_app(workspace: Workspace) -> Application:
                 {"error": "unknown_run", "message": f"no run log for {run_id!r}"},
                 status=404,
             )
-        return json_response({"run_id": run_id, "events": _read_records(log_path)})
+        try:
+            records = _read_records(
+                log_path,
+                allow_empty=run is not None and not run.finished,
+            )
+        except HistoryFormatError as e:
+            return _history_format_response(e)
+        return json_response({"run_id": run_id, "events": records})
 
     @router.post("/api/runs/{run_id}/abort")
     async def abort_run(run_id: str) -> Response:
@@ -611,7 +696,12 @@ def build_app(workspace: Workspace) -> Application:
             await websocket.close(WS_UNKNOWN_RUN, f"no run {run_id!r}")
             return
         if run.finished:
-            for record in _read_records(run.log_path):
+            try:
+                records = _read_records(run.log_path)
+            except HistoryFormatError as e:
+                await websocket.close(WS_HISTORY_FORMAT, _ws_close_reason(str(e)))
+                return
+            for record in records:
                 await websocket.send_text(encode_record(record))
             await websocket.close()
             return

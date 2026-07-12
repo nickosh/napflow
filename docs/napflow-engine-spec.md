@@ -602,7 +602,7 @@ One JSON object per line/frame. Common fields:
 `{event, run_id, frame, node, ts, seq}`. Types:
 
 ```
-run_started      {flow, env_name, inputs(masked), engine_version}
+run_started      {format, features, flow, env_name, inputs(masked), engine_version}
 node_fired       {firing_no}
 request_started  {method, url, headers(masked), body_preview, attempt}
 request_finished {status, http_version, headers(masked), body, size_bytes,
@@ -633,13 +633,16 @@ Rules:
 > than the final prepared request (EC50); recursive masking can rewrite
 > protocol keys/state (EC45). D34/D35 + PLAN M4 are the accepted target.
 
-- **Masking (D22)**: secrets are masked at emission — events are born
-  masked. The *values* of env vars matching `environments.secrets`
-  (active profile + process env) are replaced wherever they appear, via
-  substring scan with a 5-char minimum length. Only declared secrets are
-  masked — tokens acquired at runtime (e.g. in a login response body) are
-  stored in full; history shareability (D13) is scoped to declared
-  secrets. Runtime redaction is a roadmap item (manifest).
+- **Masking (D22)**: secrets are masked in event payloads at emission.
+  The structural envelope (`event`, run/frame/node identity, `ts`, `seq`,
+  and history `format`/`features`) is never rewritten. The *values* of env vars
+  matching `environments.secrets` (active profile + process env) are
+  replaced wherever they appear inside payload fields, via substring scan
+  with a 5-char minimum length. Only declared secrets are masked — tokens
+  acquired at runtime (e.g. in a login response body) are stored in full;
+  history shareability (D13) is scoped to declared secrets. D35/M4 still
+  replaces this destructive payload masking with raw-local/redacted-view
+  behavior.
 - `value_preview` truncates large bodies in stream events, but
   `request_started`/`request_finished` store **complete request and
   response bodies** in JSONL — full wire detail always. A disk-protection
@@ -669,8 +672,9 @@ Pins made at S2/M2 (2026-07-05, `core/events.py`):
   LF; every line flushed as written (abort leaves a replayable prefix).
 - **Masking**: token is `***`; secret NAME globs match case-sensitively
   (`fnmatchcase`); values replaced longest-first (a secret embedded in
-  a longer secret masks fully); dict keys are scanned too ("wherever
-  they appear").
+  a longer secret masks fully); payload dict keys are scanned too. M0's
+  history marker made the common envelope structurally immutable; D35/M4
+  removes key/control-field rewriting from payload redaction as well.
 
 ## 7a. Run-history format contract (v0.2 — FR-1101, D34)
 
@@ -678,46 +682,95 @@ This section pins the run-history on-disk format **before** v0.2 changes
 storage, so every run written from M0 on is self-identifying and later
 readers can gate cleanly. The format-version marker landed in M0
 (`core/events.py`); the blob/index machinery it describes lands in
-M3–M5. Until then a `napflow-run/1` log is a pure inline JSONL stream —
-the blob-reference and index shapes below are the reserved contract those
-milestones fill in, not yet-emitted records.
+M3–M5. Until then a `napflow-run/1` log declares `features: []` and is a
+pure inline JSONL stream — the blob-reference and index shapes below are
+the reserved contract those milestones fill in, not yet-emitted records.
 
 **Envelope + version.** `run_started` is the envelope header: it is
 always `seq` 1 and carries `format: "napflow-run/<major>"`
-(`HISTORY_FORMAT`). A reader reads that field first:
+(`HISTORY_FORMAT`) plus `features: ["<name>/<version>", ...]`.
+`event`, `seq`, `format`, and `features` are protocol structure, not
+payload, and secret redaction must never rewrite them. A reader reads the
+first non-blank record and validates the envelope before interpreting any
+later record:
 
-- equal or older major ⇒ readable (major 0 = a pre-versioning v0.1 log
-  with no `format` field, read best-effort per D33);
+- a non-empty log whose first record is not `run_started` at `seq: 1`, or
+  whose `format` is malformed, is invalid and fails clearly;
+- equal or older major plus a supported feature set ⇒ readable (major 0 =
+  a pre-versioning v0.1 log with neither envelope field, read best-effort
+  per D33); explicitly present null/malformed fields are invalid;
 - newer major ⇒ **refuse or open metadata-only** — never silently
   misparse (`is_supported` / `parse_history_format`, `HistoryFormatError`);
-- the major bumps only on a breaking change to the rules below.
+- an unknown feature ⇒ refuse or open metadata-only. Additive storage
+  capabilities use this gate so an older same-major reader cannot expose a
+  raw descriptor it does not understand;
+- the major bumps on a breaking change to the base event/envelope rules;
+  a feature's version changes when that capability's shape/semantics break.
+
+M0's writer and reader feature sets are empty. M4 activates
+`content-blobs/1` only in the same change that implements hash verification,
+literal escaping, omission handling, and lazy value resolution. Therefore
+this M0 reader rejects a correctly declared blob-bearing future history
+instead of treating `$napflow` as ordinary replay output. Without that
+declared feature, `$napflow` inside an inline value remains ordinary user
+data; readers never guess capabilities by scanning arbitrary payloads. The
+short-lived pre-registry M0 `napflow-run/1` logs are read with a missing
+`features` field interpreted as `[]`; an explicitly present null is invalid.
+
+An empty prefix is valid only while a live run has not flushed its header.
+It is not a readable completed history.
 
 **Canonical ordering.** The append-only JSONL is the source of truth for
 event order. `seq` is a total order starting at 1; a consumer sorts and
 seeks by `seq`, never by `ts` (clocks are for display/scrubbing, not
 ordering). Replay is re-reading — never re-execution (D13).
 
-**Inline vs blob threshold.** Small JSON-compatible values stay inline in
-the event. A value whose serialized size exceeds the inline threshold is
-written once to a content-addressed blob and referenced from the event.
-The threshold is a soft local default (measured in M0, tuned in M4); it
-is not a correctness boundary — moving a value to a blob must never change
-the value a flow delivers (runtime value ≠ persisted representation).
-
-**Blob-reference shape (reserved).** A referenced payload is recorded as
-a typed object, not a raw string:
+**Persisted-value envelope and collision rule.** Storage substitution is
+performed only at schema-declared payload fields (request/response body,
+message/log value, error payload, and End outputs), never by recursively
+guessing that an arbitrary object inside user data is protocol. A tagged
+value requires the declared `content-blobs/1` feature, has one reserved
+outer key, `$napflow`, and uses one of these exact descriptor shapes:
 
 ```
-{"__blob__": true, "hash": "sha256:<hex>", "bytes": <int>,
- "media_type": "<mime>", "encoding": "utf-8"|"base64"|"json"}
+{"$napflow": {"kind": "blob", "hash": "sha256:<64 lowercase hex>",
+              "bytes": <non-negative int>, "media_type": "<mime>",
+              "codec": "utf-8"|"json"|"binary"}}
+
+{"$napflow": {"kind": "literal", "value": <original JSON object>}}
+
+{"$napflow": {"kind": "omitted", "hash": "sha256:<64 lowercase hex>",
+              "bytes": <non-negative int>, "media_type": "<mime>",
+              "codec": "utf-8"|"json"|"binary", "reason": "<code>"}}
 ```
 
-- `hash` is `sha256:` over the exact stored bytes; storing then reading a
-  blob is byte-identical (verified on read).
-- The same bytes appearing more than once in a run reference one blob
-  (dedup by hash) — bytes are never duplicated.
-- An omission under an explicit CI hard limit is itself an explicit
-  record (reason + size + hash), never a plausible-looking prefix.
+The outer object must contain **only** `$napflow`, and the descriptor must
+match one known shape exactly, before a reader treats it as protocol. An
+inline user object containing a top-level `$napflow` key is wrapped as
+`kind: literal`; the decoder returns its `value` verbatim and does not
+interpret keys inside it. Thus even a user payload that exactly imitates
+a blob descriptor round-trips as data. Unknown kinds/keys are format
+errors, never silently treated as either a blob or a literal.
+
+**Inline threshold + exact bytes.** The inline threshold is measured over
+the bytes that would be stored, before deciding inline versus blob:
+
+- `utf-8`: the string encoded as UTF-8, without Unicode normalization;
+- `json`: compact JSON encoded as UTF-8 with `ensure_ascii=False`,
+  `allow_nan=False`, separators `(",", ":")`, and mapping iteration order
+  preserved; the same profile is decoded with a normal JSON reader;
+- `binary`: the exact raw bytes (not their base64 text); replay reconstructs
+  napflow's JSON binary envelope at the presentation/runtime boundary.
+
+`hash` is `sha256:` over exactly those stored bytes and `bytes` is their
+length. A reader verifies both before decoding. Repeated identical stored
+bytes within a run resolve to one blob path; logical JSON equality with a
+different byte serialization is not promised to deduplicate. The
+threshold is a soft local default (measured in M0, tuned in M4), never a
+correctness boundary: moving a value to a blob must not change the runtime
+value. An explicit hard-limit omission uses the `kind: omitted` envelope
+with the would-be bytes' hash/size and a stable reason; it never stores a
+plausible-looking prefix.
 
 **Retention unit.** A run is one atomic retention unit: its JSONL, blobs,
 indexes, and reports are created and deleted together. Retention operates
