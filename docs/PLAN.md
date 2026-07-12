@@ -624,6 +624,11 @@ has direct unit coverage for persistence and run transport.
       import contracts, full pytest, Vitest, production UI build, wheel
       membership/install smoke, and Playwright. Release refuses tag/package
       mismatch and `.dev` versions. (NFR-16)
+- [ ] Close the M0 audit ledger before promotion: each of its 9 strict-xfail
+      cases becomes an unmarked passing regression in its M1–M6 owner, and
+      each of its 12 v0.2 placeholder skips is replaced by the executable
+      owner-milestone test. The release gate verifies that no M0 expected
+      failure or placeholder remains.
 - [ ] Add Linux Python 3.12/3.13/current compatibility plus minimum and
       latest-compatible dependency jobs; retain macOS/Windows/Linux user
       path coverage without multiplying every browser/dependency axis.

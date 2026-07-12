@@ -4,13 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
-## 2026-07-12 — v0.2 M0 follow-up coverage
+## 2026-07-12 — v0.2 M0 session handoff
 
-- Added REST/WS rejection for malformed first-record JSON and a paired
-  trailing-partial replay regression; isolated/tested e2e port allocation and cleanup.
-- Verified: 354 pytest passes + 35 Vitest; production build and a real
-  Playwright start/shutdown cycle green with its port and workspace released.
-- Next: M1 — central workspace boundary, Host/Origin, atomic writes, save queue.
+- Landed M0 code/tests `9a08209` → `fd25ccb` on `feat/v0.2`; no code changes remain.
+- Done: versioned/enforced history envelope, signal-correct audit ledger, exact
+  Python/browser baselines, malformed-history regressions, and tested e2e cleanup.
+- Verified: 354 pytest passes + 35 Vitest + 32 Playwright; 10 Python perf + 2
+  browser perf; build, Ruff, import contracts, artifact/tag reproduction green.
+- Carry: 9 strict-xfail cases + 12 explicit-owner skips move through M1–M6;
+  M7 promotion requires converting the whole M0 ledger to normal passing tests.
+- Next: M1 — central resolver/identity boundary, Host/Origin, atomic writes,
+  serialized ETag/save coordination; first target is the symlink xfail.
 
 ## 2026-07-12 — v0.2 M0 adversarial closeout
 
