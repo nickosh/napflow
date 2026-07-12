@@ -4,6 +4,35 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-12 — v0.2 M0 baseline (format marker + audit probes + perf)
+
+- Done: `feat/v0.2` branch. **Box 2** — run-history is version-marked
+  before storage changes: `run_started` is the envelope header carrying
+  `format: "napflow-run/1"` (`HISTORY_FORMAT`), reader gate
+  (`parse_history_format`/`is_supported`/`HistoryFormatError`) + tests;
+  full format contract (ordering, blob-ref shape, inline threshold,
+  byte/hash, disposable indexes) pinned in engine spec §7a. **Box 3** —
+  `tests/test_v02_audit.py`: 8 confirmed critical/high findings reproduced
+  as strict `xfail` (public `run_flow` import, symlink escape past
+  `_safe_identity`, 70KB worker result crashes the 64KB StreamReader,
+  external-cancel leaks the worker, Log bypasses the capture valve,
+  secret value `passed`/`error` rewrites state/keys, >64KB final event
+  drops from `_tail_record`, same-second retention deletes the newer
+  run); 5 non-headless findings routed as explicit-owner `skip`s. **Box 4**
+  — `tests/test_perf_baselines.py` (opt-in `perf` marker, CI-excluded via
+  `-m "not perf"`) + `docs/perf-baselines.md`. 320 passed / 5 skipped /
+  6 deselected / 8 xfailed; ruff clean.
+- Decided (owner): v0.2 ships as **larger feature PRs off `feat/v0.2`**,
+  not one branch per milestone. FR-1101 and NFR-08/18 stay open (they
+  close in M3–M5 / M7 with their real implementations); no REQUIREMENTS
+  tick lands from a baseline or a failing test.
+- Baseline headlines: ~42k guarded laps/s; ~20ms spawn-dominated worker
+  round trip; 100k parallel loop **489 MB** peak heap (the M3 target);
+  10MB replay read 19 MB peak (M5 target).
+- Next: M1 — `WorkspaceResolver` symlink-aware boundary + loopback
+  Host/Origin + atomic write + serialized save coordinator (flips the
+  symlink `xfail` green, TR-12/TR-20).
+
 ## 2026-07-11 — v0.1.0 release prep
 
 - Done: version 0.1.0, CHANGELOG regenerated (`--tag v0.1.0`), README

@@ -389,25 +389,48 @@ discarded. This mapping is the continuity ledger:
       trusted publishing, and `docs/release-notes-preamble-v0.md`
       prepended to every v0.x release's notes (the required wording,
       automated)
-- [ ] Add a version to the run-history envelope/manifest before changing
+- [x] Add a version to the run-history envelope/manifest before changing
       storage. Pin canonical event ordering, blob-reference shape,
       inline threshold semantics, byte/hash rules, and the disposable
-      index contract in the engine spec. (FR-1101, D34)
-- [ ] Turn the audit probes into failing tests: public import; clean-tree
+      index contract in the engine spec. (FR-1101, D34) — `run_started`
+      is now the versioned envelope header (`format: "napflow-run/1"`,
+      `HISTORY_FORMAT`) with a reader gate (`parse_history_format` /
+      `is_supported` / `HistoryFormatError`) + tests; contract pinned in
+      engine spec §7a. FR-1101 itself stays open — blobs/indexes are real
+      in M3–M5.
+- [x] Turn the audit probes into failing tests: public import; clean-tree
       wheel; entry/ref/fixture/history traversal and symlinks; inline
       deadline/abort; 70KB worker response; late timeout side effect;
       external cancellation cleanup; capture bypass; secret value
       `passed`; >64KB final event; same-second retention; immediate
       navigation/close during autosave; overlapping saves. (TR-11–22)
-- [ ] Record before-change manual performance baselines for: guarded
+      — `tests/test_v02_audit.py`: 8 backend probes reproduced as
+      `xfail(strict)` (public import, symlink escape, 70KB worker crash,
+      external-cancel worker leak, Log capture bypass, secret-value
+      `passed`/`error` corruption, >64KB final event, same-second
+      retention); 5 non-headless probes routed as explicit-owner `skip`s
+      (inline-cycle deadline → M2, late-side-effect → M2, clean-tree wheel
+      → M6, nav-during-save → M1, overlapping-saves → M1).
+- [x] Record before-change manual performance baselines for: guarded
       inline message throughput, worker round trips at 1KB/100KB/10MB,
       parallel loops at 100/10k/100k items, and 10MB/100MB history first
       render/replay memory. Baselines inform batching and inline-blob
       thresholds; they are not correctness gates. (NFR-08, NFR-18)
+      — `tests/test_perf_baselines.py` (opt-in `perf` marker, CI-excluded)
+      + `docs/perf-baselines.md`. Before-numbers: ~42k guarded laps/s;
+      ~20ms spawn-dominated worker round trip (≥70KB crashes, TR-14); 100k
+      parallel loop 489 MB peak heap; 10MB replay read 19 MB peak. Worker
+      ≥70KB and 10/100MB browser first-render deferred (M2 / manual
+      window). NFR-08/18 tick at M7 after the corrected design.
 
 M0 DoD: v0.1 can be reproduced from its tag; v0.2 formats and invariants
 are written before implementation; every confirmed critical/high audit
 finding has a named failing test or an explicit later milestone owner.
+**Met 2026-07-12** (`feat/v0.2`): all four M0 boxes ticked — v0.1.0 is
+tagged; the format is version-marked in code and pinned in engine spec
+§7a; each audit finding is a strict `xfail` or an explicit-owner `skip`;
+the baselines are recorded. (PR scope, owner call 2026-07-12: v0.2 lands
+as larger feature PRs off `feat/v0.2`, not one branch per milestone.)
 
 ### M1 — workspace boundary and durable editing
 
