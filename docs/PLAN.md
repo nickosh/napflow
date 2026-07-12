@@ -619,9 +619,20 @@ drills into completed child frames without re-execution.
 ### M6 — public/package/UI contract completion
 
 - [ ] Implement and document an ergonomic stable-for-v0.2
-      `from napflow.core import run_flow` wrapper. It owns workspace
-      preparation and cleanup without importing server/CLI, supports
-      pytest use, and is tested from an installed wheel. (FR-1112, EC42)
+      Python embedding surface. `from napflow.core import run_flow` remains
+      the functional entry point; `load_workspace(path)` exposes immutable,
+      reusable workspace-bound Flow handles through `workspace.flow(identity)`,
+      fresh discovery, and a runtime `workspace.flows` catalog so identifier-safe
+      identity segments become attribute chains below the configured flows root
+      (`workspace.flows.<identity segments>`). Exact identity lookup remains
+      available for every legal name and collision.
+      `Flow.run(...)` and its async counterpart create a fresh isolated run each
+      time and delegate to the same preparation/execution/cleanup path as
+      `run_flow`; no server/CLI import or shared mutable run state. Cover multiple
+      workspaces, multiple flows per test, nested names, attribute-invalid names,
+      flow/namespace overlap, env/input isolation, cancellation, and installed-
+      wheel pytest use. Runtime discovery may improve `dir()` completion but does
+      not claim filesystem-derived static typing. (D38, FR-1112, EC42)
 - [ ] Make source/Git installation honest: either a deterministic PEP 517
       frontend build, committed generated bundle, or removal of the Git
       install promise in favor of built artifacts. Test a wheel from a
@@ -637,10 +648,12 @@ drills into completed child frames without re-execution.
 - [ ] Generate/audit third-party notices for bundled frontend code before
       public distribution.
 
-M6 DoD: documented installation and core-import examples work from the
-built artifact; every authoritative editable schema field has a valid UI
-path or an explicit documented YAML-only status; frontend orchestration
-has direct unit coverage for persistence and run transport.
+M6 DoD: documented installation plus functional and workspace/Flow core
+examples work from the built artifact; discovery/catalog tests cover exact,
+nested, non-identifier, collision, and flow-plus-namespace identities without
+shared run state; every authoritative editable schema field has a valid UI path
+or an explicit documented YAML-only status; frontend orchestration has direct
+unit coverage for persistence and run transport.
 
 ### M7 — release gates, compatibility evidence, and v0.2 promotion
 
@@ -700,9 +713,16 @@ release stays bounded:
    deadline contract with tests and precise documentation.
 7. Poll/duplicate nodes, inline loop bodies, marker collect,
    `napf check --write-env-example`, per-module worker-pool expansion,
-   app-mode UI, endpoint catalogs/imports, codegen, remote
+   app-mode UI, endpoint catalogs/imports, general codegen, remote
    hosting/authentication, and collaborative editing.
-8. Encryption/key management for histories. v0.2 uses local filesystem
+8. **Generated typed workspace bindings** (D38): deterministically derive a
+   Python module/stub from flow discovery plus Start/End interfaces so IDEs and
+   type checkers know the catalog's discovered attributes, nested flow names,
+   input shapes, and output shapes. Include a stale-binding CI check and
+   exact-name fallback. Do not require an editor-specific type-checker plugin
+   or pretend runtime
+   `__getattr__` can provide static filesystem-derived types.
+9. Encryption/key management for histories. v0.2 uses local filesystem
    permissions plus explicit redaction/export policy.
 
 ## Working agreements
@@ -714,7 +734,7 @@ release stays bounded:
   one dated `docs/JOURNAL.md` entry (done / decided / next) when the closeout
   produced a durable change or useful handoff.
 - New edge cases → `EDGE_CASES.md` (EC52+); new decisions →
-  `DECISIONS.md` (D38+).
+  `DECISIONS.md` (D39+).
 - v0.x releases are experimental (D33), tag-driven, and require exact
   tag/package version agreement (`RELEASING.md`). Breaking changes are
   permitted with clear release notes until v1.0.

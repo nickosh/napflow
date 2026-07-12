@@ -4,8 +4,8 @@ Why things are the way they are. Date format: 2026-06. D01–D17 decided
 during initial design (June 2026); D18–D22 in the 2026-06-14 edge-case
 review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02; D26–D32
 during v0.1 implementation; D33–D37 from the 2026-07-11 v0.2 design
-review. Reversing any of these requires understanding the rationale
-first.
+review; D38 from the 2026-07-13 Python-integration design. Reversing any
+of these requires understanding the rationale first.
 
 ## D01 — Build new instead of adopting existing tools
 No OSS project combines: node-based API flows + Python processing +
@@ -703,6 +703,36 @@ mutation or WebSocket accept. This boundary assumes the selected local
 workspace/process trust domain is not concurrently mutating path entries
 maliciously; it is not an OS filesystem sandbox against another local
 process, consistent with the trusted-code decision above.
+
+## D38 — Python embedding uses Workspace → Flow → isolated Run; typed catalogs are generated later
+
+(2026-07-13, owner-confirmed during public-integration design.)
+
+The public Python surface will mirror napflow's domain boundary. A loaded
+Workspace is reusable source/configuration, not a shared runtime session. It
+provides exact flow lookup and fresh discovery; each discovered/bound Flow holds
+only the workspace plus canonical identity and creates a fully isolated run on
+every sync or async invocation. `run_flow(workspace, identity, ...)` remains the
+equivalent functional form, and both paths share preparation, execution,
+history, and cleanup semantics.
+
+For convenient test-framework use, M6 also adds a runtime flow catalog. It maps
+each flow identity relative to the configured flows root onto nested attribute
+segments—conceptually `workspace.flows.<identity segments>`—when every segment
+is an exact Python identifier. Exact string/bracket lookup is the permanent
+escape hatch for punctuation, spaces, reserved-member collisions, and arbitrary
+legal identities; names are never lossy-normalized. A catalog entry may be both
+runnable and a namespace when a flow directory contains child flows. Dynamic
+catalog lookup may improve interactive completion but must not be advertised as
+static typing derived from the filesystem.
+
+After v0.2, deterministic generated Python bindings/stubs may expose discovered
+flow names plus typed Start inputs and End outputs to IDEs/type checkers, with a
+stale-binding CI check. This is one-directional flows → code, consistent with
+D02. Rejected: mutable workspace-level cookies/variables/workers shared across
+tests; magic attribute access without exact lookup; silent identifier
+normalization; an editor-specific type-checker plugin in v0.2; claiming generic
+`__getattr__` can statically validate runtime filesystem contents.
 
 ## Known open risks (watch during implementation)
 - EC09/EC10/EC22/EC27/EC32/EC35, EC42–EC45, and EC47–EC50 are open—not

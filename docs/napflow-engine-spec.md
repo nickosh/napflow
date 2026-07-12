@@ -48,6 +48,42 @@ napflow/
 Hard rule: `core` is importable standalone (`from napflow.core import run_flow`)
 — this is the pytest/CI/codegen surface.
 
+### Public Python embedding contract (v0.2 M6 target; D38)
+
+M6 exposes the same run semantics through functional and object surfaces:
+
+```python
+workspace = load_workspace(path)
+flow_identity = "flows/<flow-identity>"  # illustrative workspace-relative id
+flow = workspace.flow(flow_identity)
+result = flow.run(inputs={"username": "qa"}, env="test")
+
+# Equivalent functional form:
+result = run_flow(workspace, flow_identity, inputs={"username": "qa"}, env="test")
+```
+
+- A Workspace is a reusable source/configuration boundary, never a mutable run
+  session. A Flow handle binds only that workspace plus a canonical identity;
+  every sync or async run repeats the preparation gate and creates fresh frames,
+  HTTP sessions, workers, variables, cookies, event lifecycle, and cleanup.
+- Workspace discovery remains an explicit fresh filesystem operation and yields
+  runnable Flow handles. `workspace.flow(identity)` is the universal exact
+  lookup. A runtime `workspace.flows` catalog maps the flow identity segments
+  below the configured flows root onto nested attributes: conceptually,
+  `workspace.flows.<identity segments>`. Attribute access applies only to exact
+  Python-identifier segments; bracket or explicit identity lookup covers spaces,
+  punctuation, reserved members, and every other legal identity. Names are never
+  silently normalized. A directory may be both a runnable flow and a namespace
+  containing child flows.
+- The public wrapper owns LOAD/CHECK/ENV/BIND, history/event setup, execution,
+  and cleanup without importing CLI/server/UI. Inputs, environment/profile
+  choices, overrides, deadlines, and history policy are per-run keyword options,
+  so one loaded workspace/flow can safely serve independent test cases.
+- Runtime discovery/`__dir__` may offer interactive completion but cannot make a
+  type checker infer filesystem contents. Deterministic generated bindings for
+  flow names and typed Start/End shapes are explicitly post-v0.2; the generic
+  runtime always retains exact string lookup.
+
 Loader architecture (EC29): the loaded ruamel document (`CommentedMap`)
 is the **single write source** — edits mutate it surgically and it alone
 is emitted back to disk; the Pydantic models are validated *read-only
@@ -949,6 +985,10 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
 - Preemptible synchronous template execution, or an explicitly
   cooperative trusted-code deadline contract backed by tests
   (EC27/EC35).
+- Deterministic typed workspace bindings generated from discovered flow names
+  and Start/End interfaces, with a stale-binding CI check. Runtime catalog
+  attributes remain dynamic and do not require an editor-specific type-checker
+  plugin (D38).
 
 ## 11. Security & trust model (EC35)
 

@@ -4,6 +4,18 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — public Python workspace/flow API direction
+
+- Decided D38: public embedding is reusable Workspace → bound Flow → isolated
+  Run, with functional `run_flow` kept equivalent and sync/async paths.
+- Planned M6: fresh runnable discovery, exact lookup, and a nested runtime
+  `workspace.flows.<identity segments>` catalog without lossy normalization.
+- Deferred: generated flow-name plus typed Start/End bindings and stale checks
+  stay explicitly after v0.2; runtime attributes do not claim static typing.
+- Verified: D38/FR-1112/EC42 references, Markdown fences, trailing whitespace,
+  and the full documentation diff; docs-only change, so no test suite required.
+- Next: preserve this contract through M3–M5, then implement/test it in M6.
+
 ## 2026-07-13 — v0.2 M2 fair lifecycle + worker safety
 
 - Done: 128-delivery fair pump, monotonic deadline/abort checks, and one
