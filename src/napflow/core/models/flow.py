@@ -92,7 +92,9 @@ class PythonConfig(FrozenModel):
     """Run a function from the flow's nodes.py in the worker subprocess.
 
     Input ports derive from the function signature (AST, EC14); declared
-    `outputs` may not use the reserved name `error` (E012, checker).
+    functions must be synchronous and accept every input by keyword
+    (EC48); declared `outputs` may not use the reserved name `error`
+    (E012, checker).
     """
 
     function: str

@@ -53,7 +53,12 @@ from napflow.core.events import (
     RunStarted,
     isoformat_ms,
 )
-from napflow.core.httpclient import HttpClient, TransportError, WireResponse
+from napflow.core.httpclient import (
+    HttpClient,
+    RequestEncodingError,
+    TransportError,
+    WireResponse,
+)
 from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import FlowFile
 from napflow.core.models.flow import (
@@ -127,6 +132,12 @@ _ERROR_CLASS_PORTS = {
 _DEFAULT_CEILING_TYPES = ("request", "python")
 
 _PREVIEW_LIMIT = 512  # chars of compact JSON in message_emitted previews
+
+# Inline merge/guard deliveries can keep the ready queue perpetually
+# non-empty, so Queue.get() alone is not a cooperative scheduling point.
+# Yield after a bounded batch: large enough to keep the fast path cheap,
+# small enough for millisecond-scale deadlines/abort requests to be seen.
+_READY_BATCH_SIZE = 128
 
 
 class _BudgetExhausted(Exception):
@@ -327,6 +338,9 @@ class FlowRun:
         self._budget_warned = False
         self._aborted = False
         self._fatal: tuple[str, str] | None = None  # (error_reason, message)
+        self._deadline_at: float | None = None
+        self._runtime_closed = False
+        self._cleanup_task: asyncio.Task[None] | None = None
 
         self._asserts_passed = 0
         self._asserts_failed = 0
@@ -352,52 +366,108 @@ class FlowRun:
 
     async def execute(self) -> RunResult:
         started = time.monotonic()
-        self._stream.emit(
-            RunStarted(
-                flow=self._flow_identity,
-                env_name=self._env_name,
-                inputs=dict(self._given_inputs),
-                engine_version=__version__,
-            )
-        )
         frame: Frame | None = None
         try:
-            self._check_env_required(self._flow.env)
-            graph = _Graph(self._flow)
-            frame = Frame(
-                id="f-0",
-                graph=graph,
-                inputs=self._bind(graph.start, self._given_inputs),
-                flow_dir=self._flow_dir,
+            self._stream.emit(
+                RunStarted(
+                    flow=self._flow_identity,
+                    env_name=self._env_name,
+                    inputs=dict(self._given_inputs),
+                    engine_version=__version__,
+                )
             )
-        except _BindError as e:
-            self._fatal = (e.reason, str(e))
-        except TypeCoercionError as e:
-            self._fatal = ("bind_error", str(e))
-
-        if frame is not None:
             try:
-                if self._run_timeout_s is not None:
-                    async with asyncio.timeout(self._run_timeout_s):
-                        await self._pump(frame)
-                else:
-                    await self._pump(frame)
-            except TimeoutError:
-                # D24: expiry cancels in-flight work like an abort but
-                # finalizes `error` — the report is still written
-                self._fatal = self._fatal or ("run_timeout", "run deadline expired")
-            for task in self._tasks:
-                task.cancel()
-            if self._tasks:
-                await asyncio.gather(*self._tasks, return_exceptions=True)
+                self._check_env_required(self._flow.env)
+                graph = _Graph(self._flow)
+                frame = Frame(
+                    id="f-0",
+                    graph=graph,
+                    inputs=self._bind(graph.start, self._given_inputs),
+                    flow_dir=self._flow_dir,
+                )
+            except _BindError as e:
+                self._fatal = (e.reason, str(e))
+            except TypeCoercionError as e:
+                self._fatal = ("bind_error", str(e))
 
-        if self._http is not None:  # FR-408: session closed on every exit
-            await self._http.close()
-        for extra in self._extra_http:  # fresh_session iteration leftovers
-            await extra.close()
-        if self._workers is not None:  # workers killed at FINALIZE (EN §5a)
-            await self._workers.close()
-        return self._finalize(frame, started)
+            if frame is not None:
+                try:
+                    if self._run_timeout_s is not None:
+                        self._deadline_at = (
+                            asyncio.get_running_loop().time() + self._run_timeout_s
+                        )
+                        async with asyncio.timeout_at(self._deadline_at):
+                            await self._pump(frame)
+                    else:
+                        await self._pump(frame)
+                except TimeoutError:
+                    # D24: expiry cancels in-flight work like an abort but
+                    # finalizes `error` — the report is still written.
+                    self._set_run_timeout()
+
+            # Normal completion, abort, and run deadline all converge here:
+            # no owned task/session/worker is live when run_finished is born.
+            await self._wait_for_cleanup()
+            return self._finalize(frame, started)
+        finally:
+            # External coroutine cancellation and server-task teardown skip
+            # the normal path above.  Shield the one cleanup task so cancellation
+            # cannot strand the resources it is responsible for closing; the
+            # original CancelledError still escapes after cleanup completes.
+            try:
+                await self._wait_for_cleanup()
+            finally:
+                self._stream.close()
+
+    async def _wait_for_cleanup(self) -> None:
+        """Await the single cleanup task without letting caller cancellation
+        cancel that task too. Repeated cancellation still waits for teardown,
+        then propagates to the caller (D36/TR-15).
+        """
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._close_runtime())
+        try:
+            await asyncio.shield(self._cleanup_task)
+        except asyncio.CancelledError:
+            while not self._cleanup_task.done():
+                try:
+                    await asyncio.shield(self._cleanup_task)
+                except asyncio.CancelledError:
+                    continue
+            # Retrieve a cleanup failure before propagating cancellation so
+            # no task exception is leaked as an unobserved warning.
+            self._cleanup_task.exception()
+            raise
+
+    async def _close_runtime(self) -> None:
+        """Close every resource owned by this run, once (D36/NFR-13).
+
+        Firing tasks go first so they cannot create another HTTP session or
+        worker while those pools are being torn down.  WorkerPool.close()
+        also drains any terminate/kill task started by a cancelled firing.
+        """
+        if self._runtime_closed:
+            return
+        tasks = [task for task in self._tasks if not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        closers = []
+        if self._http is not None:
+            closers.append(self._http.close())
+        for extra in list(self._extra_http):
+            closers.append(extra.close())
+        if self._workers is not None:
+            closers.append(self._workers.close())
+        results = (
+            await asyncio.gather(*closers, return_exceptions=True) if closers else []
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            raise errors[0]
+        self._extra_http.clear()
+        self._runtime_closed = True
 
     # -- lifecycle: BIND / ENV (EN §2) --------------------------------------
 
@@ -477,8 +547,16 @@ class FlowRun:
             return
         if self._in_flight == 0:
             return  # nothing seeded — finalize immediately (EC08)
+        batch_remaining = _READY_BATCH_SIZE
         while True:
             item = await self._queue.get()
+            # A task may produce the final QUIESCENT wakeup just after the
+            # deadline.  Check that boundary before accepting a successful
+            # termination; otherwise the timeout callback can lose the race
+            # with leaving `asyncio.timeout_at()` and the run reports passed.
+            if item is _QUIESCENT and self._deadline_expired():
+                self._set_run_timeout()
+                break
             if item is _QUIESCENT or item is _FATAL:
                 break
             delivery: _Delivery = item
@@ -489,6 +567,26 @@ class FlowRun:
                 # inline merge/guard firings emit inside the pump (EN §4)
                 self._set_fatal("budget_exhausted", str(e), e.edge)
             self._dec(delivery.frame)  # delivery consumed
+            batch_remaining -= 1
+            if batch_remaining == 0:
+                # Queue.get() does not yield when an inline cycle keeps the
+                # queue ready.  This is the explicit fairness/control point.
+                await asyncio.sleep(0)
+                if self._aborted:
+                    break
+                if self._deadline_expired():
+                    self._set_run_timeout()
+                    break
+                batch_remaining = _READY_BATCH_SIZE
+
+    def _deadline_expired(self) -> bool:
+        return self._deadline_at is not None and (
+            asyncio.get_running_loop().time() >= self._deadline_at
+        )
+
+    def _set_run_timeout(self) -> None:
+        if self._fatal is None:
+            self._set_fatal("run_timeout", "run deadline expired")
 
     def _dispatch(self, frame: Frame, delivery: _Delivery) -> None:
         """Firing rules per delivery (EN §4). Absorbed deliveries — a
@@ -1102,8 +1200,8 @@ class FlowRun:
             await self._run_child(child)
             state, failed_asserts, entries, port_values = self._close_child(child)
             if http is not None:  # close eagerly; cancellation paths
-                self._extra_http.remove(http)  # fall back to run cleanup
                 await http.close()
+                self._extra_http.remove(http)  # close failed/cancelled → run cleanup
             if state == "passed":
                 results[index] = port_values
             else:
@@ -1268,6 +1366,20 @@ class FlowRun:
                     verify_tls=cfg["verify_tls"],
                     http_version=node.config.http_version,
                 )
+            except RequestEncodingError as e:
+                self._stream.emit(
+                    RequestFailed(
+                        frame=frame.id,
+                        node=node.id,
+                        error_kind="request_encoding",
+                        message=str(e),
+                        attempt=attempt,
+                        will_retry=False,
+                    )
+                )
+                raise _NodeError(
+                    "request_encoding", f"request body encoding failed: {e}"
+                ) from e
             except TransportError as e:
                 will_retry = attempt < attempts
                 self._stream.emit(
@@ -1622,8 +1734,8 @@ async def execute_flow(
     workspace_resolver: WorkspaceResolver | None = None,
 ) -> RunResult:
     """Run one flow to quiescence (BIND → EXECUTE → FINALIZE). The
-    caller owns LOAD/CHECK, the event stream, and its sinks (M5 wires
-    `napf run`). `flow_dir` locates nodes.py for python nodes;
+    caller owns LOAD/CHECK; once execution starts, the run owns and closes
+    the event stream and its sinks (D36). `flow_dir` locates nodes.py;
     `workspace_root` sets the worker cwd and resolves a relative
     `python.interpreter`."""
     run = FlowRun(

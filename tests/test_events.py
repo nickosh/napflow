@@ -42,11 +42,13 @@ class CaptureSink:
     def __init__(self):
         self.records = []
         self.closed = False
+        self.close_calls = 0
 
     def write(self, record):
         self.records.append(record)
 
     def close(self):
+        self.close_calls += 1
         self.closed = True
 
 
@@ -349,4 +351,23 @@ def test_retention_under_cap_deletes_nothing(tmp_path):
 def test_stream_close_closes_sinks():
     s, sink = stream()
     s.close()
+    s.close()
     assert sink.closed
+    assert sink.close_calls == 1
+
+
+def test_stream_close_attempts_every_sink_before_reporting_failure():
+    class BrokenSink(CaptureSink):
+        def close(self):
+            super().close()
+            raise OSError("close failed")
+
+    broken = BrokenSink()
+    healthy = CaptureSink()
+    s = EventStream("r", NO_SECRETS, [broken, healthy], FIXED_CLOCK)
+
+    with pytest.raises(OSError, match="close failed"):
+        s.close()
+
+    assert broken.closed
+    assert healthy.closed

@@ -320,6 +320,94 @@ def test_binary_response_envelope(server):
     assert base64.b64decode(body["base64"]) == b"\x00\x01\xfe\xff"
 
 
+def test_valid_binary_request_envelope_is_decoded_strictly(server):
+    body = {
+        "__binary__": True,
+        "content_type": "application/octet-stream",
+        "base64": base64.b64encode(b"\x00\x01\x02").decode("ascii"),
+    }
+    result, _ = run(
+        request_flow({"url": f"{server}/echo", "method": "POST", "body": body})
+    )
+
+    assert result.state == "passed"
+    echoed = result.end_outputs["resp"]["body"]
+    assert echoed["received"] == "\x00\x01\x02"
+    assert echoed["content_type"] == "application/octet-stream"
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            {"__binary__": True, "content_type": "application/octet-stream"},
+            "missing base64",
+        ),
+        (
+            {
+                "__binary__": True,
+                "content_type": "application/octet-stream",
+                "base64": "not base64!",
+            },
+            "canonical base64",
+        ),
+        (
+            {
+                "__binary__": True,
+                "content_type": "application/octet-stream",
+                "base64": "AA==",
+                "extra": True,
+            },
+            "unexpected extra",
+        ),
+        (
+            {"__binary__": True, "content_type": None, "base64": "AA=="},
+            "content_type must be a non-empty string",
+        ),
+    ],
+)
+def test_malformed_binary_request_envelope_routes_to_wired_error_once(
+    server, body, message
+):
+    f = request_flow(
+        {
+            "url": f"{server}/echo",
+            "method": "POST",
+            "body": body,
+            "retry": {"max_attempts": 3},
+        },
+        wire_error_port=True,
+    )
+
+    result, records = run(f)
+
+    assert result.state == "passed"
+    assert result.end_outputs["err"]["error_kind"] == "request_encoding"
+    assert message in result.end_outputs["err"]["message"]
+    failed = events_of(records, "request_failed")
+    assert len(failed) == 1
+    assert failed[0]["error_kind"] == "request_encoding"
+    assert failed[0]["will_retry"] is False
+    assert not events_of(records, "request_finished")
+
+
+def test_malformed_binary_request_envelope_unwired_is_node_failure(server):
+    body = {
+        "__binary__": True,
+        "content_type": "application/octet-stream",
+        "base64": "%%%",
+    }
+
+    result, records = run(
+        request_flow({"url": f"{server}/echo", "method": "POST", "body": body})
+    )
+
+    assert result.state == "failed"
+    assert result.unhandled_errors[0]["kind"] == "unhandled_error_port"
+    assert "request_encoding" in result.unhandled_errors[0]["message"]
+    assert events_of(records, "run_finished")[0]["state"] == "failed"
+
+
 def test_body_capture_valve_truncates_event_not_port_value(server):
     tiny = Manifest.model_validate(
         {

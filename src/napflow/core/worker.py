@@ -1,9 +1,9 @@
 """Engine-side python worker management (EN §5a, FR-901–906).
 
 One persistent worker subprocess per flow module (nodes.py), spawned
-lazily at first use inside the firing's `max_seconds` window, killed at
+lazily at first use inside the firing's `max_seconds` window, closed at
 FINALIZE. Tasks are serial per worker (FR-902); a timeout-cancelled
-task marks the worker dead and kills it in the background
+task marks the worker dead and terminates it before cancellation returns
 (terminate → 2s grace → kill, FR-903); the next firing respawns
 lazily. Worker death is a node error, never an engine failure
 (FR-904). The child script (`worker_main.py`) is stdlib-only and
@@ -25,6 +25,16 @@ from typing import Any
 _WORKER_MAIN = Path(__file__).with_name("worker_main.py")
 _GRACE_S = 2.0  # terminate → grace → kill (FR-903)
 _STDERR_TAIL = 15  # lines kept for crash messages
+_STDERR_TAIL_LINE_CAP = 8192
+
+# asyncio's default subprocess StreamReader limit is only 64 KiB.  The
+# protocol deliberately supports the M0 10 MiB round-trip probe and rejects
+# larger single JSON records at a documented, bounded 16 MiB ceiling.  The
+# child mirrors this value so ordinary oversize task replies become compact
+# WorkerTaskError messages; this parent-side limit also contains a malformed
+# or non-cooperating child without leaking LimitOverrunError/ValueError.
+_PROTOCOL_LINE_LIMIT = 16 * 1024 * 1024
+_PROTOCOL_LIMIT_LABEL = "16 MiB"
 
 # (level, (frame_id, node_id), text) → LogEvent emission in the engine
 LogFn = Callable[[str, tuple[str, str], str], None]
@@ -56,6 +66,10 @@ class WorkerCrash(Exception):
         super().__init__(message)
 
 
+class _ProtocolError(Exception):
+    """Invalid or over-limit child protocol data."""
+
+
 class _Worker:
     def __init__(
         self, interpreter: str, nodes_path: Path, cwd: Path | None, on_log: LogFn
@@ -73,6 +87,9 @@ class _Worker:
         self._reader: asyncio.Task[None] | None = None
         self._stderr_reader: asyncio.Task[None] | None = None
         self._ready: asyncio.Future[None] | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._normal_shutdown = False
+        self._terminal_error: WorkerCrash | None = None
         self.dead = False
 
     async def start(self) -> None:
@@ -87,6 +104,7 @@ class _Worker:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._cwd,
                 creationflags=_CREATIONFLAGS,
+                limit=_PROTOCOL_LINE_LIMIT,
             )
         except OSError as e:
             self.dead = True
@@ -111,8 +129,9 @@ class _Worker:
             task_id = f"t-{self._seq}"
             try:
                 line = json.dumps(
-                    {"task_id": task_id, "function": function, "inputs": inputs}
-                )
+                    {"task_id": task_id, "function": function, "inputs": inputs},
+                    ensure_ascii=False,
+                ).encode("utf-8")
             except (TypeError, ValueError) as e:
                 raise WorkerTaskError(
                     "python_error",
@@ -120,73 +139,140 @@ class _Worker:
                     "TypeError",
                     "",
                 ) from e
+            if len(line) > _PROTOCOL_LINE_LIMIT:
+                raise WorkerTaskError(
+                    "python_error",
+                    "python worker request exceeds the "
+                    f"{_PROTOCOL_LIMIT_LABEL} JSON-line limit",
+                    "WorkerProtocolError",
+                    "",
+                )
             future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
             self._pending[task_id] = future
             assert self._proc is not None and self._proc.stdin is not None
             try:
-                self._proc.stdin.write(line.encode("utf-8") + b"\n")
+                self._proc.stdin.write(line + b"\n")
                 await self._proc.stdin.drain()
                 return await future
             except asyncio.CancelledError:
-                # engine `max_seconds` tripped (FR-903): kill in the
-                # background, respawn lazily on the next firing
+                # The pool synchronously terminates this worker before the
+                # cancellation is allowed to escape (D36/EC43).
                 self.dead = True
                 self._pending.pop(task_id, None)
                 raise
             except (ConnectionError, OSError) as e:  # write into a dead pipe
+                self._pending.pop(task_id, None)
                 await self._reap()
-                raise WorkerCrash(self._death_message()) from e
+                error = WorkerCrash(self._death_message())
+                self._record_failure(error)
+                await self.terminate()
+                raise error from e
 
     async def _pump_protocol(self) -> None:
         assert self._proc is not None and self._proc.stdout is not None
-        while True:
-            raw = await self._proc.stdout.readline()
-            if not raw:
-                break
-            try:
-                msg = json.loads(raw)
-            except ValueError:  # unreachable via nodes.py (EC28)
-                continue
-            if "stream" in msg:
-                level = "info" if msg["stream"] == "stdout" else "warn"
-                self._on_log(level, self._label, str(msg.get("text", "")))
-            elif "ready" in msg:
-                if self._ready is not None and not self._ready.done():
+        try:
+            while True:
+                try:
+                    raw = await self._proc.stdout.readline()
+                except ValueError as e:
+                    raise _ProtocolError(
+                        f"response exceeded the {_PROTOCOL_LIMIT_LABEL} JSON-line limit"
+                    ) from e
+                if not raw:
+                    break
+                try:
+                    msg = json.loads(raw)
+                except (UnicodeDecodeError, ValueError) as e:
+                    raise _ProtocolError("malformed JSON response") from e
+                if not isinstance(msg, dict):
+                    raise _ProtocolError("response must be a JSON object")
+                kinds = [
+                    key for key in ("stream", "ready", "fatal", "task_id") if key in msg
+                ]
+                if len(kinds) != 1:
+                    raise _ProtocolError("response has an ambiguous or unknown shape")
+                if "stream" in msg:
+                    stream = msg["stream"]
+                    if stream not in {"stdout", "stderr"}:
+                        raise _ProtocolError(f"unknown stream {stream!r}")
+                    level = "info" if stream == "stdout" else "warn"
+                    self._on_log(level, self._label, str(msg.get("text", "")))
+                elif "ready" in msg:
+                    if msg["ready"] is not True:
+                        raise _ProtocolError("invalid ready handshake")
+                    if self._ready is None or self._ready.done():
+                        raise _ProtocolError("duplicate ready handshake")
                     self._ready.set_result(None)
-            elif "fatal" in msg:
-                self.dead = True
-                error = WorkerCrash(
-                    f"{msg.get('fatal', 'worker failed')}\n{msg.get('traceback', '')}"
-                )
-                if self._ready is not None and not self._ready.done():
-                    self._ready.set_exception(error)
-            elif "task_id" in msg:
-                future = self._pending.pop(msg["task_id"], None)
-                if future is None or future.done():
-                    continue
-                if "error" in msg:
-                    future.set_exception(
-                        WorkerTaskError(
-                            msg.get("error_kind", "python_error"),
-                            msg["error"],
-                            msg.get("error_type", "Exception"),
-                            msg.get("traceback", ""),
-                        )
+                elif "fatal" in msg:
+                    error = WorkerCrash(
+                        f"{msg.get('fatal', 'worker failed')}\n"
+                        f"{msg.get('traceback', '')}"
                     )
-                else:
-                    future.set_result(msg.get("outputs"))
-        # EOF: the process died (or exited at close) — crash any waiters.
-        # Reap FIRST: on the Windows Proactor loop the pipe EOF races
-        # ahead of exit-status collection, and `returncode` would still
-        # read None ("exit code unknown") without the wait.
+                    self._record_failure(error)
+                    await self._terminate_process()
+                    return
+                elif "task_id" in msg:
+                    task_id = msg["task_id"]
+                    if not isinstance(task_id, str):
+                        raise _ProtocolError("task_id must be a string")
+                    has_error = "error" in msg
+                    has_outputs = "outputs" in msg
+                    if has_error == has_outputs:
+                        raise _ProtocolError(
+                            "task response must have exactly one of outputs or error"
+                        )
+                    future = self._pending.pop(task_id, None)
+                    if future is None or future.done():
+                        continue
+                    if has_error:
+                        future.set_exception(
+                            WorkerTaskError(
+                                str(msg.get("error_kind", "python_error")),
+                                str(msg["error"]),
+                                str(msg.get("error_type", "Exception")),
+                                str(msg.get("traceback", "")),
+                            )
+                        )
+                    else:
+                        future.set_result(msg["outputs"])
+        except asyncio.CancelledError:
+            raise
+        except _ProtocolError as e:
+            self._record_failure(WorkerCrash(f"worker protocol error: {e}"))
+            await self._terminate_process()
+            return
+        except Exception as e:
+            self._record_failure(
+                WorkerCrash(f"worker protocol reader failed: {type(e).__name__}: {e}")
+            )
+            await self._terminate_process()
+            return
+
+        # EOF: the process died (or exited at normal close). Reap FIRST:
+        # on the Windows Proactor loop EOF can race exit-status collection.
         self.dead = True
         await self._reap()
-        error = WorkerCrash(self._death_message())
+        if self._normal_shutdown:
+            if self._pending:
+                self._record_failure(
+                    WorkerCrash("python worker shut down before a task completed")
+                )
+            return
+        self._record_failure(self._terminal_error or WorkerCrash(self._death_message()))
+        if self._proc.returncode is None:
+            await self._terminate_process()
+
+    def _record_failure(self, error: WorkerCrash) -> None:
+        """Publish one stable terminal cause to readiness and task waiters."""
+        self.dead = True
+        if self._terminal_error is None:
+            self._terminal_error = error
+        terminal = self._terminal_error
         if self._ready is not None and not self._ready.done():
-            self._ready.set_exception(error)
+            self._ready.set_exception(terminal)
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(WorkerCrash(self._death_message()))
+                future.set_exception(terminal)
         self._pending.clear()
 
     async def _reap(self) -> None:
@@ -201,13 +287,30 @@ class _Worker:
     async def _pump_stderr(self) -> None:
         # raw fd-1/fd-2 writers land here (EC28) → log events + crash tail
         assert self._proc is not None and self._proc.stderr is not None
-        while True:
-            raw = await self._proc.stderr.readline()
-            if not raw:
-                return
-            text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            self._stderr_tail.append(text)
-            self._on_log("warn", self._label, text)
+        try:
+            while True:
+                try:
+                    raw = await self._proc.stderr.readline()
+                except ValueError as e:
+                    raise _ProtocolError(
+                        "stderr line exceeded the "
+                        f"{_PROTOCOL_LIMIT_LABEL} pipe-reader limit"
+                    ) from e
+                if not raw:
+                    return
+                text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                self._stderr_tail.append(text[:_STDERR_TAIL_LINE_CAP])
+                self._on_log("warn", self._label, text)
+        except asyncio.CancelledError:
+            raise
+        except _ProtocolError as e:
+            self._record_failure(WorkerCrash(f"worker protocol error: {e}"))
+            await self._terminate_process()
+        except Exception as e:
+            self._record_failure(
+                WorkerCrash(f"worker stderr reader failed: {type(e).__name__}: {e}")
+            )
+            await self._terminate_process()
 
     def _death_message(self) -> str:
         code = self._proc.returncode if self._proc is not None else None
@@ -218,29 +321,40 @@ class _Worker:
         return message
 
     async def shutdown(self) -> None:
-        """EOF for a graceful exit, then terminate → grace → kill."""
+        """Normal finalization: send EOF and let an idle child exit cleanly.
+
+        This path is deliberately distinct from :meth:`terminate`, which is
+        used immediately for timeout, cancellation, and protocol failure.
+        """
         proc = self._proc
         if proc is None:
             return
         self.dead = True
-        if proc.returncode is None:
-            if proc.stdin is not None:
-                with suppress(OSError, ConnectionResetError):
-                    proc.stdin.close()
-            try:
-                await asyncio.wait_for(proc.wait(), _GRACE_S)
-            except TimeoutError:
-                await self.kill()
-        for task in (self._reader, self._stderr_reader):
-            if task is not None:
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+        async with self._lifecycle_lock:
+            if proc.returncode is None:
+                self._normal_shutdown = True
+                if proc.stdin is not None:
+                    with suppress(OSError, ConnectionResetError):
+                        proc.stdin.close()
+                try:
+                    await asyncio.wait_for(proc.wait(), _GRACE_S)
+                except TimeoutError:
+                    self._normal_shutdown = False
+                    self._record_failure(
+                        WorkerCrash("python worker did not exit after normal EOF")
+                    )
+                    await self._terminate_process_locked()
+        await self._join_pumps()
 
-    async def kill(self) -> None:
+    async def _terminate_process(self) -> None:
+        async with self._lifecycle_lock:
+            await self._terminate_process_locked()
+
+    async def _terminate_process_locked(self) -> None:
         proc = self._proc
         if proc is None or proc.returncode is not None:
             return
+        self._normal_shutdown = False
         with suppress(ProcessLookupError):
             proc.terminate()
         try:
@@ -249,6 +363,31 @@ class _Worker:
             with suppress(ProcessLookupError):
                 proc.kill()
             await proc.wait()
+
+    async def _join_pumps(self) -> None:
+        """Retrieve reader outcomes and bound pipe finalization."""
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task in (self._reader, self._stderr_reader)
+            if task is not None and task is not current
+        ]
+        if not tasks:
+            return
+        done, pending = await asyncio.wait(tasks, timeout=_GRACE_S)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*done, *pending, return_exceptions=True)
+
+    async def terminate(self) -> None:
+        """Abnormal teardown: terminate now, then grace, then hard kill."""
+        self.dead = True
+        await self._terminate_process()
+        await self._join_pumps()
+
+    async def kill(self) -> None:
+        """Compatibility alias for abnormal teardown used by diagnostics."""
+        await self.terminate()
 
 
 class WorkerPool:
@@ -276,7 +415,12 @@ class WorkerPool:
             try:
                 return await worker.call(function, inputs, label)
             except asyncio.CancelledError:
-                self._reap_in_background(worker)
+                # `_Worker.call` marks the process dead only after this task
+                # acquires the serial lock and can have crossed the pipe. A
+                # queued firing cancelled before send must not kill an
+                # unrelated in-flight firing on the same module.
+                if worker.dead:
+                    await self._terminate_cancel_safe(worker)
                 raise
             except WorkerCrash as e:
                 # died while queued (pre-send): retry once on a fresh
@@ -291,30 +435,57 @@ class WorkerPool:
             if worker is not None and not worker.dead:
                 return worker
             if worker is not None:
-                self._reap_in_background(worker)
+                # Never overlap a replacement with a process that can still
+                # commit work (D36/EC43).
+                try:
+                    await worker.terminate()
+                except asyncio.CancelledError:
+                    await self._terminate_cancel_safe(worker)
+                    raise
             worker = _Worker(self._interpreter, nodes_path, self._cwd, self._on_log)
             self._workers[nodes_path] = worker
             try:
                 await worker.start()
             except asyncio.CancelledError:
-                self._reap_in_background(worker)
+                await self._terminate_cancel_safe(worker)
                 raise
             return worker
 
-    def _reap_in_background(self, worker: _Worker) -> None:
-        worker.dead = True
-        task = asyncio.create_task(worker.shutdown())
+    async def _terminate_cancel_safe(self, worker: _Worker) -> None:
+        """Finish teardown even if the caller receives another cancel."""
+        task = asyncio.create_task(worker.terminate())
         self._kill_tasks.add(task)
         task.add_done_callback(self._kill_tasks.discard)
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        await task
 
     async def close(self) -> None:
-        """Kill every worker at FINALIZE (EN §5a)."""
+        """Close every idle worker normally at FINALIZE (EN §5a)."""
         workers = list(self._workers.values())
         self._workers.clear()
-        for worker in workers:
-            await worker.shutdown()
-        if self._kill_tasks:
-            await asyncio.gather(*self._kill_tasks, return_exceptions=True)
+        results: list[Any] = []
+        if workers:
+            results.extend(
+                await asyncio.gather(
+                    *(worker.shutdown() for worker in workers),
+                    return_exceptions=True,
+                )
+            )
+        teardown_tasks = tuple(self._kill_tasks)
+        if teardown_tasks:
+            results.extend(
+                await asyncio.gather(*teardown_tasks, return_exceptions=True)
+            )
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            details = "; ".join(
+                f"{type(error).__name__}: {error}" for error in failures
+            )
+            raise WorkerCrash(f"python worker cleanup failed: {details}")
 
 
 def default_interpreter() -> str:

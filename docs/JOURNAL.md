@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M2 fair lifecycle + worker safety
+
+- Done: 128-delivery fair pump, monotonic deadline/abort checks, and one
+  shielded cleanup owner across tasks, HTTP, workers, streams, and shutdown.
+- Done: immediate reap-before-replace worker teardown, graceful normal EOF,
+  16 MiB stdlib JSON-lines, callable agreement, and strict binary requests.
+- Verified: 425 pytest; Ruff/import contracts; real-uvicorn path; M2 audit and
+  cancellation matrices; 41.3k guarded laps/s and 1 KiB/100 KiB/10 MiB workers.
+- Carry: EC22 descendants and EC35 sync-Jinja preemption stay post-v0.2;
+  next is M3 bounded loop/frame tasks plus durable history lifecycle.
+
 ## 2026-07-12 — v0.2 M1 workspace boundary + durable editing
 
 - Done: centralized lexical/symlink-aware workspace resolution and stable

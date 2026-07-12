@@ -412,6 +412,42 @@ def test_python_ports_from_ast(tmp_path: Path) -> None:
     assert not any("py.b" in m for m in e005)
 
 
+@pytest.mark.parametrize(
+    ("nodes_py", "message"),
+    [
+        (
+            "async def f(value):\n    return {'out': value}\n",
+            "is async",
+        ),
+        (
+            "def f(value, /):\n    return {'out': value}\n",
+            "positional-only parameter(s): value",
+        ),
+    ],
+)
+def test_e008_rejects_worker_incompatible_callable_shapes(
+    tmp_path: Path, nodes_py: str, message: str
+) -> None:
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: py, type: python, config: {function: f, outputs: [out]}}\n"
+        "  - {id: end, type: end, config: {ports: [{name: r, required: false}]}}\n",
+        "  - {from: start.out, to: py.value}\n  - {from: py.out, to: end.r}\n",
+    )
+    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow, "flows/t/nodes.py": nodes_py})
+
+    violations = [
+        diagnostic
+        for diagnostic in check_workspace(ws)
+        if diagnostic.code == "E008" and diagnostic.node_id == "py"
+    ]
+
+    assert len(violations) == 1
+    assert message in violations[0].message
+    assert violations[0].line is not None
+    assert violations[0].column is not None
+
+
 # --------------------------------------------------------------------------
 # W101–W107
 

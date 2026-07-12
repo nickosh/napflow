@@ -31,7 +31,7 @@ from napflow.core.events import (
 from napflow.core.models.manifest import Manifest
 from napflow.core.runprep import RunPrepError, prepare_run
 from napflow.core.workspace import load_workspace
-from test_engine import end, flow, run, start
+from test_engine import CaptureSink, end, flow, run, start
 
 
 def py(node_id, function, outputs=(), **extra):
@@ -108,15 +108,9 @@ def test_entry_flow_resolution_is_symlink_contained(tmp_path):
 # TR-14 — worker protocol handles large results (D36; owner: M2)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="M2: asyncio 64KB reader limit crashes reads",
-)
 def test_worker_large_result_completes(tmp_path):
     """A valid ~70KB Python result must complete (or fail as a documented
-    node error) — today the parent's default 64KB StreamReader limit makes
-    `readline()` raise `ValueError` and the read task dies."""
+    node error) without hitting asyncio's default 64KB reader cliff."""
     write_nodes(tmp_path, "def big(seed):\n    return {'data': 'x' * 70000}\n")
     f = flow(
         start(),
@@ -133,15 +127,10 @@ def test_worker_large_result_completes(tmp_path):
 # TR-15 — external cancellation leaves no worker behind (NFR-13; owner: M2)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="NFR-13/M2: cleanup not in finally",
-)
 def test_external_cancellation_kills_workers(tmp_path):
     """Cancelling the run coroutine mid-flight must tear down the worker.
-    Today `_workers.close()` runs after the pump but not in a `finally`,
-    so an external `CancelledError` leaks the subprocess."""
+    Capture the actual worker before cancelling: pool cleanup clears its
+    mapping, which must not let a still-live process false-pass inspection."""
     entered = tmp_path / "worker-entered"
     write_nodes(
         tmp_path,
@@ -175,6 +164,7 @@ def test_external_cancellation_kills_workers(tmp_path):
             workspace_root=tmp_path,
         )
         task = asyncio.ensure_future(run_obj.execute())
+        workers = []
         live_at_return = []
         try:
             # Synchronize on the child entering user code instead of sleeping for
@@ -182,11 +172,12 @@ def test_external_cancellation_kills_workers(tmp_path):
             async with asyncio.timeout(5):
                 while not entered.exists():
                     await asyncio.sleep(0.01)
+            pool = run_obj._workers
+            workers = list(pool._workers.values()) if pool else []
+            assert len(workers) == 1
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-            pool = run_obj._workers
-            workers = list(pool._workers.values()) if pool else []
             live_at_return = [
                 worker
                 for worker in workers
@@ -199,7 +190,10 @@ def test_external_cancellation_kills_workers(tmp_path):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             pool = run_obj._workers
-            workers = list(pool._workers.values()) if pool else []
+            if pool is not None:
+                for worker in pool._workers.values():
+                    if worker not in workers:
+                        workers.append(worker)
             cleanup = await asyncio.gather(
                 *(worker.kill() for worker in workers), return_exceptions=True
             )
@@ -453,25 +447,123 @@ def test_reference_boundary_uses_stable_preparation_reason(tmp_path, node):
 # test_workspace.py and test_server.py.
 
 
-@pytest.mark.skip(
-    reason="TR-13/NFR-12 owner M2: deadline under inline cycle needs the "
-    "cooperative-batch scheduler redesign; contract pinned there"
-)
-def test_inline_cycle_respects_deadline(): ...
+def _guarded_inline_cycle(count=20_000):
+    return flow(
+        start(),
+        {"id": "m", "type": "merge", "config": {"mode": "any"}},
+        {"id": "g", "type": "counter", "config": {"count": count}},
+        end({"name": "done"}),
+        edges=[
+            ("start.out", "m.seed"),
+            ("m.out", "g.in"),
+            ("g.continue", "m.loop"),
+            ("g.exhausted", "end.done"),
+        ],
+    )
 
 
-@pytest.mark.skip(
-    reason="TR-13/NFR-12 owner M2: abort under a tight inline cycle needs the "
-    "cooperative-batch scheduler redesign; contract pinned there"
-)
-def test_inline_cycle_observes_abort(): ...
+def test_inline_cycle_respects_deadline():
+    """A millisecond deadline interrupts a perpetually ready inline path.
+
+    Twenty thousand laps take long enough that the pre-M2 pump completed
+    `passed`; cooperative batching must stop after at most one ready batch
+    plus event-loop scheduling delay.  The broad 500ms wall tolerance keeps
+    this correctness probe stable on loaded cross-platform CI.
+    """
+    result, _ = run(_guarded_inline_cycle(), timeout=0.005)
+    assert result.state == "error"
+    assert result.error_reason == "run_timeout"
+    assert result.duration_ms < 500
 
 
-@pytest.mark.skip(
-    reason="TR-14 owner M2: timed-out worker late-side-effect window is "
-    "racy to reproduce; covered by the M2 terminate→grace→kill rewrite"
-)
-def test_timed_out_worker_no_late_side_effect(): ...
+def test_inline_cycle_observes_abort():
+    """A sibling event-loop task progresses and aborts the hot cycle."""
+    sink = CaptureSink()
+
+    async def scenario():
+        stream = EventStream("inline-abort", SecretMasker([], {}), [sink])
+        flow_run = FlowRun(
+            _guarded_inline_cycle(),
+            flow_identity="flows/t",
+            manifest=Manifest.model_validate({"schema": "napflow/v1"}),
+            env={},
+            env_name=None,
+            inputs={},
+            stream=stream,
+        )
+        run_task = asyncio.create_task(flow_run.execute())
+
+        async def abort_from_sibling():
+            while not any(
+                record["event"] == "node_fired" and record.get("node") == "g"
+                for record in sink.records
+            ):
+                await asyncio.sleep(0)
+            progressed_before_finish = not any(
+                record["event"] == "run_finished" for record in sink.records
+            )
+            flow_run.abort()
+            return progressed_before_finish
+
+        sibling = asyncio.create_task(abort_from_sibling())
+        result = await asyncio.wait_for(run_task, timeout=5)
+        return result, await sibling
+
+    result, progressed_before_finish = asyncio.run(scenario())
+    assert progressed_before_finish
+    assert result.state == "aborted"
+
+
+def test_timed_out_worker_no_late_side_effect_or_replacement_overlap(tmp_path):
+    entered = tmp_path / "old-entered"
+    replacement = tmp_path / "replacement-started"
+    late = tmp_path / "late-side-effect"
+    overlap = tmp_path / "replacement-overlapped-old"
+    write_nodes(
+        tmp_path,
+        f"""
+        import time
+        from pathlib import Path
+
+        def warm(seed):
+            return {{"out": seed}}
+
+        def slow(seed):
+            Path({str(entered)!r}).write_text("entered", encoding="utf-8")
+            time.sleep(0.6)
+            if Path({str(replacement)!r}).exists():
+                Path({str(overlap)!r}).write_text("overlap", encoding="utf-8")
+            Path({str(late)!r}).write_text("late", encoding="utf-8")
+            time.sleep(30)
+            return {{"out": seed}}
+
+        def recover(error):
+            Path({str(replacement)!r}).write_text("replacement", encoding="utf-8")
+            return {{"kind": error["error_kind"]}}
+        """,
+    )
+    f = flow(
+        start(),
+        py("warm", "warm", ["out"]),
+        py("slow", "slow", ["out"], max_seconds=0.2),
+        py("recover", "recover", ["kind"]),
+        end({"name": "kind"}),
+        edges=[
+            ("start.out", "warm.seed"),
+            ("warm.out", "slow.seed"),
+            ("slow.error", "recover.error"),
+            ("recover.kind", "end.kind"),
+        ],
+    )
+
+    result, _ = run(f, flow_dir=tmp_path)
+
+    assert result.state == "passed"
+    assert result.end_outputs == {"kind": "timeout"}
+    assert entered.exists(), "the timed firing must enter user code"
+    assert replacement.exists(), "the timeout path must lazily respawn"
+    assert not late.exists(), "the terminated worker committed a late side effect"
+    assert not overlap.exists(), "replacement started while the old worker was live"
 
 
 @pytest.mark.skip(

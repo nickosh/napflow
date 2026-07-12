@@ -347,6 +347,11 @@ Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
   interpreter → stdlib guaranteed). Point it at your project venv to use
   third-party packages in `nodes.py`.
 - Inputs and outputs must be JSON-serializable (same as the wire format).
+- Functions must be synchronous top-level `def`s and may not declare
+  positional-only parameters. Python-node inputs are invoked by parameter
+  name, so `async def` and the `/` signature marker are positioned E008
+  checker errors; the worker rejects both defensively when invoked through
+  the standalone engine without the checker gate (EC48).
 - **`assert` is supported**: a raised `AssertionError` routes to the
   node's `error` port with the assertion message, and is recorded in the
   run report alongside declarative assert-node results. Any other
@@ -521,7 +526,11 @@ unconnected, their message is dropped (W106 lints this); whether a
 tripped guard is a failure is decided by what you wire to it (D19).
 **Binary payloads** (e.g. non-text response bodies) are represented as
 `{"__binary__": true, "content_type": "...", "base64": "..."}` — the
-body-capture size cap applies to the encoded form.
+body-capture size cap applies to the encoded form. An inbound request-body
+envelope must have exactly those three fields, a non-empty string
+`content_type`, and canonical standard base64. A malformed envelope is a
+non-retryable `request_encoding` error on the request node's `error` port,
+never an internal engine error (EC48).
 
 ## v1.1 candidates (kept on the roadmap)
 - **`poll`** — request + success expression + interval + timeout in one

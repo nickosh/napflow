@@ -412,7 +412,13 @@ class JsonlSink:
 
 class EventStream:
     """Stamps common fields, masks, fans out. A sink is anything with
-    `write(record: dict)` and `close()` — JSONL now, WebSocket at S4."""
+    `write(record: dict)` and `close()` — JSONL now, WebSocket at S4.
+
+    `FlowRun.execute()` owns the stream once execution starts and closes
+    it on every exit path.  `close()` is deliberately idempotent so the
+    CLI/server adapters can also close a stream whose run never started
+    without needing a separate ownership flag.
+    """
 
     def __init__(
         self,
@@ -426,6 +432,7 @@ class EventStream:
         self._sinks = list(sinks)
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._seq = 0
+        self._closed = False
 
     def emit(self, event: Event) -> dict[str, Any]:
         """Serialize + mask payloads + fan out; returns the wire record.
@@ -458,8 +465,17 @@ class EventStream:
         return record
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        errors: list[BaseException] = []
         for sink in self._sinks:
-            sink.close()
+            try:
+                sink.close()
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]
 
 
 def isoformat_ms(dt: datetime) -> str:

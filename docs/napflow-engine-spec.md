@@ -90,8 +90,17 @@ CHECK     full `napf check` rule set on the closure of referenced flows
 BIND      validate & type-coerce inputs against Start ports; fail fast
 ENV       env.required present in active profile? fail fast
 EXECUTE   seed Start node, pump messages until quiescent
-FINALIZE  collect End ports, close session, write report, emit run_finished
+CLEANUP   cancel/drain firing tasks; close HTTP sessions and workers
+FINALIZE  collect End ports, emit run_finished, close the event stream
 ```
+
+`FlowRun.execute()` owns every runtime resource, including the event
+stream, once execution starts. Normal completion, user abort, run timeout,
+server shutdown, and external coroutine cancellation share one `finally`
+cleanup path. External cancellation is not relabelled as user abort: its
+`CancelledError` escapes only after cleanup, and the closed JSONL may be a
+valid incomplete prefix (EC20) without `run_finished`. CLI report rendering
+is an adapter step after a completed `RunResult`, not an engine-owned file.
 
 Run states: `pending → running → passed | failed | error | aborted`.
 - `passed` — quiescent; **every required End port produced a value**
@@ -171,16 +180,27 @@ async def pump():
         finalize()                      # no auto-fixture, note-only flow). Without
         return                          # this, QUIESCENT is never enqueued and the
                                         # pump blocks forever on queue.get(). (EC08)
-    while True:
-        delivery = await queue.get()
-        if delivery is QUIESCENT:
+    stopping = False
+    while not stopping:
+        for _ in range(128):            # bounded ready batch (D36)
+            delivery = await queue.get()
+            if delivery is QUIESCENT:
+                check_deadline_before_accepting_quiescence()
+                stopping = True
+                break
+            if delivery is FATAL:
+                stopping = True
+                break
+            node = delivery.edge.target_node
+            node.absorb(delivery)       # update slots / merge / guard state
+            if node.ready():            # firing rule, see §4
+                in_flight += 1          # task begins
+                create_task(fire(node, frame))
+            dec_in_flight()             # exactly once: delivery consumed
+        if stopping:
             break
-        node = delivery.edge.target_node
-        node.absorb(delivery)           # update slots / merge / guard state
-        if node.ready():                # firing rule, see §4
-            in_flight += 1              # task begins
-            create_task(fire(node, frame))
-        dec_in_flight()                 # delivery consumed
+        await asyncio.sleep(0)          # hot inline queue must yield
+        stopping = check_abort_token_and_monotonic_deadline()
     finalize()
 
 async def fire(node, frame):
@@ -206,6 +226,19 @@ guard above — if nothing increments `in_flight`, no decrement ever
 enqueues QUIESCENT; `pump` finalizes immediately when the post-seed count
 is zero (D14).
 
+**Fairness/control checkpoint (D36).** `Queue.get()` does not suspend when
+an inline merge/guard cycle keeps the queue non-empty. The pump therefore
+handles at most **128** ready deliveries, yields with `asyncio.sleep(0)`,
+then checks the abort token and one precomputed `loop.time()` deadline.
+It also checks the deadline before accepting `QUIESCENT`, preventing a
+just-late final delivery from racing the timeout callback and reporting
+`passed`. The timing contract is cooperative: deadline observation is
+bounded by one batch plus event-loop scheduling delay, not a hard CPU
+preemption guarantee. Synchronous Jinja rendering remains EC35 after v0.2.
+Batch boundaries neither tick the message budget nor participate in
+quiescence; every consumed delivery retains its existing exactly-once
+decrement.
+
 Properties:
 - **Quiescence = termination**: run ends when `in_flight == 0`. No global
   ordering, no toposort.
@@ -220,8 +253,12 @@ Properties:
   overrides). Expiry cancels in-flight work like an abort but finalizes
   with state `error` (`error_reason: run_timeout`) — the report and
   JSONL are still written, unlike a CI-runner SIGKILL.
-- **Cancellation**: abort flips a token; tasks are cancelled, niquests
-  session closed, run state `aborted`.
+- **Cancellation**: abort flips a token and enqueues `FATAL` to wake an
+  empty pump; the batch checkpoint reads the token directly because the
+  sentinel may sit behind a hot ready queue. Firing tasks are cancelled
+  and drained before HTTP sessions/workers close; user abort finalizes
+  `aborted`. External task cancellation follows the same cleanup but
+  re-raises `CancelledError` and only promises the valid event prefix.
 
 ## 4. Firing rules (per node, per frame)
 
@@ -355,7 +392,11 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     length for binary). **Body encode**: dict/list → JSON; str → UTF-8
     raw with no implicit content-type; other scalars →
     `stringify_native`; an inbound envelope sends its decoded bytes
-    (its `content_type` applies when no header is set).
+    (its `content_type` applies when no header is set). The envelope is
+    strict: exactly `__binary__`, `content_type`, and `base64`; non-empty
+    string content type; canonical validated standard base64. A malformed
+    envelope fails once as `request_encoding` through the request error
+    port and is not retried (EC48).
   - **Header/query values stringify post-render** (D25 Scalar pin) —
     `n: 3` arrives as `"3"`.
   - **Capture valves cap the EVENT copy only**; the `response` port
@@ -441,10 +482,13 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     stdout/stderr are visible as the run executes, not just in the
     JSONL.
 
-## 5a. Python worker subprocess (v0.1)
+## 5a. Python worker subprocess (v0.2 lifecycle)
 
-One worker process per flow module, spawned lazily at first use, killed
-at FINALIZE.
+One worker process per flow module, spawned lazily at first use. Normal
+cleanup sends EOF and lets an idle worker exit cleanly; in-flight timeout,
+cancellation, and protocol-failure teardown immediately terminates, waits
+one 2-second grace interval, then hard-kills if needed. A replacement is
+not spawned until the former process has been reaped (D36/EC43).
 
 ```
 engine ──spawn──▶ worker (configured interpreter)
@@ -497,6 +541,20 @@ engine ──spawn──▶ worker (configured interpreter)
   interpreter provides".
 - Values crossing the pipe must be JSON-serializable — same constraint as
   the wire format, so nothing new for users.
+- **Protocol record ceiling (D32/D36)**: each UTF-8 JSON record is limited
+  to **16 MiB**, excluding the newline. Both parent subprocess readers are
+  configured to that value (rather than asyncio's 64 KiB default), so the
+  measured 70 KiB and 10 MiB replies and long raw-stderr lines complete.
+  The stdlib-only child converts an ordinary oversize task reply into a
+  compact `python_error` (`error_type: WorkerProtocolError`); malformed or
+  non-cooperating oversize child output becomes a stable `worker_crash`.
+  Reader failures terminate/reap the child and resolve pending calls; they
+  never escape from reader tasks or hang finalization.
+- **Callable surface (EC48)**: functions are synchronous and invoked with
+  keyword arguments. `async def` and signatures with positional-only
+  parameters are unsupported; the AST checker reports positioned E008
+  diagnostics and exposes no misleading port surface, while the worker
+  enforces the same rule for callers that bypass run preparation.
 - Windows notes: spawn semantics, `CREATE_NO_WINDOW`, `terminate()`
   reliable. asyncio subprocess pipes require the **Proactor** event
   loop: `napf run` uses Python's default (Proactor since 3.8), but the
@@ -534,11 +592,15 @@ Pins made at S3/M2 (2026-07-06, `core/worker.py` + `core/worker_main.py`
 - **Queued firings on worker death**: a task not yet written to the
   pipe retries once on a fresh worker (the lazy-respawn path for
   firings queued behind a killed task); a task in flight fails as
-  `worker_crash`.
+  `worker_crash`. Cancelling a queued firing before it acquires the
+  module's serial lock does not terminate the unrelated in-flight call;
+  only a cancellation after the task can cross the pipe tears down the
+  process.
 - **Timeout payloads now carry `max_seconds`** (the FS D24 shape) —
   applied to request timeouts too.
-- **Pool cap**: enforcement deferred until multi-flow runs make >1
-  module possible (S3/M5) — a run holds exactly one module today.
+- **Pool bound**: one persistent worker per distinct `nodes.py` in the
+  statically finite E007 flow-reference closure; no unbounded dynamic
+  module spawning or eviction.
 
 ## 6. Templating context
 
@@ -796,7 +858,7 @@ E004 multiple edges into one input port
 E005 missing required input port connection
 E006 exactly-one start / exactly-one end violated
 E007 flow-reference cycle (with path)
-E008 broken flow/fixture file reference
+E008 broken flow/fixture/python reference or unsupported python callable shape
 E009 jinja2 syntax error in any config string / expr
 E011 duplicate node id, or id violating [A-Za-z_][A-Za-z0-9_]*
 E012 reserved port name `error` declared (End ports, python outputs)
@@ -835,8 +897,9 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
 - **E005 includes required End ports**: a `required: true` End port with
   no inbound edge is a statically guaranteed run failure (D18) — check
   error, not a runtime surprise.
-- **E008 scope**: missing/unparseable `nodes.py` or function not found
-  (EC14); loop body whose Start declares no `item` port; templated
+- **E008 scope**: missing/unparseable `nodes.py`, function not found
+  (EC14), or an async/positional-only function the worker cannot invoke
+  (EC48); loop body whose Start declares no `item` port; templated
   (non-static) flow/loop references — the reference DAG must be static.
 - **Implicit input port names**: single-input nodes (`condition`,
   `switch`, `assert`, `set`, `delay`, `log`, guards) use `in`;

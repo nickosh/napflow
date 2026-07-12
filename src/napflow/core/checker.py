@@ -54,6 +54,29 @@ _MERGE_INPUT_RE = re.compile(r"^in[1-9][0-9]*$")
 _EXPR_FIELDS = {"expr", "over"}
 
 
+def _python_callable_problem(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[str, str] | None:
+    """Return the static worker-contract violation for ``fn``, if any.
+
+    The worker calls user functions synchronously with keyword arguments.
+    Keeping this check next to AST surface derivation prevents ``check``
+    from advertising ports that the worker cannot invoke (EC48).
+    """
+    if isinstance(fn, ast.AsyncFunctionDef):
+        return (
+            f"function {fn.name!r} is async, which python nodes do not support",
+            "use a synchronous top-level `def`",
+        )
+    if fn.args.posonlyargs:
+        names = ", ".join(argument.arg for argument in fn.args.posonlyargs)
+        return (
+            f"function {fn.name!r} has positional-only parameter(s): {names}",
+            "remove the `/`; python-node inputs are passed by keyword",
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class CheckDiagnostic:
     code: str  # "E001".."E012" / "W101".."W107"
@@ -173,7 +196,9 @@ class _SurfaceResolver:
                 if functions is None or node.config.function not in functions:
                     return None
                 fn = functions[node.config.function]
-                positional = fn.args.posonlyargs + fn.args.args
+                if _python_callable_problem(fn) is not None:
+                    return None
+                positional = fn.args.args
                 params = [a.arg for a in positional + fn.args.kwonlyargs]
                 defaults = len(fn.args.defaults)
                 literal_optional = {
@@ -593,6 +618,17 @@ class _FlowCheck:
                         node=node.id,
                         loc_suffix=("config", "function"),
                     )
+                else:
+                    problem = _python_callable_problem(functions[node.config.function])
+                    if problem is not None:
+                        message, hint = problem
+                        self.add(
+                            "E008",
+                            message,
+                            hint,
+                            node=node.id,
+                            loc_suffix=("config", "function"),
+                        )
 
     # -- E009 / W107 ----------------------------------------------------------
 

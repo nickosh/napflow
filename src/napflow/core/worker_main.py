@@ -20,6 +20,7 @@ land in the stderr pipe, and user `print()` goes through the rebound
 """
 
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -28,6 +29,14 @@ import traceback
 from pathlib import Path
 
 _LINE_CAP = 8192  # per stream line forwarded as a log event
+
+# Keep this stdlib-only child in lockstep with worker.py's subprocess reader.
+# 16 MiB admits the measured 10 MiB payload case with JSON overhead while
+# keeping each newline-delimited record bounded. Oversize task replies are
+# converted to a compact task error before they reach the pipe; the parent
+# independently enforces the same ceiling for malformed/non-cooperating code.
+_PROTOCOL_LINE_LIMIT = 16 * 1024 * 1024
+_PROTOCOL_LIMIT_LABEL = "16 MiB"
 
 
 class _StreamCapture(io.TextIOBase):
@@ -56,11 +65,32 @@ class _StreamCapture(io.TextIOBase):
 
 
 def main() -> int:
-    proto = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
+    proto = os.fdopen(os.dup(1), "wb")
     os.dup2(2, 1)  # raw fd-1 writers → stderr pipe, never the protocol
 
     def send(obj) -> None:
-        proto.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        payload = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        if len(payload) > _PROTOCOL_LINE_LIMIT:
+            task_id = obj.get("task_id") if isinstance(obj, dict) else None
+            if isinstance(task_id, str):
+                replacement = {
+                    "task_id": task_id,
+                    "error": "python worker response exceeds the "
+                    + _PROTOCOL_LIMIT_LABEL
+                    + " JSON-line limit",
+                    "error_kind": "python_error",
+                    "error_type": "WorkerProtocolError",
+                    "traceback": "",
+                }
+            else:
+                replacement = {
+                    "fatal": "python worker response exceeds the "
+                    + _PROTOCOL_LIMIT_LABEL
+                    + " JSON-line limit",
+                    "traceback": "",
+                }
+            payload = json.dumps(replacement, ensure_ascii=False).encode("utf-8")
+        proto.write(payload + b"\n")
         proto.flush()
 
     def emit_stream(name, text) -> None:
@@ -86,6 +116,30 @@ def main() -> int:
         sys.stdout.flush()  # user output ordered before the task result
         sys.stderr.flush()
 
+    def callable_contract_error(function):
+        """Mirror the checker's synchronous, keyword-only call contract.
+
+        ``execute_flow`` is public and can be used without the preparation
+        gate, so the child remains defensive instead of relying on E008.
+        """
+        if inspect.iscoroutinefunction(function):
+            return "async functions are not supported by python nodes"
+        try:
+            signature = inspect.signature(function)
+        except (TypeError, ValueError):
+            return None
+        positional_only = [
+            parameter.name
+            for parameter in signature.parameters.values()
+            if parameter.kind is inspect.Parameter.POSITIONAL_ONLY
+        ]
+        if positional_only:
+            return (
+                "positional-only parameters are not supported by python nodes: "
+                + ", ".join(positional_only)
+            )
+        return None
+
     for raw in sys.stdin.buffer:
         if not raw.strip():
             continue
@@ -99,6 +153,18 @@ def main() -> int:
                     "error": f"nodes.py has no function {request['function']!r}",
                     "error_kind": "python_error",
                     "error_type": "LookupError",
+                    "traceback": "",
+                }
+            )
+            continue
+        contract_error = callable_contract_error(function)
+        if contract_error is not None:
+            send(
+                {
+                    "task_id": task_id,
+                    "error": contract_error,
+                    "error_kind": "python_error",
+                    "error_type": "TypeError",
                     "traceback": "",
                 }
             )

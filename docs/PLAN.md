@@ -490,28 +490,28 @@ the full Python/Vitest/Playwright suites and canonical round-trip tests are
 green. The trusted-workspace model still does not claim protection from a
 separate malicious local process racing filesystem entries (D37).
 
-### M2 — fair scheduler, cancellation, and worker lifecycle
+### M2 — fair scheduler, cancellation, and worker lifecycle  ✅ done 2026-07-13
 
-- [ ] Process ready inline deliveries in bounded batches (initial tuning
+- [x] Process ready inline deliveries in bounded batches (initial tuning
       range 64–256), then cooperatively yield and check an explicit
       monotonic run deadline/abort flag. Preserve the quiescence sentinel
       and message-budget semantics. A tight guarded cycle must not freeze
       the ASGI loop or complete past a deadline as `passed`. (NFR-12)
-- [ ] Put cancellation/cleanup ownership in `try/finally`: firing tasks,
+- [x] Put cancellation/cleanup ownership in `try/finally`: firing tasks,
       HTTP sessions, event streams, and workers close before external
       `CancelledError` escapes. Server shutdown and caller cancellation
       use the same cleanup path. (NFR-13)
-- [ ] Separate normal worker shutdown (EOF) from timeout/crash teardown.
+- [x] Separate normal worker shutdown (EOF) from timeout/crash teardown.
       Timeout immediately terminates, waits one grace interval, then
       kills; replacement cannot start while the old worker can still
       commit work. This milestone owns the worker process itself;
       descendant process-group/Job-Object cleanup remains EC22 after
       v0.2. (D36, EC09, EC43)
-- [ ] Preserve D32's stdlib JSON-lines protocol. Configure and document an
+- [x] Preserve D32's stdlib JSON-lines protocol. Configure and document an
       adequate line/reader limit (or explicit maximum message with a
       clean protocol error), handle `LimitOverrunError`/reader failure,
       and test large results and stderr without hanging finalization.
-- [ ] Make checker and worker callable surfaces agree: either implement
+- [x] Make checker and worker callable surfaces agree: either implement
       async functions and positional-only arguments or reject them with
       positioned diagnostics. Strictly validate binary envelopes/base64
       and route encoding failures through the request error port. (EC48)
@@ -520,6 +520,18 @@ M2 DoD: deadlines and aborts interrupt inline cycles; external
 cancellation leaves no task/session/worker behind; a valid 70KB+ Python
 result completes or fails as a documented node error; a timed-out worker
 cannot produce a late side effect or overlap its replacement.
+**Met 2026-07-13:** the pump yields every 128 ready deliveries and checks
+one monotonic deadline; one shielded cleanup task owns firing tasks, HTTP,
+workers, and event streams across abort, timeout, server shutdown, caller
+cancellation, cleanup, and final emission. Worker normal EOF is separate
+from immediate abnormal terminate→grace→kill; replacement waits for reap;
+the stdlib wire has a tested 16 MiB record ceiling. Checker/worker reject
+async and positional-only callables consistently, and malformed binary
+envelopes route once as request errors. The five M0 M2 probes are ordinary
+passing tests; the TR-13–15 matrix, full 425-test Python suite, Ruff/import
+contracts, real-uvicorn worker path, and 1 KiB/100 KiB/10 MiB worker probes
+are green. EC22 descendant cleanup and EC35 synchronous-Jinja preemption
+remain explicitly after v0.2.
 
 ### M3 — bounded execution state and history lifecycle
 

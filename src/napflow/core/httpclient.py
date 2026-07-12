@@ -16,6 +16,7 @@ exposes the corresponding latency — omitted otherwise, never zero-filled.
 
 import json
 from base64 import b64decode, b64encode
+from binascii import Error as Base64Error
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -40,6 +41,14 @@ class TransportError(Exception):
     def __init__(self, kind: str, message: str):
         self.kind = kind  # connection | timeout | tls | transport
         super().__init__(message)
+
+
+class RequestEncodingError(ValueError):
+    """The configured request body cannot be encoded for transport.
+
+    This is user-controlled request data, not an engine failure. The
+    engine routes it through the request node's ``error`` port (EC48).
+    """
 
 
 @dataclass(frozen=True)
@@ -147,7 +156,40 @@ def _has_content_type(headers: dict[str, str]) -> bool:
 def _encode_body(body: Any) -> tuple[str, Any, str | None]:
     """→ (niquests kwarg, payload, implied content-type or None)."""
     if isinstance(body, dict) and body.get("__binary__") is True:
-        return ("data", b64decode(body["base64"]), body.get("content_type"))
+        expected = {"__binary__", "content_type", "base64"}
+        actual = set(body)
+        if actual != expected:
+            missing = sorted(expected - actual)
+            extra = sorted(
+                key if isinstance(key, str) else repr(key) for key in actual - expected
+            )
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if extra:
+                details.append(f"unexpected {', '.join(extra)}")
+            raise RequestEncodingError(
+                "invalid binary envelope fields (" + "; ".join(details) + ")"
+            )
+        content_type = body["content_type"]
+        encoded = body["base64"]
+        if not isinstance(content_type, str) or not content_type.strip():
+            raise RequestEncodingError(
+                "binary envelope content_type must be a non-empty string"
+            )
+        if not isinstance(encoded, str):
+            raise RequestEncodingError("binary envelope base64 must be a string")
+        try:
+            decoded = b64decode(encoded, validate=True)
+        except (Base64Error, UnicodeEncodeError, ValueError) as exc:
+            raise RequestEncodingError(
+                "binary envelope base64 is not valid canonical base64"
+            ) from exc
+        if b64encode(decoded).decode("ascii") != encoded:
+            raise RequestEncodingError(
+                "binary envelope base64 is not valid canonical base64"
+            )
+        return ("data", decoded, content_type)
     if isinstance(body, dict | list):
         return ("json", body, None)  # niquests sets application/json
     if isinstance(body, str):
