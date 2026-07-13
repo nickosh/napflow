@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M4 raw/redacted event seam
+
+- Done: exhaustive event-field policies now separate immutable structure,
+  content/map values, error messages, and the two lossy preview blockers.
+- Hardened: raw JSONL validates ownership + POSIX/Windows privacy; redacted
+  views preserve protocol, and ordinary close failures become incomplete.
+- Verified: 521 pytest passed (4 skipped, 2 expected xfails); the Windows DACL
+  inspection is locally skipped pending Windows CI. Ruff/import contracts pass.
+- Next: land prepared-request/full-message fields, then encode through the
+  registry and activate `content-blobs/1` with lazy consumers in one change.
+
 ## 2026-07-13 — v0.2 M4 content-store foundation
 
 - Done: added the strict D34 persisted-value codec and per-run immutable,

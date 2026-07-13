@@ -20,8 +20,11 @@ full-fidelity blobs, soft local limits, and explicit CI/export policy.
 Breaking changes are documented rather than prohibited before v1.0.
 Amended 2026-07-12 for v0.2/M1: path resolution, local-request checks,
 source durability, editor persistence, and flow-identity URL transport now
-describe the implemented hardened behavior; later D34–D36 storage/lifecycle
-changes remain future milestones.
+describe the implemented hardened behavior; subsequent amendments fold in
+D34–D36 storage/lifecycle changes as their milestones land.
+Amended 2026-07-13 for v0.2/M4: private raw local run history plus
+schema-aware terminal/report redaction is current behavior; blob activation
+and export policy remain open.
 
 ## Full example
 
@@ -40,7 +43,7 @@ environments:
   default: dev              # profiles auto-discovered from envs/*.env;
   secrets:                  # picker shows filename stem (dev, staging, ...)
     - API_TOKEN
-    - "*_PASSWORD"          # glob patterns; masked in UI, logs, run history
+    - "*_PASSWORD"          # glob patterns; redact terminal/reports, not raw history
 
 defaults:
   request:                  # templating: ONLY {{ env.* }} and {{ run.* }}
@@ -105,20 +108,22 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    Pinned at S2/M1 (2026-07-05, `layer_env`): the whole process
    environment participates in the lookup — a key absent from the
    profile but present in process env is still visible as
-   `{{ env.KEY }}`; masking (rule 5) already scans both sources.
+   `{{ env.KEY }}`; redaction (rule 5) already scans both sources.
 4. **Request defaults merge shallowly** — node-level `retry:` replaces the
    whole block; no deep-merge surprises. Only `{{ env.* }}` and
    `{{ run.* }}` are in scope in `defaults.request` — `inputs`/`nodes`
    are frame-scoped and would be `StrictUndefined` (a node error on every
    inheriting request) (EC23).
-5. **Secret masking (D22)** replaces the *values* of env vars matching
-   `environments.secrets` (active profile + process env) wherever they
-   appear, via substring scan with a 5-char minimum length — catching
-   tokens embedded in URLs/bodies without masking short common strings.
-   Only declared secrets are masked; runtime-acquired tokens (e.g. a
-   bearer token in a login response body) are not — see roadmap. Masking
-   applies in UI, logs, and stored runs alike, at emission (events are
-   born masked).
+5. **Secret views (D35, v0.2/M4)** preserve raw canonical JSONL and local
+   WebSocket records in private run files, then replace the *values* of env
+   vars matching `environments.secrets` (active profile + process env) in
+   terminal and JSON/JUnit report content. Matching uses substring scan with
+   a 5-char minimum length and longest value first. One exhaustive event-field
+   registry limits redaction to content values: dictionary keys, identifiers,
+   enums, state/error vocabulary, and control metadata never change. Only
+   declared secrets are recognized; runtime-acquired tokens (e.g. a bearer
+   token in a login response body) are not — see roadmap. The local UI is a
+   raw inspection surface; export policy remains open M4 work.
 6. **Workspace identities and containment (D37, v0.2/M1)** — one
    `WorkspaceResolver` owns entry flows, flow/loop references, fixtures,
    histories, source files, and clone destinations. Identities are non-empty
@@ -202,7 +207,12 @@ overwrites individual files.
   run gate deepens at S3 when flow references become runnable.
 - **stdout carries ONLY the End-outputs JSON and is NOT masked** — it
   is the functional output (`napf run flows/login | jq .token` is the
-  contract); masking (D22) covers UI, logs, events, and stored runs.
+  contract). CLI stderr and reports use the declared-secret redacted view;
+  private local history and the local UI retain exact values (D35). Raw run
+  directories/files force POSIX `0700`/`0600` independently of umask; Windows
+  uses a protected Owner Rights/SYSTEM/Administrators DACL with inheritable
+  directory ACEs; an existing run directory is migrated only when its owner
+  SID matches the current token owner or user SID.
 - **Inputs**: `--input-json` (object) is applied first, `-i KEY=VALUE`
   overrides per key; `-i` values arrive as strings and BIND coerces
   them against the port's declared type.
@@ -211,13 +221,17 @@ overwrites individual files.
   gitignored, so a fresh clone falls back to process env with a stderr
   note.
 - **Reports** (`defaults.run.report`) are written next to the JSONL:
-  `<run-id>.report.json` / `<run-id>.junit.xml`, built from the masked
-  event records (junit: testcase per assert, errored testcase per
-  unhandled error). `none` installs no report collector; JSON retains only
-  the final summary, while JUnit makes bounded streaming passes over the
-  closed durable JSONL. Report closeout precedes complete-history publication
-  and whole-unit retention, so a retained JSONL never loses or orphans its
-  configured report companion.
+  `<run-id>.report.json` / `<run-id>.junit.xml`, built as schema-aware
+  declared-secret redacted views over the raw private JSONL (junit: testcase
+  per assert, errored testcase per unhandled error). `none` installs no report
+  collector; JSON retains only the final summary, while JUnit makes bounded
+  streaming passes over the closed durable JSONL. An unclassified event/field
+  fails closed instead of leaking into a nominally safe report. Report
+  closeout precedes complete-history publication and whole-unit retention, so
+  a retained JSONL never loses or orphans its configured report companion.
+  An ordinary sink-close failure does not replace the run outcome, but forces
+  the history unit to `.incomplete` and skips report publication. Control-flow
+  exceptions still propagate after that cleanup.
 - **Ctrl-C** = clean abort (exit 130) where asyncio signal handlers
   exist; on Windows the KeyboardInterrupt path exits 130 and the JSONL
   keeps a valid prefix (EC20).
@@ -277,10 +291,11 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   64 KiB; `incomplete` when it isn't `run_finished`) ·
   `GET /api/runs/{run_id}` (status; bounded scalar summary when finished:
   state/duration/assert counts/unhandled-error count/never-fired count —
-  detail and masked end outputs remain in `run_finished`, NEVER this endpoint;
-  unmasked outputs are `napf run` stdout's contract only) ·
+  detail and raw End outputs remain in private `run_finished`, NEVER this
+  scalar endpoint) ·
   `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
-  D13; `?flow=` locates runs the server process didn't start; v0.2 M0
+  D13; records are the same raw local-inspection view as WebSocket frames;
+  `?flow=` locates runs the server process didn't start; v0.2 M0
   validates the first `run_started` envelope before replay, accepts an
   unmarked v0.1 log best-effort, and returns 422 `history_format` for a
   malformed/newer format or unsupported declared feature) ·
@@ -394,6 +409,7 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   today; see PRODUCT.md).
 - **Runtime secret redaction (D22)** — `set ... secret: true` or a
   response field-path redaction directive, so login-acquired tokens can
-  opt into masking. This v0.1 note is superseded for v0.2 by D35; until
-  then the shareability guarantee is scoped to declared secrets.
+  opt into safe presentation/export. D35 intentionally preserves this raw
+  local truth; declared-secret terminal/report views are implemented, but no
+  absolute shareability guarantee is made and export remains M4 work.
 - `napf check --write-env-example`.

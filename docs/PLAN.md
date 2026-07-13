@@ -601,11 +601,22 @@ not retained active state in M3.
         deduplication, and strict missing/corrupt/hash-verified resolution.
         Feature activation intentionally remains below; foundation tests do
         not claim FR-1102/NFR-15/TR-16 completion.
-  - [ ] **Feature activation + event integration:** finalize the exhaustive
-        schema-declared payload-field registry, encode once before the shared
-        JSONL/WebSocket fan-out, and enable `content-blobs/1` for both writer
-        and reader in that same change. Partial field activation would make a
-        later inline `$napflow` user value ambiguous and is forbidden.
+  - [ ] **Feature activation + event integration:** encode once before the
+        shared JSONL/WebSocket fan-out, and enable `content-blobs/1` for both
+        writer and reader in that same change. Partial field activation would
+        make a later inline `$napflow` user value ambiguous and is forbidden.
+    - [x] **Field-policy/redaction seam** (landed 2026-07-13): every current
+          event dataclass field is classified as structure, complete content,
+          keyed content, error-message content, or derived preview. Canonical
+          sinks receive raw records; JSONL is permission-protected and the
+          WebSocket is a trusted loopback-local surface. Terminal delivery and
+          post-close JSON/JUnit rendering use the same schema-aware value-only
+          redactor. `body_preview` and `value_preview` are explicit activation
+          blockers, not silently accepted content fields.
+    - [ ] **Full-value schema + activation:** replace the two derived previews
+          with the prepared request/full message contracts, apply the store
+          through the registry, add lazy consumer resolution, then activate
+          the writer/reader feature together.
 - [ ] Apply storage policy to every persisted payload path—not only
       `request_finished.body`: message/log values, request bodies,
       response bodies, error payloads, and `run_finished.end_outputs`.
@@ -623,6 +634,20 @@ not retained active state in M3.
       Declared-secret CI exports default safe, raw export is explicit,
       and absolute “shareable by construction” language is removed.
       (FR-1104, D35, EC45)
+  - [x] **Raw local + terminal/report views** (landed 2026-07-13): JSONL and
+        local WebSocket records preserve exact values; the JSONL is private
+        local storage and the WebSocket stays inside the trusted loopback UI
+        boundary. Dictionary keys, identifiers, enums, and control fields are
+        immutable; CLI stderr and post-close JSON/JUnit reports redact only
+        classified content.
+        Run directories/files force `0700`/`0600` despite the POSIX umask and
+        use a protected owner/SYSTEM/Administrators DACL on Windows; an
+        existing directory must belong to the current token before migration.
+        An ordinary sink I/O close failure preserves the run result but
+        publishes history only as an incomplete prefix; control-flow
+        exceptions still propagate.
+  - [ ] **Export views:** add declared-secret-safe and explicit raw bundle
+        policies, including blob resolution/rewrite and no orphan raw content.
 - [ ] Add self-contained run export/import (manifest + JSONL + referenced
       blobs, archive format provisional). Import verifies hashes and opens
       read-only; an exported redacted bundle contains no unreachable raw

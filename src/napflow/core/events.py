@@ -1,10 +1,10 @@
-"""Event vocabulary + JSONL sink + secret masking (EN §7, D22).
+"""Event vocabulary, canonical JSONL, and redacted views (EN §7, D35).
 
 One JSON object per line/frame; the JSONL file and the future WebSocket
 stream carry IDENTICAL records (D13) — both are fed by `EventStream`,
-which stamps `run_id`/`ts`/`seq` and masks payloads at emission. Structural
-envelope fields (`event`, run/frame/node identity, ordering, history format,
-and feature declarations) are never rewritten by masking.
+which stamps `run_id`/`ts`/`seq` and fans out the raw canonical record.
+Terminal/report sinks receive a separate schema-aware redacted projection;
+redaction never rewrites protocol structure or dictionary keys.
 
 Wire shape: common fields `{event, run_id, frame, node, ts, seq}` then
 the event's payload fields in declaration order. Optional fields
@@ -12,11 +12,11 @@ the event's payload fields in declaration order. Optional fields
 unset; required nullable fields (e.g. run_started `env_name`) appear as
 null.
 
-Payload masking (D22): the VALUES of env vars whose names match
+Presentation redaction (D35): the VALUES of env vars whose names match
 `environments.secrets` glob patterns (layered active profile + process
-env) are replaced with `***` wherever they appear in payload fields —
-substring scan over strings and keys, 5-char minimum, longest value first.
-Declared secrets only; runtime-acquired tokens are stored in full (roadmap).
+env) are replaced with `***` only inside schema-declared content fields —
+substring scan over string values, 5-char minimum, longest value first.
+Declared secrets only; runtime-acquired tokens remain a roadmap item.
 """
 
 import json
@@ -31,6 +31,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import asdict as _asdict
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
+from enum import Enum
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
@@ -54,18 +55,18 @@ MASK = "***"
 # with no `format` field predates versioning and is read best-effort as major
 # 0 (v0.1 logs, D33).
 #
-# v0.2 storage (blobs/indexes) lands in later milestones; the marker is
-# pinned here, BEFORE the format changes, so every run written from now on
-# is self-identifying.
+# v0.2 storage (blobs/indexes) lands in staged milestones; the marker was
+# pinned before the format changed, so every run written from M0 on is
+# self-identifying.
 
 HISTORY_FORMAT = "napflow-run/1"
 HISTORY_FORMAT_MAJOR = 1
 
 # Optional format capabilities are declared separately from the event-format
 # major. This M0 build writes/reads pure inline JSONL only. M4 will declare
-# `content-blobs/1` when it can both resolve and verify `$napflow` persisted-
-# value envelopes; older readers then reject the feature instead of silently
-# exposing descriptors as user data.
+# `content-blobs/1` only after full-value event encoding and lazy consumers can
+# both resolve and verify `$napflow` persisted-value envelopes; older readers
+# then reject the feature instead of silently exposing descriptors as user data.
 HISTORY_FEATURE_CONTENT_BLOBS = "content-blobs/1"
 HISTORY_WRITE_FEATURES: tuple[str, ...] = ()
 HISTORY_SUPPORTED_FEATURES: frozenset[str] = frozenset()
@@ -323,6 +324,138 @@ EVENT_TYPES: dict[str, type[Event]] = {
 }
 
 
+class EventFieldPolicy(Enum):
+    """How one persisted event field participates in M4 processing.
+
+    ``STRUCTURE`` is copied exactly. ``CONTENT`` is one logical value;
+    ``CONTENT_MAP_VALUES`` keeps the mapping keys structural and treats each
+    value independently; ``ERROR_MESSAGES`` keeps error records structural
+    and treats only their ``message`` as content. ``DERIVED_PREVIEW`` marks
+    today's lossy fields which must become full values before
+    ``content-blobs/1`` can be activated.
+    """
+
+    STRUCTURE = "structure"
+    CONTENT = "content"
+    CONTENT_MAP_VALUES = "content_map_values"
+    ERROR_MESSAGES = "error_messages"
+    DERIVED_PREVIEW = "derived_preview"
+
+
+_S = EventFieldPolicy.STRUCTURE
+_C = EventFieldPolicy.CONTENT
+_M = EventFieldPolicy.CONTENT_MAP_VALUES
+_E = EventFieldPolicy.ERROR_MESSAGES
+_P = EventFieldPolicy.DERIVED_PREVIEW
+
+# Exhaustive event-specific field classification. This is deliberately a
+# registry of *every* dataclass field, not a content-only allowlist: adding a
+# field without deciding whether it is structure, complete content, or a
+# lossy preview is a protocol error. The future content encoder and current
+# presentation redactor share this boundary.
+EVENT_FIELD_POLICIES: dict[type[Event], dict[str, EventFieldPolicy]] = {
+    RunStarted: {
+        "format": _S,
+        "flow": _S,
+        "env_name": _S,
+        "inputs": _M,
+        "engine_version": _S,
+        "features": _S,
+    },
+    NodeFired: {"firing_no": _S},
+    RequestStarted: {
+        "method": _S,
+        "url": _C,
+        "headers": _M,
+        "body_preview": _P,
+        "attempt": _S,
+    },
+    RequestFinished: {
+        "status": _S,
+        "http_version": _S,
+        "headers": _M,
+        "body": _C,
+        "size_bytes": _S,
+        "timing": _S,
+        "attempt": _S,
+        "retries_total": _S,
+    },
+    RequestFailed: {
+        "error_kind": _S,
+        "message": _C,
+        "attempt": _S,
+        "will_retry": _S,
+    },
+    MessageEmitted: {
+        "from_port": _S,
+        "to_node": _S,
+        "to_port": _S,
+        "msg_id": _S,
+        "value_preview": _P,
+    },
+    AssertResult: {
+        "check": _C,
+        "op": _S,
+        "expected": _C,
+        "actual": _C,
+        "passed": _S,
+    },
+    PythonError: {
+        "function": _S,
+        "error_type": _S,
+        "message": _C,
+        "traceback": _C,
+    },
+    LogEvent: {"label": _C, "level": _S, "value": _C},
+    GuardTripped: {"kind": _S, "port": _S},
+    BudgetWarning: {"remaining": _S},
+    CaptureWarning: {"remaining_mb": _S},
+    FrameFinished: {
+        "parent_frame": _S,
+        "parent_node": _S,
+        "flow": _S,
+        "kind": _S,
+        "loop_index": _S,
+        "duration_ms": _S,
+        "state": _S,
+        "asserts": _S,
+        "unhandled_errors": _E,
+        "end_outputs": _M,
+    },
+    RunFinished: {
+        "state": _S,
+        "duration_ms": _S,
+        "asserts": _S,
+        "unhandled_errors": _E,
+        "end_outputs": _M,
+        "nodes_never_fired": _S,
+        "error_reason": _S,
+    },
+}
+
+_DATACLASS_COMMON_FIELDS = frozenset({"frame", "node"})
+_WIRE_COMMON_FIELDS = frozenset({"event", "run_id", "frame", "node", "ts", "seq"})
+_ERROR_RECORD_FIELDS = frozenset({"frame", "node", "port", "kind", "message"})
+
+
+def _validate_event_field_policies() -> None:
+    """Fail import if an event field has no explicit persistence policy."""
+    if set(EVENT_FIELD_POLICIES) != set(EVENT_TYPES.values()):
+        raise RuntimeError("event field policy registry does not cover EVENT_TYPES")
+    for event_type, policies in EVENT_FIELD_POLICIES.items():
+        declared = {item.name for item in fields(event_type)} - _DATACLASS_COMMON_FIELDS
+        if set(policies) != declared:
+            missing = sorted(declared - set(policies))
+            extra = sorted(set(policies) - declared)
+            raise RuntimeError(
+                f"{event_type.event} field policies mismatch: "
+                f"missing={missing}, extra={extra}"
+            )
+
+
+_validate_event_field_policies()
+
+
 @lru_cache
 def _omit_if_none(cls: type[Event]) -> frozenset[str]:
     """Optional fields: declared with default None ⇒ omitted when unset."""
@@ -334,7 +467,7 @@ def _omit_if_none(cls: type[Event]) -> frozenset[str]:
 
 
 class SecretMasker:
-    """Replaces declared-secret VALUES with `***` in event records.
+    """Build declared-secret redacted presentation values and records.
 
     `patterns` are the `environments.secrets` globs over env var NAMES
     (matched case-sensitively); `env` is the layered environment
@@ -361,20 +494,67 @@ class SecretMasker:
         return text
 
     def mask(self, value: Any) -> Any:
-        """Recursively mask every string in a JSON-compatible structure
-        — dict keys included ("wherever they appear", D22)."""
+        """Recursively mask string values while preserving dictionary keys."""
         if not self._values:
             return value
         if isinstance(value, str):
             return self.mask_text(value)
         if isinstance(value, dict):
-            return {
-                self.mask_text(k) if isinstance(k, str) else k: self.mask(v)
-                for k, v in value.items()
-            }
+            return {key: self.mask(item) for key, item in value.items()}
         if isinstance(value, list | tuple):
             return [self.mask(v) for v in value]
         return value
+
+    def redact_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a redacted presentation copy of one canonical event.
+
+        The exhaustive field registry defines the content boundary. Unknown
+        events or fields fail closed rather than leaking an unclassified value
+        into a nominally safe report.
+        """
+        event_name = record.get("event")
+        event_type = (
+            EVENT_TYPES.get(event_name) if isinstance(event_name, str) else None
+        )
+        if event_type is None:
+            raise HistoryFormatError(
+                f"no redaction policy for event {_marker_repr(event_name)}"
+            )
+        policies = EVENT_FIELD_POLICIES[event_type]
+        unknown = set(record) - _WIRE_COMMON_FIELDS - set(policies)
+        if unknown:
+            raise HistoryFormatError(
+                f"no redaction policy for {event_name} fields {sorted(unknown)!r}"
+            )
+
+        redacted = dict(record)
+        for name, policy in policies.items():
+            if name not in record or policy is EventFieldPolicy.STRUCTURE:
+                continue
+            if policy is EventFieldPolicy.ERROR_MESSAGES:
+                redacted[name] = self._redact_error_messages(record[name], event_name)
+            else:
+                redacted[name] = self.mask(record[name])
+        return redacted
+
+    def _redact_error_messages(
+        self, value: Any, event_name: str
+    ) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            raise HistoryFormatError(
+                f"{event_name}.unhandled_errors must be an array for redaction"
+            )
+        redacted: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict) or set(item) - _ERROR_RECORD_FIELDS:
+                raise HistoryFormatError(
+                    f"{event_name}.unhandled_errors has an unclassified record"
+                )
+            shown = dict(item)
+            if "message" in shown:
+                shown["message"] = self.mask(shown["message"])
+            redacted.append(shown)
+        return redacted
 
 
 # --------------------------------------------------------------------------
@@ -924,6 +1104,278 @@ def last_jsonl_record(path: Path) -> dict[str, Any] | None:
     return None
 
 
+def _apply_private_windows_dacl(path: Path, *, directory: bool) -> None:
+    """Protect one history path with an explicit owner-scoped Windows DACL.
+
+    POSIX mode bits do not constrain NTFS access.  ``OW`` is the Owner Rights
+    SID (the object's current owner), while SYSTEM and Administrators retain
+    recovery access.  Directory ACEs inherit to both child files and child
+    directories, closing the create-then-protect window for descendants.
+    """
+    if os.name != "nt":
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    sddl_revision_1 = 1
+    se_file_object = 1
+    dacl_security_information = 0x00000004
+    protected_dacl_security_information = 0x80000000
+    sddl = (
+        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        if directory
+        else "D:P(A;;FA;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)"
+    )
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    void_pointer = ctypes.c_void_p
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(wintypes.ULONG),
+    )
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = (
+        wintypes.BOOL
+    )
+    advapi.GetSecurityDescriptorDacl.argtypes = (
+        void_pointer,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(wintypes.BOOL),
+    )
+    advapi.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+    advapi.SetNamedSecurityInfoW.argtypes = (
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        void_pointer,
+        void_pointer,
+        void_pointer,
+        void_pointer,
+    )
+    advapi.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    kernel32.LocalFree.argtypes = (void_pointer,)
+    kernel32.LocalFree.restype = void_pointer
+
+    security_descriptor = void_pointer()
+    descriptor_size = wintypes.ULONG()
+    if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        sddl,
+        sddl_revision_1,
+        ctypes.byref(security_descriptor),
+        ctypes.byref(descriptor_size),
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        dacl_present = wintypes.BOOL()
+        dacl_defaulted = wintypes.BOOL()
+        dacl = void_pointer()
+        if not advapi.GetSecurityDescriptorDacl(
+            security_descriptor,
+            ctypes.byref(dacl_present),
+            ctypes.byref(dacl),
+            ctypes.byref(dacl_defaulted),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        # A present-but-NULL DACL grants access to everyone.  Fail closed
+        # rather than passing such a descriptor to SetNamedSecurityInfoW.
+        if not dacl_present.value or not dacl.value:
+            raise OSError("generated security descriptor has no non-NULL DACL")
+        result = advapi.SetNamedSecurityInfoW(
+            ctypes.c_wchar_p(os.fspath(path)),
+            se_file_object,
+            dacl_security_information | protected_dacl_security_information,
+            None,
+            None,
+            dacl,
+            None,
+        )
+        if result:
+            # SetNamedSecurityInfoW returns a Win32 status directly instead
+            # of setting the calling thread's last-error value.
+            raise ctypes.WinError(result)
+    finally:
+        if security_descriptor.value:
+            kernel32.LocalFree(security_descriptor)
+
+
+def _windows_path_owned_by_current_token(path: Path) -> bool:
+    """Whether ``path`` has the owner SID this process uses for new objects."""
+    if os.name != "nt":
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    se_file_object = 1
+    owner_security_information = 0x00000001
+    token_query = 0x0008
+    token_user_information = 1
+    token_owner_information = 4
+    error_insufficient_buffer = 122
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    void_pointer = ctypes.c_void_p
+    advapi.GetNamedSecurityInfoW.argtypes = (
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+    )
+    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.OpenProcessToken.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    )
+    advapi.OpenProcessToken.restype = wintypes.BOOL
+    advapi.GetTokenInformation.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        void_pointer,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    advapi.GetTokenInformation.restype = wintypes.BOOL
+    advapi.EqualSid.argtypes = (void_pointer, void_pointer)
+    advapi.EqualSid.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = ()
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = (void_pointer,)
+    kernel32.LocalFree.restype = void_pointer
+
+    owner = void_pointer()
+    security_descriptor = void_pointer()
+    result = advapi.GetNamedSecurityInfoW(
+        ctypes.c_wchar_p(os.fspath(path)),
+        se_file_object,
+        owner_security_information,
+        ctypes.byref(owner),
+        None,
+        None,
+        None,
+        ctypes.byref(security_descriptor),
+    )
+    if result:
+        raise ctypes.WinError(result)
+    token = wintypes.HANDLE()
+    try:
+        if not owner.value:
+            return False
+        if not advapi.OpenProcessToken(
+            kernel32.GetCurrentProcess(), token_query, ctypes.byref(token)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        def token_sid_matches(information_class: int) -> bool:
+            required = wintypes.DWORD()
+            if advapi.GetTokenInformation(
+                token, information_class, None, 0, ctypes.byref(required)
+            ):
+                raise OSError("token SID size query unexpectedly succeeded")
+            error = ctypes.get_last_error()
+            if error != error_insufficient_buffer or not required.value:
+                raise ctypes.WinError(error)
+            buffer = ctypes.create_string_buffer(required.value)
+            if not advapi.GetTokenInformation(
+                token,
+                information_class,
+                buffer,
+                required.value,
+                ctypes.byref(required),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            # TOKEN_OWNER and TOKEN_USER both begin with the relevant SID
+            # pointer (TOKEN_USER nests it as SID_AND_ATTRIBUTES first).
+            sid = ctypes.cast(buffer, ctypes.POINTER(void_pointer)).contents
+            return bool(sid.value and advapi.EqualSid(owner, sid))
+
+        return token_sid_matches(token_owner_information) or token_sid_matches(
+            token_user_information
+        )
+    finally:
+        if token.value:
+            kernel32.CloseHandle(token)
+        if security_descriptor.value:
+            kernel32.LocalFree(security_descriptor)
+
+
+def _path_owned_by_current_user(path: Path) -> bool:
+    if os.name == "nt":
+        return _windows_path_owned_by_current_token(path)
+    getuid = getattr(os, "geteuid", None)
+    return getuid is None or path.lstat().st_uid == getuid()
+
+
+def _require_current_owner(path: Path) -> None:
+    if not _path_owned_by_current_user(path):
+        raise PermissionError(
+            f"run-history directory is not owned by this user: {path}"
+        )
+
+
+def _apply_private_permissions(path: Path, *, directory: bool) -> None:
+    if os.name == "nt":
+        _apply_private_windows_dacl(path, directory=directory)
+    else:
+        path.chmod(0o700 if directory else 0o600)
+
+
+def _ensure_private_directory(path: Path) -> None:
+    """Create each missing component and secure it before descending.
+
+    ``mkdir(parents=True, mode=...)`` applies the requested mode only to the
+    leaf and still lets a restrictive umask produce mode ``000``.  Walking
+    outward to the first existing directory lets every new component be
+    corrected immediately, so the next component remains creatable.
+    """
+    missing: list[Path] = []
+    current = path
+    while True:
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            missing.append(current)
+            parent = current.parent
+            if parent == current:
+                raise FileNotFoundError(f"no existing parent for {path}") from None
+            current = parent
+            continue
+        if not stat.S_ISDIR(mode):
+            raise NotADirectoryError(current)
+        break
+
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            created = False
+        else:
+            created = True
+        if not stat.S_ISDIR(directory.lstat().st_mode):
+            raise NotADirectoryError(directory)
+        if not created:
+            _require_current_owner(directory)
+        _apply_private_permissions(directory, directory=True)
+
+    # Existing owner-controlled leaves may predate raw canonical history.
+    # Migrate their permissions before creating the first secret-bearing
+    # child, but never grant Owner Rights to a foreign/pre-planted owner.
+    if not missing:
+        _require_current_owner(path)
+        _apply_private_permissions(path, directory=True)
+
+
 class JsonlSink:
     """Append-only run log, one compact JSON object per line (UTF-8,
     LF, `ensure_ascii=False`). Every line is flushed as written, so an
@@ -931,10 +1383,30 @@ class JsonlSink:
     `request_started` is tolerated by replay (EC20)."""
 
     def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_private_directory(path.parent)
         self.path = path
-        # "x": run ids must be unique — collide loudly, never overwrite
-        self._file = path.open("x", encoding="utf-8", newline="\n")
+        # Exclusive/private from the first instant: canonical v0.2 history
+        # contains raw declared secrets (D35), so a permissive umask must not
+        # create a briefly world-readable file.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_BINARY", 0)
+        fd = os.open(path, flags, 0o600)
+        try:
+            if os.name == "nt":
+                _apply_private_windows_dacl(path, directory=False)
+            else:
+                # Creation mode is still filtered through umask.  Correct the
+                # already-open inode before exposing it to buffered writes.
+                os.fchmod(fd, 0o600)
+            self._file = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        except BaseException:
+            with suppress(OSError):
+                os.close(fd)
+            with suppress(OSError):
+                path.unlink(missing_ok=True)
+            raise
 
     def write(self, record: dict[str, Any]) -> None:
         self._file.write(encode_record(record) + "\n")
@@ -945,13 +1417,17 @@ class JsonlSink:
 
 
 class EventStream:
-    """Stamps common fields, masks, fans out. A sink is anything with
-    `write(record: dict)` and `close()` — JSONL now, WebSocket at S4.
+    """Stamps common fields and fans out canonical/presentation records.
+
+    A sink is anything with `write(record: dict)` and `close()`. Canonical
+    sinks (JSONL and local WebSocket) receive raw records; presentation sinks
+    (terminal today) receive one schema-aware redacted copy.
 
     `FlowRun.execute()` owns the stream once execution starts and closes
-    it on every exit path.  `close()` is deliberately idempotent so the
-    CLI/server adapters can also close a stream whose run never started
-    without needing a separate ownership flag.
+    it on every exit path. Close side effects are deliberately idempotent so
+    CLI/server adapters can also close a stream whose run never started;
+    the first close failure is remembered and re-raised without retrying the
+    sinks, allowing adapters to publish history as incomplete.
     """
 
     def __init__(
@@ -960,18 +1436,20 @@ class EventStream:
         masker: SecretMasker,
         sinks: Iterable[Any],
         clock: Callable[[], datetime] | None = None,
+        *,
+        presentation_sinks: Iterable[Any] = (),
     ):
         self.run_id = run_id
         self._masker = masker
         self._sinks = list(sinks)
+        self._presentation_sinks = list(presentation_sinks)
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._seq = 0
         self._closed = False
+        self._close_error: BaseException | None = None
 
     def emit(self, event: Event) -> dict[str, Any]:
-        """Serialize + mask payloads + fan out; returns the wire record.
-        Protocol-envelope fields are structural and never rewritten by
-        masking."""
+        """Serialize and fan out; return the raw canonical wire record."""
         self._seq += 1
         data = _asdict(event)
         record: dict[str, Any] = {"event": type(event).event, "run_id": self.run_id}
@@ -981,35 +1459,38 @@ class EventStream:
                 record[common] = value
         record["ts"] = isoformat_ms(self._clock())
         record["seq"] = self._seq
-        # `format`/`features` are part of the run_started envelope, not user
-        # payload. Keep them outside recursive masking just like event/run_id/
-        # seq: a declared secret must not destroy the reader gate.
+        # `format`/`features` are part of the run_started envelope.
         if isinstance(event, RunStarted):
             record["format"] = data.pop("format")
             record["features"] = data.pop("features")
         omittable = _omit_if_none(type(event))
-        payload: dict[str, Any] = {}
         for key, value in data.items():
             if value is None and key in omittable:
                 continue
-            payload[key] = value
-        record.update(self._masker.mask(payload))
+            record[key] = value
         for sink in self._sinks:
             sink.write(record)
+        if self._presentation_sinks:
+            redacted = self._masker.redact_record(record)
+            for sink in self._presentation_sinks:
+                sink.write(redacted)
         return record
 
     def close(self) -> None:
         if self._closed:
+            if self._close_error is not None:
+                raise self._close_error
             return
         self._closed = True
         errors: list[BaseException] = []
-        for sink in self._sinks:
+        for sink in [*self._sinks, *self._presentation_sinks]:
             try:
                 sink.close()
             except BaseException as error:
                 errors.append(error)
         if errors:
-            raise errors[0]
+            self._close_error = errors[0]
+            raise self._close_error
 
 
 def isoformat_ms(dt: datetime) -> str:

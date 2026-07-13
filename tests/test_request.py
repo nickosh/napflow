@@ -450,11 +450,12 @@ def test_run_capture_valve_and_warning(server):
     assert bodies[1]["__truncated__"] is True  # second exceeds it
 
 
-def test_secret_masked_in_request_events(server):
+def test_request_history_is_raw_and_presentation_headers_are_redacted(server):
     f = request_flow(
         {"url": f"{server}/echo", "headers": {"Authorization": "Bearer sk-hidden-1"}}
     )
-    sink = CaptureSink()
+    raw = CaptureSink()
+    shown = CaptureSink()
     masker = SecretMasker(["*TOKEN*"], {"API_TOKEN": "sk-hidden-1"})
     result = asyncio.run(
         execute_flow(
@@ -464,12 +465,18 @@ def test_secret_masked_in_request_events(server):
             env={"API_TOKEN": "sk-hidden-1"},
             env_name="dev",
             inputs={},
-            stream=EventStream("r", masker, [sink]),
+            stream=EventStream(
+                "r", masker, [raw], presentation_sinks=[shown]
+            ),
         )
     )
     assert result.state == "passed"
-    started = events_of(sink.records, "request_started")[0]
-    assert started["headers"]["Authorization"] == "Bearer ***"  # born masked
+    started = events_of(raw.records, "request_started")[0]
+    presented = events_of(shown.records, "request_started")[0]
+    assert started["method"] == presented["method"] == "GET"
+    assert started["headers"]["Authorization"] == "Bearer sk-hidden-1"
+    assert presented["headers"]["Authorization"] == "Bearer ***"
+    assert "Authorization" in presented["headers"]  # header keys are structural
 
 
 # --------------------------------------------------------------------------

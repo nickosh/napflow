@@ -14,6 +14,7 @@ import napflow.cli.main as cli_main
 import napflow.cli.report as cli_report
 from napflow.cli.main import app
 from napflow.core.engine import RunResult
+from napflow.core.events import EventStream, SecretMasker
 
 runner = CliRunner()
 
@@ -69,8 +70,8 @@ def ws(tmp_path, monkeypatch) -> Path:
     return workspace
 
 
-def jsonl_records(ws: Path) -> list[dict]:
-    logs = sorted((ws / ".napflow" / "runs" / "flows" / "hello").glob("*.jsonl"))
+def jsonl_records(ws: Path, flow: str = "hello") -> list[dict]:
+    logs = sorted((ws / ".napflow" / "runs" / "flows" / flow).glob("*.jsonl"))
     assert logs, "no run log written"
     lines = logs[-1].read_text(encoding="utf-8").splitlines()
     return [json.loads(line) for line in lines]
@@ -182,10 +183,10 @@ def test_timeout_flag_exits_2(ws):
 
 
 # --------------------------------------------------------------------------
-# Masking boundary: stdout functional, history masked (D22 + M5 pin)
+# D35 boundary: stdout/history raw, terminal/reports redacted
 
 
-def test_stdout_unmasked_but_jsonl_masked(ws):
+def test_stdout_and_private_jsonl_preserve_raw_local_truth(ws):
     leaky = HELLO_FLOW.replace("{{ env.GREETING }}", "{{ env.API_TOKEN }}")
     (ws / "flows" / "hello" / "flow.yaml").write_text(leaky, encoding="utf-8")
     result = runner.invoke(app, ["run", "flows/hello"])
@@ -193,7 +194,7 @@ def test_stdout_unmasked_but_jsonl_masked(ws):
     # stdout is the functional output — `| jq .token` must keep working
     assert json.loads(result.stdout) == {"result": {"msg": "supersecret-token"}}
     finished = jsonl_records(ws)[-1]
-    assert finished["end_outputs"]["result"]["msg"] == "***"  # history masked
+    assert finished["end_outputs"]["result"]["msg"] == "supersecret-token"
 
 
 # --------------------------------------------------------------------------
@@ -211,25 +212,80 @@ def retained_report_manifest(kind: str) -> str:
     )
 
 
+UNSET_SECRET_FLOW = """\
+schema: "napflow/v1"
+flow:
+  name: "unset-secret"
+nodes:
+  - id: "start"
+    type: "start"
+  - id: "recall"
+    type: "get"
+    config:
+      name: "supersecret-token"
+  - id: "end"
+    type: "end"
+    config:
+      ports:
+        - {name: "result", required: false}
+edges:
+  - {from: "start.out", to: "recall.trigger"}
+  - {from: "recall.value", to: "end.result"}
+"""
+
+
+def test_error_terminal_and_report_redact_while_history_stays_raw(
+    tmp_path, monkeypatch
+):
+    ws = make_workspace(
+        tmp_path,
+        flow_yaml=UNSET_SECRET_FLOW,
+        manifest=report_manifest("json"),
+    )
+    monkeypatch.chdir(ws)
+
+    result = runner.invoke(app, ["run", "flows/hello"])
+
+    assert result.exit_code == 1
+    assert "supersecret-token" not in result.stderr
+    assert "variable '***' was never set" in result.stderr
+    finished = jsonl_records(ws)[-1]
+    assert "supersecret-token" in finished["unhandled_errors"][0]["message"]
+    report = next(
+        (ws / ".napflow" / "runs" / "flows" / "hello").glob("*.report.json")
+    )
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["state"] == "failed"
+    assert "supersecret-token" not in payload["unhandled_errors"][0]["message"]
+    assert "***" in payload["unhandled_errors"][0]["message"]
+
+
 def test_json_report(tmp_path, monkeypatch):
     leaky = HELLO_FLOW.replace("{{ env.GREETING }}", "{{ env.API_TOKEN }}")
     ws = make_workspace(
         tmp_path, flow_yaml=leaky, manifest=report_manifest("json")
     )
     monkeypatch.chdir(ws)
-    seen_sinks = []
+    seen_presentation_sinks = []
     real_open = cli_main.open_run_stream
 
-    def observed_open(workspace, prepared, *, extra_sinks=()):
-        extra_sinks_seen = list(extra_sinks)
-        seen_sinks.extend(extra_sinks_seen)
-        return real_open(workspace, prepared, extra_sinks=extra_sinks_seen)
+    def observed_open(
+        workspace, prepared, *, extra_sinks=(), presentation_sinks=()
+    ):
+        presentation_sinks_seen = list(presentation_sinks)
+        seen_presentation_sinks.extend(presentation_sinks_seen)
+        return real_open(
+            workspace,
+            prepared,
+            extra_sinks=extra_sinks,
+            presentation_sinks=presentation_sinks_seen,
+        )
 
     monkeypatch.setattr(cli_main, "open_run_stream", observed_open)
     result = runner.invoke(app, ["run", "flows/hello"])
     assert result.exit_code == 0, result.stderr
-    assert len(seen_sinks) == 1
-    assert type(seen_sinks[0]).__name__ == "_LogEcho"
+    assert len(seen_presentation_sinks) == 1
+    assert type(seen_presentation_sinks[0]).__name__ == "_LogEcho"
     reports = list((ws / ".napflow" / "runs" / "flows" / "hello").glob("*.report.json"))
     assert len(reports) == 1
     report_text = reports[0].read_text(encoding="utf-8")
@@ -240,6 +296,10 @@ def test_json_report(tmp_path, monkeypatch):
     assert payload["exit_code"] == 0
     assert payload["asserts"] == {"passed": 1, "failed": 0}
     assert payload["end_outputs"] == {"result": {"msg": "***"}}
+    finished = jsonl_records(ws)[-1]
+    assert finished["end_outputs"] == {
+        "result": {"msg": "supersecret-token"}
+    }
 
 
 def test_junit_report_counts_match(tmp_path, monkeypatch):
@@ -298,9 +358,16 @@ def test_report_publication_does_not_follow_target_symlink(
     real_open = cli_main.open_run_stream
     planted = None
 
-    def planted_open(workspace, prepared, *, extra_sinks=()):
+    def planted_open(
+        workspace, prepared, *, extra_sinks=(), presentation_sinks=()
+    ):
         nonlocal planted
-        opened = real_open(workspace, prepared, extra_sinks=extra_sinks)
+        opened = real_open(
+            workspace,
+            prepared,
+            extra_sinks=extra_sinks,
+            presentation_sinks=presentation_sinks,
+        )
         planted = opened.log_path.with_name(f"{opened.run_id}{suffix}")
         planted.symlink_to(outside)
         return opened
@@ -332,18 +399,81 @@ def test_history_finalization_failure_does_not_replace_run_result(
     assert "warning: run history finalization failed" in result.stderr
 
 
+def test_stream_close_failure_preserves_result_and_abandons_history(
+    ws, monkeypatch
+):
+    def fail_close(_self):
+        raise OSError("close failed")
+
+    monkeypatch.setattr(cli_main._LogEcho, "close", fail_close)
+
+    result = runner.invoke(app, ["run", "flows/hello", "-i", "msg=hi"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"result": {"msg": "hi"}}
+    assert "warning: run stream close failed" in result.stderr
+    runs = ws / ".napflow" / "runs" / "flows" / "hello"
+    assert list(runs.glob("*.active")) == []
+    assert len(list(runs.glob("*.incomplete"))) == 1
+    assert list(runs.glob("*.complete.json")) == []
+
+
+def test_keyboard_interrupt_during_stream_close_exits_130_and_abandons_history(
+    ws, monkeypatch
+):
+    def interrupt_close(_self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_main._LogEcho, "close", interrupt_close)
+
+    result = runner.invoke(app, ["run", "flows/hello", "-i", "msg=hi"])
+
+    assert result.exit_code == 130
+    assert "aborted" in result.stderr
+    runs = ws / ".napflow" / "runs" / "flows" / "hello"
+    assert list(runs.glob("*.active")) == []
+    assert len(list(runs.glob("*.incomplete"))) == 1
+    assert list(runs.glob("*.complete.json")) == []
+
+
+def test_fresh_keyboard_interrupt_during_adapter_reclose_exits_130(
+    ws, monkeypatch
+):
+    original_close = EventStream.close
+    close_calls = 0
+
+    def interrupt_second_close(self):
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 2:
+            raise KeyboardInterrupt
+        return original_close(self)
+
+    monkeypatch.setattr(EventStream, "close", interrupt_second_close)
+
+    result = runner.invoke(app, ["run", "flows/hello", "-i", "msg=hi"])
+
+    assert result.exit_code == 130
+    assert "aborted" in result.stderr
+    runs = ws / ".napflow" / "runs" / "flows" / "hello"
+    assert list(runs.glob("*.active")) == []
+    assert len(list(runs.glob("*.incomplete"))) == 1
+    assert list(runs.glob("*.complete.json")) == []
+
+
 def test_junit_report_sanitizes_xml_attributes(tmp_path):
     log_path = tmp_path / "xml.jsonl"
+    secret = "supersecret-token"
     assertion_name = "check & < > \" ' \x01"
-    error_message = "failure & < > \" ' \ud800"
+    error_message = f"failure {secret} & < > \" ' \ud800"
     records = [
         {
             "event": "assert_result",
             "node": "check",
             "check": assertion_name,
-            "expected": None,
-            "actual": "value",
-            "passed": True,
+            "expected": secret,
+            "actual": f"value {secret}",
+            "passed": False,
         },
         {
             "event": "run_finished",
@@ -359,23 +489,31 @@ def test_junit_report_sanitizes_xml_attributes(tmp_path):
     result = RunResult(
         state="failed",
         end_outputs={},
-        asserts_passed=1,
-        asserts_failed=0,
+        asserts_passed=0,
+        asserts_failed=1,
         unhandled_errors=[],
         nodes_never_fired=[],
         duration_ms=1.0,
     )
 
-    report_path = cli_report.write_report("junit", log_path, "flows/xml", result)
+    report_path = cli_report.write_report(
+        "junit",
+        log_path,
+        "flows/xml",
+        result,
+        masker=SecretMasker(["*TOKEN*"], {"API_TOKEN": secret}),
+    )
 
     assert report_path is not None
     suite = ElementTree.parse(report_path).getroot()
     assert suite.findall("testcase")[0].get("name") == assertion_name.replace(
         "\x01", "\ufffd"
     )
+    assert suite.find("testcase/failure") is not None
     assert suite.find("testcase/error").get("message") == error_message.replace(
-        "\ud800", "\ufffd"
-    )
+        secret, "***"
+    ).replace("\ud800", "\ufffd")
+    assert secret not in report_path.read_text(encoding="utf-8")
 
 
 def test_junit_report_memory_does_not_scale_with_assertion_count(tmp_path):
@@ -421,7 +559,11 @@ def test_junit_report_memory_does_not_scale_with_assertion_count(tmp_path):
     tracemalloc.start()
     try:
         report_path = cli_report.write_report(
-            "junit", log_path, "flows/bounded", result
+            "junit",
+            log_path,
+            "flows/bounded",
+            result,
+            masker=SecretMasker([], {}),
         )
         _, peak = tracemalloc.get_traced_memory()
     finally:
@@ -471,7 +613,7 @@ nodes:
   - id: "show"
     type: "log"
     config:
-      label: "checkpoint"
+      label: "supersecret-token"
   - id: "end"
     type: "end"
     config:
@@ -484,8 +626,8 @@ edges:
 
 
 def test_log_events_echo_to_stderr_masked(tmp_path, monkeypatch):
-    # FR-512: log nodes are visible live on stderr, secrets masked at
-    # emission (the API_TOKEN value from dev.env is a *TOKEN* secret)
+    # FR-512/D35: raw history stays complete; the live terminal view masks
+    # the API_TOKEN value from dev.env.
     ws = make_workspace(tmp_path, flow_yaml=LOG_FLOW)
     (ws / "flows" / "logging").mkdir()
     (ws / "flows" / "hello" / "flow.yaml").rename(
@@ -494,8 +636,11 @@ def test_log_events_echo_to_stderr_masked(tmp_path, monkeypatch):
     monkeypatch.chdir(ws)
     result = runner.invoke(app, ["run", "flows/logging", "-i", "msg=supersecret-token"])
     assert result.exit_code == 0, result.stderr
-    assert "[info] checkpoint: ***" in result.stderr
+    assert "[info] ***: ***" in result.stderr
     assert "supersecret-token" not in result.stderr
+    records = jsonl_records(ws, "logging")
+    logged = next(record for record in records if record["event"] == "log")
+    assert logged["value"] == "supersecret-token"
 
 
 PARENT_FLOW = """\

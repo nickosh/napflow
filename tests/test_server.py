@@ -217,6 +217,126 @@ def test_run_smoke_flow_to_passed_with_replay(tmp_path):
     with_client(ws, scenario)
 
 
+def test_server_replay_preserves_raw_declared_secret_for_local_inspection(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    secret = "server-secret-token"
+    dev_env = ws.root / "envs" / "dev.env"
+    dev_env.write_text(
+        dev_env.read_text(encoding="utf-8") + f"\nAPI_TOKEN={secret}\n",
+        encoding="utf-8",
+    )
+    flow_dir = ws.root / "flows" / "secret"
+    flow_dir.mkdir()
+    (flow_dir / "flow.yaml").write_text(
+        """\
+schema: "napflow/v1"
+flow:
+  name: "secret"
+nodes:
+  - id: "start"
+    type: "start"
+    config:
+      ports:
+        - {name: "msg", type: "string", default: "{{ env.API_TOKEN }}"}
+  - id: "show"
+    type: "log"
+    config: {}
+  - id: "end"
+    type: "end"
+    config:
+      ports:
+        - {name: "result"}
+edges:
+  - {from: "start.msg", to: "show.in"}
+  - {from: "show.out", to: "end.result"}
+""",
+        encoding="utf-8",
+    )
+
+    async def scenario(client):
+        started = await start_run(client, "flows/secret")
+        status = await wait_finished(client, started["run_id"])
+        assert status["state"] == "passed"
+
+        log_path = ws.root / started["log"]
+        canonical = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+        ]
+        replay = await client.get(f"/api/runs/{started['run_id']}/events")
+        events = (await replay.json())["events"]
+
+        assert events == canonical
+        assert next(event for event in events if event["event"] == "log")[
+            "value"
+        ] == secret
+        assert events[-1]["end_outputs"] == {"result": secret}
+
+    with_client(ws, scenario)
+
+
+def test_server_sink_close_failure_still_finishes_lifecycle(
+    tmp_path, monkeypatch
+):
+    ws = make_scaffold_ws(tmp_path)
+
+    def fail_close(_self):
+        raise OSError("close failed")
+
+    monkeypatch.setattr(runs_module._LiveSink, "close", fail_close)
+
+    async def scenario(client):
+        started = await start_run(client, "flows/smoke")
+        status = await wait_finished(client, started["run_id"])
+        assert status["state"] == "passed"
+
+        log_path = ws.root / started["log"]
+        active = log_path.with_name(f"{started['run_id']}.active")
+        deadline = asyncio.get_running_loop().time() + 2
+        while active.exists() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+
+        assert not active.exists()
+        assert log_path.with_name(f"{started['run_id']}.incomplete").exists()
+        assert not log_path.with_name(f"{started['run_id']}.complete.json").exists()
+
+    with_client(ws, scenario)
+
+
+def test_server_fresh_cancellation_during_adapter_reclose_propagates_after_cleanup(
+    tmp_path, monkeypatch
+):
+    ws = make_scaffold_ws(tmp_path)
+    original_close = events_module.EventStream.close
+    close_calls = 0
+
+    def cancel_second_close(self):
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 2:
+            raise asyncio.CancelledError
+        return original_close(self)
+
+    monkeypatch.setattr(events_module.EventStream, "close", cancel_second_close)
+
+    async def scenario(client):
+        started = await start_run(client, "flows/smoke")
+        status = await wait_finished(client, started["run_id"])
+        assert status["state"] == "passed"
+
+        log_path = ws.root / started["log"]
+        active = log_path.with_name(f"{started['run_id']}.active")
+        deadline = asyncio.get_running_loop().time() + 2
+        while active.exists() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+
+        assert not active.exists()
+        assert log_path.with_name(f"{started['run_id']}.incomplete").exists()
+        assert not log_path.with_name(f"{started['run_id']}.complete.json").exists()
+
+    with_client(ws, scenario)
+
+
 def test_server_retention_runs_after_completion_and_evicts_registry(tmp_path):
     ws = make_retained_scaffold_ws(tmp_path)
 

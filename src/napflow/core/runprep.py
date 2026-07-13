@@ -7,6 +7,7 @@ outcome (exit codes there, HTTP statuses here).
 """
 
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -140,6 +141,7 @@ class OpenedRun:
     run_id: str
     log_path: Path
     stream: EventStream
+    masker: SecretMasker
     history_unit: RunHistoryUnit
     history_limit: int
 
@@ -153,13 +155,18 @@ def finalize_run_history(opened: OpenedRun, *, completed: bool) -> list[Path]:
 
 
 def open_run_stream(
-    workspace: Workspace, prepared: PreparedRun, *, extra_sinks: Iterable[Any] = ()
+    workspace: Workspace,
+    prepared: PreparedRun,
+    *,
+    extra_sinks: Iterable[Any] = (),
+    presentation_sinks: Iterable[Any] = (),
 ) -> OpenedRun:
-    """Open JSONL + active lifecycle marker + masker wiring.
+    """Open JSONL + active lifecycle marker + redaction wiring.
 
     Retention runs only through ``finalize_run_history`` after execution and
-    adapter-owned reports have finished. Extra sinks receive the same
-    born-masked records (D13).
+    adapter-owned reports have finished. Extra sinks receive the same raw
+    canonical records as JSONL (D13); presentation sinks receive a separate
+    declared-secret redacted view (D35).
     """
     manifest = workspace.manifest.model
     run_id = new_run_id()
@@ -168,18 +175,23 @@ def open_run_stream(
     try:
         history_unit = begin_run_history(log_path, run_id)
     except BaseException:
-        jsonl.close()
-        log_path.unlink(missing_ok=True)
+        with suppress(BaseException):
+            jsonl.close()
+        with suppress(OSError):
+            log_path.unlink(missing_ok=True)
         raise
+    masker = SecretMasker(manifest.environments.secrets, prepared.env)
     stream = EventStream(
         run_id,
-        SecretMasker(manifest.environments.secrets, prepared.env),
+        masker,
         [jsonl, *extra_sinks],
+        presentation_sinks=presentation_sinks,
     )
     return OpenedRun(
         run_id=run_id,
         log_path=log_path,
         stream=stream,
+        masker=masker,
         history_unit=history_unit,
         history_limit=manifest.defaults.run.history,
     )

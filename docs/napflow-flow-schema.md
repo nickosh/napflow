@@ -385,11 +385,16 @@ as everywhere else.
 - Edits: last-write-wins; UI watches the filesystem and reloads/prompts
   on external change.
 - Run history: JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`,
-  append-only, identical objects to the live WebSocket stream, secrets
-  masked. Request/response events carry **full detail**: URL, method,
-  negotiated HTTP version, request & response headers, bodies, status,
-  timing breakdown (DNS/connect/TLS/TTFB/total where niquests exposes it),
-  retries attempted. Replay-on-canvas = re-reading the file.
+  append-only, private/raw, and identical to the local live WebSocket stream.
+  Privacy means forced `0700` directories/`0600` files on POSIX and a
+  protected Owner Rights/SYSTEM/Administrators DACL on Windows; an existing
+  run directory must match the current token owner/user SID before migration.
+  Terminal and JSON/JUnit reports apply D35's schema-aware declared-secret
+  view; dictionary keys and protocol structure never change. The M4 target is
+  full prepared-request/response detail (URL/query, effective headers/cookies,
+  bodies, status, timing, retries); the current request event remains a
+  pre-transport preview and response capture still has v0.1 valves (EC32/EC50).
+  Replay-on-canvas = re-reading the file.
 - Platforms: macOS, Windows, and Linux from day one (D26; pathlib
   discipline, no shell-isms); all three in the CI matrix.
 
@@ -482,7 +487,7 @@ whether further iterations are *scheduled*; failed iterations land on
 `errors` and count toward the run state regardless of mode.
 
 ## Scoping rules
-Env profiles, `defaults.request`, secret masking = global.
+Env profiles, `defaults.request`, declared-secret presentation policy = global.
 Set/Get variables, `{{ inputs.* }}`, `{{ nodes.* }}`, node IDs =
 flow-scoped; data crosses flow boundaries only via Start/End ports.
 Run builtins `run.id`, `run.timestamp`, `run.env_name` span the whole run.
@@ -546,8 +551,8 @@ never an internal engine error (EC48).
 2026-06-11:
 - `run.*` builtins finalized: `run.id`, `run.timestamp`, `run.env_name`.
 - `merge mode: collect` is count-based in v1 (marker-based → roadmap).
-- `log` payloads ARE persisted into JSONL run history (masked) —
-  consistent with full-capture philosophy.
+- `log` payloads ARE persisted into private raw JSONL run history; CLI/report
+  presentation is separately redacted — consistent with D34/D35.
 
 2026-06-14 → 2026-07-02 (edge-case review; see `EDGE_CASES.md`):
 - D18 required End ports, D19 guard outputs, D21 flow `error` port +

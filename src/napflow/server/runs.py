@@ -185,14 +185,24 @@ class RunManager:
                 workspace_root=workspace.root,
                 workspace_resolver=workspace.resolver,
             )
-        except BaseException:
-            opened.stream.close()
+        except BaseException as setup_error:
+            close_control_error = None
+            try:
+                opened.stream.close()
+            except BaseException as error:
+                logger.exception(
+                    "run %s event stream close failed during setup", opened.run_id
+                )
+                if not isinstance(error, Exception) and error is not setup_error:
+                    close_control_error = error
             try:
                 finalize_run_history(opened, completed=False)
             except Exception:
                 logger.exception(
                     "run %s history abandonment failed", opened.run_id
                 )
+            if close_control_error is not None:
+                raise close_control_error from None
             raise
         run = ActiveRun(
             run_id=opened.run_id,
@@ -210,26 +220,44 @@ class RunManager:
 
     async def _drive(self, run: ActiveRun, opened: OpenedRun) -> None:
         completed = False
+        active_control_error: BaseException | None = None
         try:
             assert run.flow_run is not None
             result = await run.flow_run.execute()
             run.result = FinishedSummary.from_result(result)
             completed = True
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as error:
+            active_control_error = error
             run.crashed = "CancelledError: server run task cancelled"
             raise
         except Exception as e:  # engine bug — the server must survive it
             run.crashed = f"{type(e).__name__}: {e}"[:1024]
             logger.exception("run %s crashed", run.run_id)
+        except BaseException as error:
+            active_control_error = error
+            raise
         finally:
-            opened.stream.close()
+            stream_closed = True
+            close_control_error = None
+            try:
+                opened.stream.close()
+            except BaseException as error:
+                stream_closed = False
+                logger.exception("run %s event stream close failed", run.run_id)
+                if (
+                    not isinstance(error, Exception)
+                    and error is not active_control_error
+                ):
+                    close_control_error = error
             # The engine owns inputs, caches, outputs and diagnostic detail;
             # the durable log owns history once execution stops.
             run.flow_run = None
             for subscriber in run.subscribers:
                 subscriber.offer(SUBSCRIBER_END)
             try:
-                deleted = finalize_run_history(opened, completed=completed)
+                deleted = finalize_run_history(
+                    opened, completed=completed and stream_closed
+                )
             except Exception:
                 logger.exception("run %s history finalization failed", run.run_id)
                 try:
@@ -242,6 +270,8 @@ class RunManager:
                 for log_path in deleted:
                     self._runs.pop(log_path.stem, None)
             self._trim()
+            if close_control_error is not None:
+                raise close_control_error
 
     def subscribe(self, run: ActiveRun) -> tuple[int, RunSubscriber]:
         """Register at an exact durable-prefix boundary, without an await.

@@ -1,16 +1,18 @@
-"""Events + JSONL + masking (S2/M2): vocabulary per EN §7 (FR-702),
-JSONL sink + retention (FR-701), secrets masked at emission (FR-106,
-D22 — events are born masked)."""
+"""Events + JSONL + redacted views: canonical raw history (D35),
+schema-aware presentation redaction, vocabulary, and retention."""
 
 import json
 import os
 import re
+import stat
+from dataclasses import fields
 from datetime import UTC, datetime
 
 import pytest
 
 import napflow.core.events as events_module
 from napflow.core.events import (
+    EVENT_FIELD_POLICIES,
     EVENT_TYPES,
     HISTORY_FEATURE_CONTENT_BLOBS,
     HISTORY_FORMAT,
@@ -19,6 +21,7 @@ from napflow.core.events import (
     HISTORY_WRITE_FEATURES,
     MASK,
     AssertResult,
+    EventFieldPolicy,
     EventStream,
     FrameFinished,
     HistoryFormatError,
@@ -87,6 +90,72 @@ def test_vocabulary_is_exactly_en7():
         "frame_finished",
         "run_finished",
     }
+
+
+def test_event_field_policy_registry_is_exhaustive_and_marks_fidelity_gaps():
+    assert set(EVENT_FIELD_POLICIES) == set(EVENT_TYPES.values())
+    for event_type, policies in EVENT_FIELD_POLICIES.items():
+        declared = {item.name for item in fields(event_type)} - {"frame", "node"}
+        assert set(policies) == declared
+
+    assert (
+        EVENT_FIELD_POLICIES[EVENT_TYPES["request_started"]]["body_preview"]
+        is EventFieldPolicy.DERIVED_PREVIEW
+    )
+    assert (
+        EVENT_FIELD_POLICIES[EVENT_TYPES["message_emitted"]]["value_preview"]
+        is EventFieldPolicy.DERIVED_PREVIEW
+    )
+
+
+def test_event_field_policy_content_boundary_is_exact():
+    expected = {
+        "run_started": {"inputs": EventFieldPolicy.CONTENT_MAP_VALUES},
+        "request_started": {
+            "url": EventFieldPolicy.CONTENT,
+            "headers": EventFieldPolicy.CONTENT_MAP_VALUES,
+            "body_preview": EventFieldPolicy.DERIVED_PREVIEW,
+        },
+        "request_finished": {
+            "headers": EventFieldPolicy.CONTENT_MAP_VALUES,
+            "body": EventFieldPolicy.CONTENT,
+        },
+        "request_failed": {"message": EventFieldPolicy.CONTENT},
+        "message_emitted": {
+            "value_preview": EventFieldPolicy.DERIVED_PREVIEW
+        },
+        "assert_result": {
+            "check": EventFieldPolicy.CONTENT,
+            "expected": EventFieldPolicy.CONTENT,
+            "actual": EventFieldPolicy.CONTENT,
+        },
+        "python_error": {
+            "message": EventFieldPolicy.CONTENT,
+            "traceback": EventFieldPolicy.CONTENT,
+        },
+        "log": {
+            "label": EventFieldPolicy.CONTENT,
+            "value": EventFieldPolicy.CONTENT,
+        },
+        "frame_finished": {
+            "unhandled_errors": EventFieldPolicy.ERROR_MESSAGES,
+            "end_outputs": EventFieldPolicy.CONTENT_MAP_VALUES,
+        },
+        "run_finished": {
+            "unhandled_errors": EventFieldPolicy.ERROR_MESSAGES,
+            "end_outputs": EventFieldPolicy.CONTENT_MAP_VALUES,
+        },
+    }
+    actual = {
+        event_type.event: {
+            name: policy
+            for name, policy in policies.items()
+            if policy is not EventFieldPolicy.STRUCTURE
+        }
+        for event_type, policies in EVENT_FIELD_POLICIES.items()
+        if any(policy is not EventFieldPolicy.STRUCTURE for policy in policies.values())
+    }
+    assert actual == expected
 
 
 def test_common_fields_stamped_in_order():
@@ -248,7 +317,7 @@ def masker(**env):
     return SecretMasker(["*TOKEN*", "*_SECRET"], env)
 
 
-def test_masks_matching_values_everywhere():
+def test_masks_matching_values_without_rewriting_dictionary_keys():
     m = masker(API_TOKEN="s3cr3t-value", DB_SECRET="p4ssw0rd!")
     masked = m.mask(
         {
@@ -260,7 +329,7 @@ def test_masks_matching_values_everywhere():
     assert masked == {
         "url": f"https://api.test?token={MASK}",
         "nested": {"list": [MASK, 3, None]},
-        f"{MASK}-key": True,
+        "s3cr3t-value-key": True,
     }
 
 
@@ -277,20 +346,32 @@ def test_longer_secret_masked_before_its_substring():
     assert m.mask("x secret-extended y") == f"x {MASK} y"
 
 
-def test_events_born_masked():
+def test_canonical_events_stay_raw_and_presentation_sink_is_redacted():
     m = masker(API_TOKEN="s3cr3t-value")
-    sink = CaptureSink()
-    s = EventStream("r", m, [sink], FIXED_CLOCK)
+    canonical = CaptureSink()
+    presentation = CaptureSink()
+    s = EventStream(
+        "r",
+        m,
+        [canonical],
+        FIXED_CLOCK,
+        presentation_sinks=[presentation],
+    )
     record = s.emit(LogEvent(node="log1", value={"auth": "Bearer s3cr3t-value"}))
-    assert record["value"]["auth"] == f"Bearer {MASK}"
-    assert sink.records[0] == record  # the sink never saw the secret
+    assert record["value"]["auth"] == "Bearer s3cr3t-value"
+    assert canonical.records[0] == record
+    assert presentation.records[0]["value"]["auth"] == f"Bearer {MASK}"
+    assert record["value"]["auth"] == "Bearer s3cr3t-value"  # not mutated
 
 
 @pytest.mark.parametrize("secret", ["format", "features", HISTORY_FORMAT])
 def test_run_started_envelope_is_never_masked(secret):
     m = SecretMasker(["TOKEN"], {"TOKEN": secret})
-    sink = CaptureSink()
-    s = EventStream("r", m, [sink], FIXED_CLOCK)
+    raw = CaptureSink()
+    shown = CaptureSink()
+    s = EventStream(
+        "r", m, [raw], FIXED_CLOCK, presentation_sinks=[shown]
+    )
     record = s.emit(
         RunStarted(
             flow="flows/demo",
@@ -305,7 +386,77 @@ def test_run_started_envelope_is_never_masked(secret):
     assert record["seq"] == 1
     assert record["format"] == HISTORY_FORMAT
     assert record["features"] == []
-    assert record["inputs"]["value"] == MASK  # payload masking still applies
+    assert record["inputs"]["value"] == secret
+    assert raw.records[0] == record
+    assert shown.records[0]["format"] == HISTORY_FORMAT
+    assert shown.records[0]["features"] == []
+    assert shown.records[0]["inputs"]["value"] == MASK
+
+
+def test_record_redaction_preserves_protocol_values_and_error_shape():
+    m = SecretMasker(["TOKEN"], {"TOKEN": "error"})
+    raw = {
+        "event": "run_finished",
+        "run_id": "r",
+        "state": "error",
+        "asserts": {"passed": 0, "failed": 0},
+        "unhandled_errors": [
+            {
+                "frame": "f-0",
+                "node": "error",
+                "port": "error",
+                "kind": "error",
+                "message": "request returned error",
+            }
+        ],
+        "end_outputs": {"error": {"state": "error"}},
+        "nodes_never_fired": ["error"],
+        "error_reason": "error",
+    }
+
+    shown = m.redact_record(raw)
+
+    assert shown["state"] == "error"
+    assert shown["asserts"] == {"passed": 0, "failed": 0}
+    assert shown["error_reason"] == "error"
+    assert shown["nodes_never_fired"] == ["error"]
+    assert shown["unhandled_errors"][0] == {
+        "frame": "f-0",
+        "node": "error",
+        "port": "error",
+        "kind": "error",
+        "message": "request returned ***",
+    }
+    assert shown["end_outputs"] == {"error": {"state": MASK}}
+    assert raw["unhandled_errors"][0]["message"] == "request returned error"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"event": "future_event", "value": "s3cr3t-value"},
+        {"event": "log", "value": "s3cr3t-value", "future": "unknown"},
+    ],
+)
+def test_redacted_view_fails_closed_for_unclassified_events_and_fields(record):
+    with pytest.raises(HistoryFormatError, match="no redaction policy"):
+        masker(API_TOKEN="s3cr3t-value").redact_record(record)
+
+
+@pytest.mark.parametrize(
+    "unhandled_errors",
+    [
+        "not-an-array",
+        [{"kind": "error", "message": "s3cr3t-value", "detail": "unknown"}],
+    ],
+)
+def test_redacted_view_fails_closed_for_unclassified_error_shapes(
+    unhandled_errors,
+):
+    with pytest.raises(HistoryFormatError, match="unhandled_errors"):
+        masker(API_TOKEN="s3cr3t-value").redact_record(
+            {"event": "run_finished", "unhandled_errors": unhandled_errors}
+        )
 
 
 def test_run_started_feature_names_are_never_masked():
@@ -400,6 +551,189 @@ def test_sink_never_overwrites(tmp_path):
     JsonlSink(path).close()
     with pytest.raises(FileExistsError):
         JsonlSink(path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+@pytest.mark.parametrize("requested_umask", [0, 0o777])
+def test_jsonl_and_run_directory_modes_ignore_umask(tmp_path, requested_umask):
+    path = tmp_path / "runs" / "nested" / "private" / "run.jsonl"
+    previous = os.umask(requested_umask)
+    try:
+        JsonlSink(path).close()
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_sink_rejects_existing_run_directory_not_owned_by_current_user(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "runs" / "run.jsonl"
+    path.parent.mkdir()
+    monkeypatch.setattr(
+        events_module, "_path_owned_by_current_user", lambda _path: False
+    )
+
+    with pytest.raises(PermissionError, match="not owned by this user"):
+        JsonlSink(path)
+
+    assert not path.exists()
+
+
+def _windows_dacl(path):
+    """Return (protected, [(type, flags, mask, trustee SID), ...])."""
+    import ctypes
+    from ctypes import wintypes
+
+    class AclSizeInformation(ctypes.Structure):
+        _fields_ = [
+            ("ace_count", wintypes.DWORD),
+            ("acl_bytes_in_use", wintypes.DWORD),
+            ("acl_bytes_free", wintypes.DWORD),
+        ]
+
+    class AceHeader(ctypes.Structure):
+        _fields_ = [
+            ("ace_type", wintypes.BYTE),
+            ("ace_flags", wintypes.BYTE),
+            ("ace_size", wintypes.WORD),
+        ]
+
+    class AccessAllowedAce(ctypes.Structure):
+        _fields_ = [
+            ("header", AceHeader),
+            ("mask", wintypes.DWORD),
+            ("sid_start", wintypes.DWORD),
+        ]
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    void_pointer = ctypes.c_void_p
+    dacl_security_information = 0x00000004
+
+    advapi.GetNamedSecurityInfoW.argtypes = (
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+        ctypes.POINTER(void_pointer),
+    )
+    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.GetSecurityDescriptorControl.argtypes = (
+        void_pointer,
+        ctypes.POINTER(wintypes.WORD),
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    advapi.GetSecurityDescriptorControl.restype = wintypes.BOOL
+    advapi.GetAclInformation.argtypes = (
+        void_pointer,
+        void_pointer,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    )
+    advapi.GetAclInformation.restype = wintypes.BOOL
+    advapi.GetAce.argtypes = (
+        void_pointer,
+        wintypes.DWORD,
+        ctypes.POINTER(void_pointer),
+    )
+    advapi.GetAce.restype = wintypes.BOOL
+    advapi.ConvertSidToStringSidW.argtypes = (
+        void_pointer,
+        ctypes.POINTER(wintypes.LPWSTR),
+    )
+    advapi.ConvertSidToStringSidW.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = (void_pointer,)
+    kernel32.LocalFree.restype = void_pointer
+
+    dacl = void_pointer()
+    descriptor = void_pointer()
+    result = advapi.GetNamedSecurityInfoW(
+        ctypes.c_wchar_p(os.fspath(path)),
+        1,
+        dacl_security_information,
+        None,
+        None,
+        ctypes.byref(dacl),
+        None,
+        ctypes.byref(descriptor),
+    )
+    if result:
+        raise ctypes.WinError(result)
+    try:
+        control = wintypes.WORD()
+        revision = wintypes.DWORD()
+        if not advapi.GetSecurityDescriptorControl(
+            descriptor, ctypes.byref(control), ctypes.byref(revision)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        size = AclSizeInformation()
+        if not advapi.GetAclInformation(
+            dacl, ctypes.byref(size), ctypes.sizeof(size), 2
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        aces = []
+        for index in range(size.ace_count):
+            ace_pointer = void_pointer()
+            if not advapi.GetAce(dacl, index, ctypes.byref(ace_pointer)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            ace = ctypes.cast(
+                ace_pointer, ctypes.POINTER(AccessAllowedAce)
+            ).contents
+            sid_pointer = void_pointer(
+                ace_pointer.value + AccessAllowedAce.sid_start.offset
+            )
+            sid_text = wintypes.LPWSTR()
+            if not advapi.ConvertSidToStringSidW(
+                sid_pointer, ctypes.byref(sid_text)
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                aces.append(
+                    (
+                        ace.header.ace_type,
+                        ace.header.ace_flags,
+                        ace.mask,
+                        sid_text.value,
+                    )
+                )
+            finally:
+                kernel32.LocalFree(ctypes.cast(sid_text, void_pointer))
+        return bool(control.value & 0x1000), aces
+    finally:
+        if descriptor.value:
+            kernel32.LocalFree(descriptor)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows DACL contract")
+def test_jsonl_and_run_directory_use_protected_owner_dacl(tmp_path):
+    path = tmp_path / "runs" / "nested" / "private" / "run.jsonl"
+    sink = JsonlSink(path)
+    sink.write({"secret": "raw-local-truth"})
+    sink.close()
+    second_path = path.with_name("second.jsonl")
+    JsonlSink(second_path).close()  # validates existing-directory ownership
+
+    assert "raw-local-truth" in path.read_text(encoding="utf-8")
+    expected_sids = {"S-1-3-4", "S-1-5-18", "S-1-5-32-544"}
+    for secured_path, inheritance_flags in (
+        (path.parent, 0x03),
+        (path, 0x00),
+        (second_path, 0x00),
+    ):
+        protected, aces = _windows_dacl(secured_path)
+        assert protected
+        assert len(aces) == 3
+        assert {ace[3] for ace in aces} == expected_sids
+        assert all(ace[0] == 0 for ace in aces)  # ACCESS_ALLOWED_ACE_TYPE
+        assert all(ace[1] == inheritance_flags for ace in aces)
+        assert all(ace[2] == 0x001F01FF for ace in aces)  # FILE_ALL_ACCESS
 
 
 def test_run_log_path_uses_workspace_boundary(tmp_path):
@@ -700,11 +1034,17 @@ def test_retention_never_resumes_tombstone_over_active_unit(tmp_path):
 
 
 def test_stream_close_closes_sinks():
-    s, sink = stream()
+    sink = CaptureSink()
+    presentation = CaptureSink()
+    s = EventStream(
+        "r", NO_SECRETS, [sink], FIXED_CLOCK, presentation_sinks=[presentation]
+    )
     s.close()
     s.close()
     assert sink.closed
     assert sink.close_calls == 1
+    assert presentation.closed
+    assert presentation.close_calls == 1
 
 
 def test_stream_close_attempts_every_sink_before_reporting_failure():
@@ -719,6 +1059,10 @@ def test_stream_close_attempts_every_sink_before_reporting_failure():
 
     with pytest.raises(OSError, match="close failed"):
         s.close()
+    with pytest.raises(OSError, match="close failed"):
+        s.close()
 
     assert broken.closed
+    assert broken.close_calls == 1
     assert healthy.closed
+    assert healthy.close_calls == 1

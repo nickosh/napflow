@@ -30,6 +30,7 @@ import json
 import re
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -430,7 +431,13 @@ class FlowRun:
             try:
                 await self._wait_for_cleanup()
             finally:
-                self._stream.close()
+                # Closing is still run-owned and every sink is attempted, but
+                # a sink failure must not replace a completed RunResult or an
+                # in-flight cancellation. EventStream remembers the failure;
+                # adapters observe it on their idempotent close and abandon
+                # the durable history unit instead of publishing it complete.
+                with suppress(Exception):
+                    self._stream.close()
 
     async def _wait_for_cleanup(self) -> None:
         """Await the single cleanup task without letting caller cancellation
@@ -891,7 +898,7 @@ class FlowRun:
                     )
                 return [("value", frame.variables[name])]
             case LogNode():
-                self._stream.emit(  # masked at emission (D13/D22)
+                self._stream.emit(  # raw canonical + redacted presentation (D35)
                     LogEvent(
                         frame=frame.id,
                         node=node.id,

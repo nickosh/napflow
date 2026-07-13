@@ -123,7 +123,7 @@ def _fail(message: str) -> None:
 
 class _LogEcho:
     """Live `log` events → stderr (FR-512: log nodes and worker
-    stdout/stderr are visible as they happen, already masked)."""
+    stdout/stderr are visible as they happen through a redacted view)."""
 
     def write(self, record: dict) -> None:
         if record.get("event") != "log":
@@ -149,6 +149,24 @@ def _finalize_history_safely(opened: OpenedRun, *, completed: bool) -> None:
             f"warning: run history finalization failed for {opened.run_id}: {error}",
             err=True,
         )
+
+
+def _close_stream_safely(
+    opened: OpenedRun, *, active_control_error: BaseException | None = None
+) -> bool:
+    """Close every sink without replacing the run outcome or skipping history."""
+    try:
+        opened.stream.close()
+    except BaseException as error:
+        if not isinstance(error, Exception) and error is not active_control_error:
+            raise
+        message = opened.masker.mask_text(str(error))
+        typer.echo(
+            f"warning: run stream close failed for {opened.run_id}: {message}",
+            err=True,
+        )
+        return False
+    return True
 
 
 def _parse_inputs(pairs: list[str] | None, input_json: str | None) -> dict:
@@ -219,7 +237,7 @@ def run(
     identity = prepared.identity
 
     try:
-        opened = open_run_stream(ws, prepared, extra_sinks=[_LogEcho()])
+        opened = open_run_stream(ws, prepared, presentation_sinks=[_LogEcho()])
     except WorkspaceBoundaryError as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(2) from e
@@ -239,9 +257,16 @@ def run(
             workspace_root=ws.root,
             workspace_resolver=ws.resolver,
         )
-    except BaseException:
-        stream.close()
-        _finalize_history_safely(opened, completed=False)
+    except BaseException as error:
+        try:
+            _close_stream_safely(
+                opened,
+                active_control_error=(
+                    error if not isinstance(error, Exception) else None
+                ),
+            )
+        finally:
+            _finalize_history_safely(opened, completed=False)
         raise
 
     async def _execute():
@@ -259,17 +284,33 @@ def run(
 
     try:
         result = asyncio.run(_execute())
+    except KeyboardInterrupt as error:
+        try:
+            _close_stream_safely(opened, active_control_error=error)
+        finally:
+            _finalize_history_safely(opened, completed=False)
+        typer.echo("aborted", err=True)
+        raise typer.Exit(130) from None
+    except BaseException as error:
+        try:
+            _close_stream_safely(
+                opened,
+                active_control_error=(
+                    error if not isinstance(error, Exception) else None
+                ),
+            )
+        finally:
+            _finalize_history_safely(opened, completed=False)
+        raise
+    try:
+        stream_closed = _close_stream_safely(opened)
     except KeyboardInterrupt:
-        stream.close()
         _finalize_history_safely(opened, completed=False)
         typer.echo("aborted", err=True)
         raise typer.Exit(130) from None
     except BaseException:
-        stream.close()
         _finalize_history_safely(opened, completed=False)
         raise
-    finally:
-        stream.close()
 
     tally = f"{result.asserts_passed} passed, {result.asserts_failed} failed"
     typer.echo(
@@ -277,22 +318,28 @@ def run(
     )
     for error in result.unhandled_errors:
         where = error.get("node") or "run"
-        typer.echo(f"  ! {where}: {error['kind']}: {error['message']}", err=True)
+        message = opened.masker.mask(error["message"])
+        typer.echo(f"  ! {where}: {error['kind']}: {message}", err=True)
     if result.nodes_never_fired:
         skipped = ", ".join(result.nodes_never_fired)
         typer.echo(f"  skipped (never fired): {skipped}", err=True)
     typer.echo(f"run log: {log_path}", err=True)
-    try:
-        report_path = write_report(
-            manifest.defaults.run.report,
-            log_path,
-            identity,
-            result,
-        )
-    except BaseException:
+    report_path = None
+    if stream_closed:
+        try:
+            report_path = write_report(
+                manifest.defaults.run.report,
+                log_path,
+                identity,
+                result,
+                masker=opened.masker,
+            )
+        except BaseException:
+            _finalize_history_safely(opened, completed=False)
+            raise
+        _finalize_history_safely(opened, completed=True)
+    else:
         _finalize_history_safely(opened, completed=False)
-        raise
-    _finalize_history_safely(opened, completed=True)
     if report_path is not None:
         typer.echo(f"report: {report_path}", err=True)
 

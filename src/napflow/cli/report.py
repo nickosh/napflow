@@ -2,9 +2,10 @@
 written next to the run's JSONL as `<run-id>.report.json` /
 `<run-id>.junit.xml` (pinned at S2/M5).
 
-Reports are built from the MASKED wire records (the same objects the
-JSONL holds), so declared secrets never leak into CI artifacts. The
-junit mapping: one testsuite per run; each `assert_result` is a
+Reports are explicit redacted views over the raw private JSONL: declared
+secrets are removed from schema-classified content values while canonical
+local truth and protocol structure remain exact. The junit mapping: one
+testsuite per run; each `assert_result` is a
 testcase (failures carry expected/actual); each unhandled error is an
 errored testcase — CI dashboards show exactly what the exit code says.
 """
@@ -19,18 +20,21 @@ from typing import Any, TextIO
 from xml.sax.saxutils import quoteattr
 
 from napflow.core.engine import RunResult
+from napflow.core.events import SecretMasker
 
 
-def _iter_records(log_path: Path) -> Iterator[dict[str, Any]]:
-    """Read one masked wire record at a time from a closed run log."""
+def _iter_records(
+    log_path: Path, masker: SecretMasker
+) -> Iterator[dict[str, Any]]:
+    """Read and redact one canonical record at a time from a closed log."""
     with log_path.open(encoding="utf-8") as log:
         for line in log:
             if line.strip():
-                yield json.loads(line)
+                yield masker.redact_record(json.loads(line))
 
 
 def _report_facts(
-    log_path: Path,
+    log_path: Path, masker: SecretMasker
 ) -> tuple[dict[str, Any], int, int]:
     """Return the final summary and bounded JUnit counters.
 
@@ -42,7 +46,7 @@ def _report_facts(
     finished: dict[str, Any] = {}
     assertions = 0
     failures = 0
-    for record in _iter_records(log_path):
+    for record in _iter_records(log_path, masker):
         event = record.get("event")
         if event == "assert_result":
             assertions += 1
@@ -59,10 +63,12 @@ def write_report(
     log_path: Path,
     flow_identity: str,
     result: RunResult,
+    *,
+    masker: SecretMasker,
 ) -> Path | None:
     if kind == "none":
         return None
-    finished, assertions, failures = _report_facts(log_path)
+    finished, assertions, failures = _report_facts(log_path, masker)
     directory = log_path.parent
     run_id = log_path.stem
     if kind == "json":
@@ -87,7 +93,7 @@ def write_report(
         finished,
         assertions=assertions,
         failures=failures,
-        records=_iter_records(log_path),
+        records=_iter_records(log_path, masker),
     )
     return path
 

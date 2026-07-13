@@ -294,11 +294,6 @@ def test_large_log_value_uses_typed_reference_without_changing_runtime(tmp_path)
 # TR-17 — redaction never rewrites protocol vocabulary (D35, EC45; owner: M4)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EC45/M4: substring masking hits schema/state text",
-)
 @pytest.mark.parametrize(
     ("secret_value", "record"),
     [
@@ -324,9 +319,9 @@ def test_large_log_value_uses_typed_reference_without_changing_runtime(tmp_path)
 def test_secret_value_does_not_corrupt_state_vocabulary(secret_value, record):
     """A declared secret whose VALUE happens to equal a protocol token
     ('passed', 'error') must not rewrite event state, schema keys, or enum
-    values. Today the substring masker replaces them wherever they appear."""
+    values in a redacted presentation view."""
     masker = SecretMasker(["TOKEN"], {"TOKEN": secret_value})
-    masked = masker.mask(record)
+    masked = masker.redact_record(record)
     assert masked == record  # protocol enums, names, and keys must all survive
 
 

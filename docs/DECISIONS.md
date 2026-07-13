@@ -226,7 +226,8 @@ masked**. stdout carries only the End-outputs JSON and is the
 functional output; `napf run flows/login | jq .token` is the documented
 contract, and masking it would break the pipe use case the CLI exists
 for. Pinned in the WM CLI section with a test
-(`test_stdout_unmasked_but_jsonl_masked`).
+(`test_stdout_and_private_jsonl_preserve_raw_local_truth` now covers the
+superseding D35 boundary).
 
 **Superseded for v0.2 by D35.** This remains the description of v0.1
 behavior, not the target policy. The review found that recursively
@@ -637,6 +638,14 @@ often leave the developer's machine); irreversible masking at event
 creation (destroys the only ground truth); encryption/key management in
 v0.2 (overengineering for a local-first developer tool).
 
+Implementation status (2026-07-13): the raw/private canonical JSONL and local
+WebSocket path plus schema-aware terminal/JSON/JUnit redaction are live. One
+exhaustive field-policy registry preserves dictionary keys and all structural
+values; unknown event fields fail closed in a redacted view. Raw history forces
+POSIX private modes independently of umask and a protected owner/SYSTEM/admin
+DACL on Windows. Export policy and blob-aware redacted bundle rewriting remain
+open M4 work, so FR-1104/TR-17 are not yet complete.
+
 ## D36 — One run lifecycle owns fairness, cancellation, resources, and frame release
 
 (2026-07-11, accepted v0.2 architecture after adversarial engine
@@ -650,8 +659,11 @@ these invariants:
 - The pump processes bounded batches and yields cooperatively; every
   batch checks abort and a monotonic deadline. Tight inline guard/merge
   cycles cannot starve the event loop or ignore the run deadline.
-- All engine-owned tasks, HTTP sessions, streams, and workers close in
-  `finally`, including external coroutine cancellation.
+- All engine-owned tasks, HTTP sessions, streams, and workers are driven
+  through `finally` cleanup, including external coroutine cancellation. Every
+  event sink is attempted; a remembered ordinary close error makes history
+  incomplete without replacing the execution outcome. Control-flow
+  exceptions still propagate after cleanup.
 - Worker timeout means immediate terminate, then grace, then hard kill;
   graceful EOF is normal-finalization behavior only. A timed-out worker
   must not overlap a replacement and commit late side effects.

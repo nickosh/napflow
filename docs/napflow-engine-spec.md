@@ -14,6 +14,9 @@ formats are experimental during package v0.x. The accepted v0.2 redesign
 (fair lifecycle, full-fidelity blob-backed history, raw local truth plus
 redacted exports, bounded/lazy replay) is sequenced in `PLAN.md` and must
 be folded into this spec in the same PRs that implement it.
+Amended 2026-07-13 for v0.2/M4: the content-store codec foundation and
+exhaustive raw/redacted event-field seam are implemented; blob feature
+activation, prepared requests, exports, and lazy replay remain sequenced below.
 
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
@@ -149,7 +152,18 @@ The run stays protected by its private active-history marker until that
 adapter step finishes; only then is it published complete and whole-unit
 retention applied. A failed/interrupted adapter closeout publishes an
 incomplete marker instead, so retention never guesses that the unit is safe
-to delete. Server REST/WebSocket readers publish filesystem-visible,
+to delete. Event-stream close attempts every sink and remembers the first
+failure; engine cleanup contains an ordinary `Exception` so it cannot replace
+a completed run result. Control-flow `BaseException`s still propagate after
+cleanup. CLI/server adapters observe an ordinary failure on their idempotent
+close, remove the active marker, publish `.incomplete`, and never publish the
+unit complete. The CLI also skips report generation while preserving its
+result/exit/stdout contract; server finished status preserves the result.
+A fresh control-flow exception during the adapter reclose is delayed only long
+enough to abandon the history unit, then re-raised (CLI `KeyboardInterrupt` is
+mapped to exit 130).
+Server
+REST/WebSocket readers publish filesystem-visible,
 cross-process reader leases; directory-locked retention skips those units, so
 a newer server or CLI completion cannot remove an older run while it is being
 replayed or caught up.
@@ -461,7 +475,8 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
 - **set/get** — frame variable map; set forwards written value.
 - **fixture** — file read at first fire, cached per run; json/csv
   (csv → list of dicts, header row required).
-- **log** — emits `LogEvent` (masked); forwards unchanged.
+- **log** — emits a raw canonical `LogEvent`; forwards unchanged. CLI
+  presentation uses the D35 redacted view.
 - Pins made at S3/M5 (2026-07-06, hierarchical frames — engine
   `_run_flow_node` / `_run_loop` / `_spawn_frame`):
   - **Frame completion**: one pump, one budget, one run-level
@@ -547,7 +562,8 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     apply as usual, and the seed keeps `in_flight` non-zero so EC08
     cannot finalize a fixture-driven flow early.
   - **log in the CLI**: `napf run` echoes `log` events live to stderr
-    (`[level] label: value`, already masked) — log nodes and worker
+    (`[level] label: value`, schema-aware declared-secret redaction) — log
+    nodes and worker
     stdout/stderr are visible as the run executes, not just in the
     JSONL.
 
@@ -736,17 +752,17 @@ One JSON object per line/frame. Common fields:
 `{event, run_id, frame, node, ts, seq}`. Types:
 
 ```
-run_started      {format, features, flow, env_name, inputs(masked), engine_version}
+run_started      {format, features, flow, env_name, inputs, engine_version}
 node_fired       {firing_no}
-request_started  {method, url, headers(masked), body_preview, attempt}
-request_finished {status, http_version, headers(masked), body, size_bytes,
+request_started  {method, url, headers, body_preview, attempt}
+request_finished {status, http_version, headers, body, size_bytes,
                   timing: {dns_ms?, connect_ms?, tls_ms?, ttfb_ms, total_ms},
                   attempt, retries_total}
 request_failed   {error_kind, message, attempt, will_retry}
 message_emitted  {from_port, to_node, to_port, msg_id, value_preview}
 assert_result    {check, op, expected, actual, passed}
 python_error     {function, error_type, message, traceback}
-log              {label, level, value(masked)}
+log              {label, level, value}
 guard_tripped    {kind: counter|timeout, port: exhausted|expired}
 budget_warning   {remaining}            # at 10% left
 capture_warning  {remaining_mb}         # run capture budget at 10% left
@@ -754,7 +770,7 @@ frame_finished   {parent_frame, parent_node, flow, kind: flow|loop,
                   loop_index, duration_ms, state,
                   asserts: {passed, failed}, unhandled_errors, end_outputs}
 run_finished     {state, duration_ms, asserts: {passed, failed},
-                  unhandled_errors, end_outputs(masked),
+                  unhandled_errors, end_outputs,
                   nodes_never_fired: [node_ids],   # "skipped" for UI/report
                   error_reason?}                   # when state=error:
                                                    # budget_exhausted |
@@ -763,33 +779,35 @@ run_finished     {state, duration_ms, asserts: {passed, failed},
 
 Rules:
 
-> **Known v0.1 gaps, reopened for v0.2:** the implementation does not
-> fully satisfy the next two bullets. Capture can be bypassed through
-> Log/message/End output paths and can keep writing prefixes after its
-> run budget (EC32); request history is a pre-transport preview rather
-> than the final prepared request (EC50); recursive masking can rewrite
-> protocol keys/state (EC45). D34/D35 + PLAN M4 are the accepted target.
+> **Known v0.1 capture gaps, reopened for v0.2:** capture can be bypassed
+> through Log/message/End output paths and can keep writing prefixes after
+> its run budget (EC32); request history is a pre-transport preview rather
+> than the final prepared request (EC50). D34 + PLAN M4 are the accepted
+> target. EC45's raw/redacted boundary has landed, while export remains open.
 
-- **Masking (D22)**: secrets are masked in event payloads at emission.
-  The structural envelope (`event`, run/frame/node identity, `ts`, `seq`,
-  and history `format`/`features`) is never rewritten. The *values* of env vars
-  matching `environments.secrets` (active profile + process env) are
-  replaced wherever they appear inside payload fields, via substring scan
-  with a 5-char minimum length. Only declared secrets are masked — tokens
-  acquired at runtime (e.g. in a login response body) are stored in full;
-  history shareability (D13) is scoped to declared secrets. D35/M4 still
-  replaces this destructive payload masking with raw-local/redacted-view
-  behavior.
-- `value_preview` truncates large bodies in stream events, but
-  `request_started`/`request_finished` store **complete request and
-  response bodies** in JSONL — full wire detail always. A disk-protection
-  ceiling (`defaults.run.body_capture_mb`, default 10) caps pathological
-  payloads only, marking `truncated: true` when hit. A run-level ceiling
-  (`defaults.run.run_capture_mb`, default 500) additionally caps total
-  captured body bytes per run — a big loop against a fat endpoint must
-  not write gigabytes of JSONL; once exceeded, further bodies are
-  truncated with the same marker (`capture_warning` fires at 10%
-  remaining) (EC32).
+- **Raw local truth + redacted presentation (D35)**: `EventStream` stamps one
+  raw canonical record and sends it unchanged to JSONL and the local
+  WebSocket. On POSIX, JSONL files force `0600` inside a `0700` per-flow run
+  directory even under permissive or fully restrictive umasks. On Windows,
+  the run directory and JSONL file use a protected DACL granting full access
+  only to Owner Rights, SYSTEM, and Administrators; directory ACEs inherit to
+  children. An existing run directory is migrated only after its owner SID
+  matches the current token owner/user SID. Terminal
+  stderr receives a separate declared-secret redacted projection; JSON/JUnit
+  reports apply the same redactor while streaming the closed raw JSONL.
+  Functional End-output stdout remains raw. Secret NAME globs match
+  case-sensitively and matching values of
+  at least five characters are replaced longest-first with `***` only inside
+  schema-classified content values. Dictionary keys, event/field names,
+  identifiers, enums, state/error vocabulary, control metadata, and error
+  record structure are never rewritten. Unknown fields fail closed when a
+  redacted view is requested. Runtime-acquired tokens remain EC10.
+- `message_emitted.value_preview` and `request_started.body_preview` are
+  explicitly classified as **derived previews**, not full-fidelity content;
+  both must be replaced by the full message/prepared-request contract before
+  `content-blobs/1` activates. `request_finished.body` still uses the v0.1
+  body/run capture ceilings and truncated marker. Those destructive valves
+  remain EC32 work and are not represented as D34-complete storage.
 - Timing fields included where niquests exposes them, else omitted.
 - On abort, an in-flight request leaves a `request_started` with no
   matching `request_finished`; replay tolerates a dangling start (EC20).
@@ -815,11 +833,18 @@ Pins made at S2/M2 (2026-07-05, `core/events.py`):
   required nullable fields (run_started `env_name`) appear as null.
 - **JSONL profile**: compact separators, `ensure_ascii=False`, UTF-8,
   LF; every line flushed as written (abort leaves a replayable prefix).
-- **Masking**: token is `***`; secret NAME globs match case-sensitively
-  (`fnmatchcase`); values replaced longest-first (a secret embedded in
-  a longer secret masks fully); payload dict keys are scanned too. M0's
-  history marker made the common envelope structurally immutable; D35/M4
-  removes key/control-field rewriting from payload redaction as well.
+  Since v0.2/M4 the file is created exclusive/private from its first write:
+  POSIX forces `0600` after exclusive open and creates each missing directory
+  component as `0700` before descending; Windows validates ownership and
+  applies the protected DACL above to the directory and file before content is
+  written.
+- **Field policy + redaction (v0.2/M4)**: every event dataclass field is
+  exhaustively classified as structure, complete content, keyed content,
+  error-message content, or derived preview. Import fails if the registry and
+  vocabulary diverge. The same registry is the boundary for presentation
+  redaction now and content-store substitution later; values are replaced
+  longest-first, dictionary/map keys are always preserved, and only
+  `unhandled_errors[*].message` is redacted inside structural error records.
 
 ## 7a. Run-history format contract (v0.2 — FR-1101, D34)
 
@@ -828,12 +853,14 @@ storage, so every run written from M0 on is self-identifying and later
 readers can gate cleanly. The format-version marker landed in M0
 (`core/events.py`); the blob/index machinery it describes lands in
 M3–M5. M4's byte codec and immutable per-run store foundation live in
-`core/history_content.py`, but event integration is deliberately not active
-yet: a current `napflow-run/1` log still declares `features: []` and is a
-pure inline JSONL stream. The blob-reference and index shapes below remain
-reserved on the wire until the exhaustive schema-declared payload registry,
-redaction boundary, and shared JSONL/WebSocket encoding step activate them
-together.
+`core/history_content.py`; `core/events.py` now owns the exhaustive field
+policy and raw/redacted-view boundary. Event integration is deliberately not
+active yet: a current `napflow-run/1` log still declares `features: []` and is
+a pure inline JSONL stream. `request_started.body_preview` and
+`message_emitted.value_preview` remain registry-marked fidelity blockers. The
+blob-reference and index shapes below remain reserved on the wire until the
+prepared-request/full-message schemas, shared JSONL/WebSocket encoding, and
+lazy consumers activate together.
 
 **Envelope + version.** `run_started` is the envelope header: it is
 always `seq` 1 and carries `format: "napflow-run/<major>"`
@@ -873,6 +900,34 @@ It is not a readable completed history.
 event order. `seq` is a total order starting at 1; a consumer sorts and
 seeks by `seq`, never by `ts` (clocks are for display/scrubbing, not
 ordering). Replay is re-reading — never re-execution (D13).
+
+**Schema-declared field policy.** The common envelope plus every field not
+named below is structural and copied exactly. Content-map keys (input/End
+ports and header names) are structural; only their values are content.
+`unhandled_errors` keeps its record keys/IDs/kinds structural and classifies
+only each `message` as content. This registry is exhaustive against the event
+dataclasses and is the only legal dispatch surface for future persistence or
+current redaction:
+
+| Event | complete content | keyed content | derived preview |
+|---|---|---|---|
+| `run_started` | — | `inputs` values | — |
+| `request_started` | `url` | `headers` values | `body_preview` |
+| `request_finished` | `body` | `headers` values | — |
+| `request_failed` | `message` | — | — |
+| `message_emitted` | — | — | `value_preview` |
+| `assert_result` | `check`, `expected`, `actual` | — | — |
+| `python_error` | `message`, `traceback` | — | — |
+| `log` | `label`, `value` | — | — |
+| `frame_finished` | `unhandled_errors[*].message` | `end_outputs` values | — |
+| `run_finished` | `unhandled_errors[*].message` | `end_outputs` values | — |
+
+`node_fired`, `guard_tripped`, `budget_warning`, and `capture_warning` have
+no content fields. Methods, states, operators, error kinds/reasons,
+timing/retry data, and every identifier remain structural. The prepared
+request work may add fields only by updating this table/registry in the same
+change; derived previews cannot be passed to the content store as if they were
+complete observations.
 
 **Persisted-value envelope and collision rule.** Storage substitution is
 performed only at schema-declared payload fields (request/response body,
@@ -1137,7 +1192,8 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   one loopback Host on every request and a matching browser Origin on
   mutations/WebSockets (programmatic loopback clients may omit Origin).
   Remote/multi-user operation is out of scope.
-- **Secrets (v0.1 current)**: declared-secret masking at emission per
-  D22; runtime-acquired tokens are stored in full. D35 replaces this in
-  v0.2 with private raw local truth plus explicit redacted
-  presentation/report/export views that never rewrite protocol fields.
+- **Secrets (v0.2/M4 current)**: canonical local JSONL/WebSocket records are
+  raw; JSONL is created private and the loopback UI is a trusted local
+  inspection surface. Declared-secret terminal/report views never rewrite
+  protocol fields or dictionary keys. Runtime-acquired tokens remain EC10;
+  redacted/raw export policy remains open M4 work under D35.
