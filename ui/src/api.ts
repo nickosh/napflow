@@ -317,8 +317,8 @@ export async function abortRun(runId: string): Promise<void> {
   await fetch(`/api/runs/${encodeURIComponent(runId)}/abort`, { method: "POST" });
 }
 
-/** Live tail: text frames are the JSONL lines verbatim (buffered
- * prefix, then stream; normal close after run_finished). */
+/** Live tail: text frames are the JSONL lines verbatim (durable disk prefix,
+ * then a bounded live queue; close 4410 asks the client to reconnect/resync). */
 export function openRunSocket(runId: string): WebSocket {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
   return new WebSocket(

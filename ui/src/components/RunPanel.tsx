@@ -223,7 +223,7 @@ export default function RunPanel() {
   // holds its pressed state; scrolling up auto-releases it, scrolling
   // back to the bottom (or pressing it) re-engages
   const [follow, setFollow] = useState(true);
-  const recordCount = runView?.records.length ?? 0;
+  const recordCount = runView?.recordCount ?? 0;
 
   // a fresh run (or replay) starts back at the tail
   useEffect(() => {
@@ -246,7 +246,10 @@ export default function RunPanel() {
       : selectedNode === null
         ? runView.records
         : runView.records.filter((r) => r.node === selectedNode);
-  const overflow = records.length - MAX_ROWS;
+  const overflow =
+    runView === null || selectedNode !== null
+      ? records.length - MAX_ROWS
+      : runView.recordCount - Math.min(records.length, MAX_ROWS);
   // M5.5: a selected wire/port swaps the stream for its message list
   const messages =
     runView === null || runSelection === null

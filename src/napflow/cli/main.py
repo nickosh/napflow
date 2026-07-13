@@ -18,13 +18,19 @@ from typing import Annotated
 import typer
 
 import napflow
-from napflow.cli.report import ListSink, write_report
+from napflow.cli.report import write_report
 from napflow.cli.scaffold import scaffold_workspace
 from napflow.core.checker import check_workspace
 from napflow.core.engine import FlowRun
 from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import EndNode, StartNode
-from napflow.core.runprep import RunPrepError, open_run_stream, prepare_run
+from napflow.core.runprep import (
+    OpenedRun,
+    RunPrepError,
+    finalize_run_history,
+    open_run_stream,
+    prepare_run,
+)
 from napflow.core.workspace import (
     Workspace,
     WorkspaceBoundaryError,
@@ -131,6 +137,20 @@ class _LogEcho:
         pass
 
 
+def _finalize_history_safely(opened: OpenedRun, *, completed: bool) -> None:
+    """History housekeeping must not replace the run's exit/result contract."""
+    try:
+        finalize_run_history(opened, completed=completed)
+    except Exception as error:
+        if completed:
+            with suppress(Exception):
+                finalize_run_history(opened, completed=False)
+        typer.echo(
+            f"warning: run history finalization failed for {opened.run_id}: {error}",
+            err=True,
+        )
+
+
 def _parse_inputs(pairs: list[str] | None, input_json: str | None) -> dict:
     """`-i` values arrive as strings (BIND coerces them against the
     port's type); `--input-json` carries structured values; `-i`
@@ -198,27 +218,31 @@ def run(
     manifest = ws.manifest.model
     identity = prepared.identity
 
-    collect = ListSink()
     try:
-        opened = open_run_stream(ws, prepared, extra_sinks=[collect, _LogEcho()])
+        opened = open_run_stream(ws, prepared, extra_sinks=[_LogEcho()])
     except WorkspaceBoundaryError as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(2) from e
-    run_id, log_path, stream = opened.run_id, opened.log_path, opened.stream
+    log_path, stream = opened.log_path, opened.stream
 
-    flow_run = FlowRun(
-        prepared.loaded.model,
-        flow_identity=identity,
-        manifest=manifest,
-        env=prepared.env,
-        env_name=prepared.env_name,
-        inputs=bound,
-        stream=stream,
-        run_timeout_s=timeout,
-        flow_dir=ws.resolver.flow_dir(identity),
-        workspace_root=ws.root,
-        workspace_resolver=ws.resolver,
-    )
+    try:
+        flow_run = FlowRun(
+            prepared.loaded.model,
+            flow_identity=identity,
+            manifest=manifest,
+            env=prepared.env,
+            env_name=prepared.env_name,
+            inputs=bound,
+            stream=stream,
+            run_timeout_s=timeout,
+            flow_dir=ws.resolver.flow_dir(identity),
+            workspace_root=ws.root,
+            workspace_resolver=ws.resolver,
+        )
+    except BaseException:
+        stream.close()
+        _finalize_history_safely(opened, completed=False)
+        raise
 
     async def _execute():
         loop = asyncio.get_running_loop()
@@ -236,8 +260,14 @@ def run(
     try:
         result = asyncio.run(_execute())
     except KeyboardInterrupt:
+        stream.close()
+        _finalize_history_safely(opened, completed=False)
         typer.echo("aborted", err=True)
         raise typer.Exit(130) from None
+    except BaseException:
+        stream.close()
+        _finalize_history_safely(opened, completed=False)
+        raise
     finally:
         stream.close()
 
@@ -252,14 +282,17 @@ def run(
         skipped = ", ".join(result.nodes_never_fired)
         typer.echo(f"  skipped (never fired): {skipped}", err=True)
     typer.echo(f"run log: {log_path}", err=True)
-    report_path = write_report(
-        manifest.defaults.run.report,
-        log_path.parent,
-        run_id,
-        identity,
-        result,
-        collect.records,
-    )
+    try:
+        report_path = write_report(
+            manifest.defaults.run.report,
+            log_path,
+            identity,
+            result,
+        )
+    except BaseException:
+        _finalize_history_safely(opened, completed=False)
+        raise
+    _finalize_history_safely(opened, completed=True)
     if report_path is not None:
         typer.echo(f"report: {report_path}", err=True)
 

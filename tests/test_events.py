@@ -3,11 +3,13 @@ JSONL sink + retention (FR-701), secrets masked at emission (FR-106,
 D22 — events are born masked)."""
 
 import json
+import os
 import re
 from datetime import UTC, datetime
 
 import pytest
 
+import napflow.core.events as events_module
 from napflow.core.events import (
     EVENT_TYPES,
     HISTORY_FEATURE_CONTENT_BLOBS,
@@ -26,11 +28,17 @@ from napflow.core.events import (
     RunFinished,
     RunStarted,
     SecretMasker,
+    abandon_run_history,
     apply_retention,
+    begin_run_history,
+    complete_run_history,
+    history_reader,
     is_supported,
+    last_jsonl_record,
     new_run_id,
     parse_history_features,
     parse_history_format,
+    run_history_sort_key,
     run_log_path,
 )
 from napflow.core.workspace import WorkspaceBoundaryError
@@ -346,6 +354,47 @@ def test_jsonl_roundtrip(tmp_path):
     assert lines[0] == json.dumps(records[0], ensure_ascii=False, separators=(",", ":"))
 
 
+def test_last_jsonl_record_handles_lines_larger_than_the_read_block(tmp_path):
+    path = tmp_path / "large.jsonl"
+    expected = {
+        "event": "run_finished",
+        "state": "passed",
+        "detail": "z" * 200_000,
+    }
+    path.write_bytes(
+        b'{"event":"run_started","seq":1}\n'
+        + json.dumps(expected, separators=(",", ":")).encode()
+        + b"\n"
+    )
+
+    assert last_jsonl_record(path) == expected
+
+
+def test_last_jsonl_record_skips_trailing_partial_and_non_object_lines(tmp_path):
+    path = tmp_path / "interrupted.jsonl"
+    expected = {"event": "request_started", "seq": 2}
+    path.write_bytes(
+        json.dumps(expected).encode()
+        + b"\n[1,2,3]\n\n"
+        + b'{"event":"request_finished","body":"'
+        + b"x" * 80_000
+    )
+
+    assert last_jsonl_record(path) == expected
+
+
+def test_last_jsonl_record_tolerates_missing_empty_and_unterminated_files(tmp_path):
+    path = tmp_path / "record.jsonl"
+    assert last_jsonl_record(path) is None
+
+    path.touch()
+    assert last_jsonl_record(path) is None
+
+    expected = {"event": "run_finished", "state": "aborted"}
+    path.write_text(json.dumps(expected), encoding="utf-8")
+    assert last_jsonl_record(path) == expected
+
+
 def test_sink_never_overwrites(tmp_path):
     path = run_log_path(tmp_path, "flows/demo", "20260712-120000-abcdef")
     JsonlSink(path).close()
@@ -360,11 +409,11 @@ def test_run_log_path_uses_workspace_boundary(tmp_path):
         run_log_path(tmp_path, "flows/demo", "../outside")
 
 
-def test_run_id_format_and_sortability():
+def test_run_id_format_and_timestamp_prefix_sorting():
     assert re.fullmatch(r"\d{8}-\d{6}-[0-9a-f]{6}", new_run_id())
     older = new_run_id(datetime(2026, 7, 5, 9, 0, 0, tzinfo=UTC))
     newer = new_run_id(datetime(2026, 7, 5, 10, 0, 0, tzinfo=UTC))
-    assert older < newer  # lexicographic == chronological
+    assert older < newer  # distinct UTC seconds retain filename order
 
 
 def test_retention_keeps_newest(tmp_path):
@@ -372,18 +421,282 @@ def test_retention_keeps_newest(tmp_path):
     runs.mkdir()
     ids = [new_run_id(datetime(2026, 7, 5, 9, m, 0, tzinfo=UTC)) for m in range(5)]
     for run_id in ids:
-        (runs / f"{run_id}.jsonl").touch()
+        _write_finished_log(runs / f"{run_id}.jsonl", run_id)
     deleted = apply_retention(runs, history=3)
     assert sorted(p.name for p in deleted) == [f"{i}.jsonl" for i in ids[:2]]
-    assert sorted(p.name for p in runs.iterdir()) == [f"{i}.jsonl" for i in ids[2:]]
+    assert sorted(p.name for p in runs.glob("*.jsonl")) == [
+        f"{i}.jsonl" for i in ids[2:]
+    ]
 
 
 def test_retention_under_cap_deletes_nothing(tmp_path):
     runs = tmp_path / "runs"
     runs.mkdir()
-    (runs / f"{new_run_id()}.jsonl").touch()
+    run_id = new_run_id()
+    _write_finished_log(runs / f"{run_id}.jsonl", run_id)
     assert apply_retention(runs, history=20) == []
-    assert len(list(runs.iterdir())) == 1
+    assert list(runs.glob("*.jsonl")) == [runs / f"{run_id}.jsonl"]
+
+
+def _write_finished_log(path, run_id, *, state="passed"):
+    path.write_text(
+        json.dumps({"event": "run_finished", "run_id": run_id, "state": state})
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_retention_protects_active_and_incomplete_units(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    kept_id = "20260712-100000-000001"
+    active_id = "20260712-100000-000002"
+    incomplete_id = "20260712-100000-000003"
+    kept = runs / f"{kept_id}.jsonl"
+    active = runs / f"{active_id}.jsonl"
+    incomplete = runs / f"{incomplete_id}.jsonl"
+    for path, run_id in (
+        (kept, kept_id),
+        (active, active_id),
+        (incomplete, incomplete_id),
+    ):
+        _write_finished_log(path, run_id)
+    (runs / f"{active_id}.active").touch()
+    (runs / f"{incomplete_id}.incomplete").touch()
+
+    assert apply_retention(runs, history=1) == []
+    assert kept.exists()
+    assert active.exists()
+    assert incomplete.exists()
+
+
+def test_retention_requires_matching_canonical_completion_despite_metadata(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    incomplete_id = "20260712-100000-000001"
+    mismatched_id = "20260712-100000-000002"
+    complete_id = "20260712-100000-000003"
+    incomplete = runs / f"{incomplete_id}.jsonl"
+    mismatched = runs / f"{mismatched_id}.jsonl"
+    complete = runs / f"{complete_id}.jsonl"
+    incomplete.write_text('{"event":"run_started"}\n', encoding="utf-8")
+    _write_finished_log(mismatched, complete_id)
+    _write_finished_log(complete, complete_id)
+    for order, log in enumerate((incomplete, mismatched, complete), start=1):
+        (runs / f"{log.stem}.complete.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "run_id": log.stem,
+                    "started_ns": order,
+                    "completed_ns": order,
+                    "order": order,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    assert apply_retention(runs, history=1) == []
+    assert incomplete.exists()
+    assert mismatched.exists()
+    assert complete.exists()
+
+
+def test_retention_removes_exact_whole_unit_without_following_symlinks(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    old_id = "20260712-100000-000001"
+    new_id = "20260712-100000-000002"
+    old = runs / f"{old_id}.jsonl"
+    new = runs / f"{new_id}.jsonl"
+    _write_finished_log(old, old_id)
+    _write_finished_log(new, new_id)
+    old.touch()
+    new.touch()
+    os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(new, ns=(2_000_000_000, 2_000_000_000))
+    (runs / f"{old_id}.report.json").write_text("{}", encoding="utf-8")
+    (runs / f"{old_id}.junit.xml").write_text("<testsuite />", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.txt"
+    sentinel.write_text("safe", encoding="utf-8")
+    (runs / f"{old_id}.blobs").symlink_to(outside, target_is_directory=True)
+    index = runs / f"{old_id}.index"
+    index.mkdir()
+    (index / "seek").write_text("index", encoding="utf-8")
+
+    assert apply_retention(runs, history=1) == [old]
+    assert not old.exists()
+    assert not (runs / f"{old_id}.report.json").exists()
+    assert not (runs / f"{old_id}.junit.xml").exists()
+    assert not (runs / f"{old_id}.blobs").exists()
+    assert not index.exists()
+    assert new.exists()
+    assert sentinel.read_text(encoding="utf-8") == "safe"
+
+
+def test_run_history_lifecycle_publishes_complete_or_incomplete(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    complete_id = "20260712-100000-000001"
+    complete_log = runs / f"{complete_id}.jsonl"
+    complete_log.touch()
+    complete = begin_run_history(complete_log, complete_id)
+    assert complete.active_path.is_file()
+    _write_finished_log(complete_log, complete_id)
+    assert complete_run_history(complete, history=20) == []
+    assert not complete.active_path.exists()
+    assert complete.complete_path.is_file()
+
+    incomplete_id = "20260712-100000-000002"
+    incomplete_log = runs / f"{incomplete_id}.jsonl"
+    incomplete_log.write_text('{"event":"run_started"}\n', encoding="utf-8")
+    incomplete = begin_run_history(incomplete_log, incomplete_id)
+    abandon_run_history(incomplete)
+    assert not incomplete.active_path.exists()
+    assert incomplete.incomplete_path.is_file()
+
+
+def test_active_marker_failure_removes_its_partial_file(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    run_id = "20260712-100000-000001"
+    log = runs / f"{run_id}.jsonl"
+    log.touch()
+
+    def fail_fsync(_fd):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(events_module.os, "fsync", fail_fsync)
+    with pytest.raises(OSError, match="simulated disk failure"):
+        begin_run_history(log, run_id)
+
+    assert not (runs / f"{run_id}.active").exists()
+
+
+def test_history_lock_does_not_follow_symlink_outside_runs(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    run_id = "20260712-100000-000001"
+    log = runs / f"{run_id}.jsonl"
+    log.touch()
+    outside = tmp_path / "outside-lock"
+    try:
+        (runs / ".history.lock").symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {error}")
+
+    with pytest.raises(OSError, match="history lock"):
+        begin_run_history(log, run_id)
+
+    assert not outside.exists()
+    assert not (runs / f"{run_id}.active").exists()
+
+
+def test_reader_lease_excludes_older_unit_from_cross_process_retention(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    old_id = "20260712-100000-000001"
+    new_id = "20260712-100000-000002"
+    old = runs / f"{old_id}.jsonl"
+    new = runs / f"{new_id}.jsonl"
+    _write_finished_log(old, old_id)
+    _write_finished_log(new, new_id)
+    os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(new, ns=(2_000_000_000, 2_000_000_000))
+
+    with history_reader(old):
+        assert len(list(runs.glob(f"{old_id}.reader-*"))) == 1
+        assert apply_retention(runs, history=1) == []
+        assert old.exists() and new.exists()
+
+    assert list(runs.glob(f"{old_id}.reader-*")) == []
+    assert apply_retention(runs, history=1) == [old]
+
+
+def test_history_order_survives_equal_or_backward_wall_clock(tmp_path, monkeypatch):
+    ticks = iter((100, 100, 50, 25))
+    monkeypatch.setattr(events_module.time, "time_ns", lambda: next(ticks))
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    older_id = "20260712-100000-ffffff"
+    newer_id = "20260712-100000-000000"
+    older_log = runs / f"{older_id}.jsonl"
+    newer_log = runs / f"{newer_id}.jsonl"
+    older_log.touch()
+    older = begin_run_history(older_log, older_id)
+    _write_finished_log(older_log, older_id)
+    complete_run_history(older, history=20)
+    newer_log.touch()
+    newer = begin_run_history(newer_log, newer_id)
+    _write_finished_log(newer_log, newer_id)
+    complete_run_history(newer, history=20)
+
+    assert run_history_sort_key(older_log) < run_history_sort_key(newer_log)
+    assert sorted((older_log, newer_log), key=run_history_sort_key) == [
+        older_log,
+        newer_log,
+    ]
+    assert apply_retention(runs, history=1) == [older_log]
+    assert newer_log.exists()
+
+
+def test_retention_resumes_an_interrupted_claim(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    run_id = "20260712-100000-000001"
+    log = runs / f"{run_id}.jsonl"
+    _write_finished_log(log, run_id)
+    (runs / f"{run_id}.report.json").write_text("{}", encoding="utf-8")
+    (runs / f"{run_id}.deleting").touch()
+
+    assert apply_retention(runs, history=20) == [log]
+    assert not log.exists()
+    assert not (runs / f"{run_id}.report.json").exists()
+    assert not (runs / f"{run_id}.deleting").exists()
+
+
+def test_deletion_claim_is_durable_metadata_before_unit_removal(
+    tmp_path, monkeypatch
+):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    old_id = "20260712-100000-000001"
+    new_id = "20260712-100000-000002"
+    old = runs / f"{old_id}.jsonl"
+    new = runs / f"{new_id}.jsonl"
+    _write_finished_log(old, old_id)
+    _write_finished_log(new, new_id)
+    os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(new, ns=(2_000_000_000, 2_000_000_000))
+
+    def interrupt(_log):
+        raise OSError("interrupted")
+
+    monkeypatch.setattr(events_module, "_delete_claimed_unit", interrupt)
+
+    assert apply_retention(runs, history=1) == []
+    claim = runs / f"{old_id}.deleting"
+    assert json.loads(claim.read_text(encoding="utf-8")) == {
+        "version": 1,
+        "run_id": old_id,
+    }
+
+
+def test_retention_never_resumes_tombstone_over_active_unit(tmp_path):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    run_id = "20260712-100000-000001"
+    log = runs / f"{run_id}.jsonl"
+    _write_finished_log(log, run_id)
+    (runs / f"{run_id}.active").touch()
+    (runs / f"{run_id}.deleting").touch()
+
+    assert apply_retention(runs, history=1) == []
+    assert log.exists()
+    assert (runs / f"{run_id}.active").exists()
+    assert not (runs / f"{run_id}.deleting").exists()
 
 
 def test_stream_close_closes_sinks():

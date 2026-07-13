@@ -4,6 +4,16 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M3 bounded execution + history complete
+
+- Done: fixed loop workers/frame summaries, bounded live/durable WS catch-up,
+  scalar server/browser windows, streaming CLI reports, and whole-unit retention.
+- Hardened: canonical-tail/order markers, cross-process reader leases,
+  no-follow locks/reports, resumable tombstones, large/partial tails, XML safety.
+- Verified: 463 pytest passed (3 skipped, 4 expected xfails), 48 Vitest, UI
+  build, Ruff/import contracts, plus the 100k loop gate (16 helpers/Frames).
+- Next: M4 full-fidelity blobs, prepared requests, and raw/redacted views.
+
 ## 2026-07-13 — v0.2 M3 bounded loop/frame start
 
 - Done: parallel loops now use a fixed `max_concurrency` worker set; normally

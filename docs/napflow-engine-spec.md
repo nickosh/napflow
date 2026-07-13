@@ -122,7 +122,9 @@ completed tree from events rather than live Python objects (D36/NFR-14).
 
 **Run** — the whole execution tree rooted at one entry flow + env profile
 + bound inputs. Owns: `run.id`, the shared niquests `AsyncSession`, the
-message budget, the event sink(s), the report accumulator.
+message budget, and the event sink(s). Run-level scalar outcomes remain
+bounded; CLI report adapters re-read the closed durable log instead of
+retaining every event in the engine or adapter.
 
 ## 2. Run lifecycle
 
@@ -143,6 +145,14 @@ cleanup path. External cancellation is not relabelled as user abort: its
 `CancelledError` escapes only after cleanup, and the closed JSONL may be a
 valid incomplete prefix (EC20) without `run_finished`. CLI report rendering
 is an adapter step after a completed `RunResult`, not an engine-owned file.
+The run stays protected by its private active-history marker until that
+adapter step finishes; only then is it published complete and whole-unit
+retention applied. A failed/interrupted adapter closeout publishes an
+incomplete marker instead, so retention never guesses that the unit is safe
+to delete. Server REST/WebSocket readers publish filesystem-visible,
+cross-process reader leases; directory-locked retention skips those units, so
+a newer server or CLI completion cannot remove an older run while it is being
+replayed or caught up.
 
 Run states: `pending → running → passed | failed | error | aborted`.
 - `passed` — quiescent; **every required End port produced a value**
@@ -794,10 +804,11 @@ Rules:
 
 Pins made at S2/M2 (2026-07-05, `core/events.py`):
 - **Run id** = `YYYYmmdd-HHMMSS-xxxxxx` (UTC + 6 hex): Windows-safe
-  (no `:`), lexicographic order == chronological; doubles as the JSONL
-  filename stem. Retention runs at run start, after the new run's file
-  is created (the new run counts toward `history`); the sink opens
-  with `x` — a run id collision fails loudly, never overwrites.
+  (no `:`) and suitable as the JSONL filename stem. The random suffix
+  prevents collisions but is not a same-second chronology claim; private
+  lifecycle metadata records wall timestamps plus a locked monotonic
+  per-flow creation order. The sink
+  opens with `x` — a run id collision fails loudly, never overwrites.
 - **Stamping**: `seq` starts at 1; `ts` is UTC, millisecond precision,
   `Z` suffix (the EN §1 message format). Optional fields — declared
   with default None, incl. `frame`/`node` — are omitted when unset;
@@ -908,9 +919,44 @@ plausible-looking prefix.
 
 **Retention unit.** A run is one atomic retention unit: its JSONL, blobs,
 indexes, and reports are created and deleted together. Retention operates
-on completed runs only, ordered by a truly chronological id/metadata
-(the same-second ambiguity in the `token_hex` suffix is fixed in M3), and
-never touches an active or newer run.
+on completed runs only and never touches an active or known-incomplete run.
+M3 uses private exact-stem companions beside the JSONL:
+
+- `<run-id>.active` records `started_ns` plus the private creation `order`
+  before the first event and protects execution plus adapter-owned report
+  finalization;
+- `<run-id>.complete.json` records `started_ns`, `completed_ns`, and that
+  `order` only after a matching final `run_finished` record and report
+  closeout;
+- `<run-id>.incomplete` preserves a known-closed EC20 prefix without counting
+  it against `defaults.run.history`; a hard-crash `.active` is likewise
+  protected conservatively until an operator or later recovery policy
+  resolves it;
+- `<run-id>.deleting` is exclusive, fsynced claim metadata written before any
+  companion removal. The next retention pass resumes exact-unit cleanup,
+  deleting report/blob/index companions before the canonical JSONL and
+  tombstone.
+- `<run-id>.reader-<pid>-<token>` is an exclusive, fsynced replay lease.
+  Retention and reader creation share the no-follow `.history.lock`, so every
+  unit is either leased or deletion-claimed, never both; normal readers remove
+  their lease and the server immediately re-applies retention, while a
+  timed-out WebSocket keeps it through the reconnect window. A crash may leave
+  a conservative stale lease for later recovery.
+
+The per-flow no-follow, regular-file-validated `.history.lock` and atomically
+replaced `.history-order.json` allocate order and coordinate readers/deleters
+across local processes; allocation recovers from surviving unit markers and
+is immune to equal/backward wall clocks. Retention runs
+after completion, revalidates the canonical JSONL's matching final record,
+orders published units by that private monotonic value, and deletes only exact
+allowlisted companions. A
+markerless legacy JSONL is eligible only when a robust backward record scan
+finds `run_finished`; its filesystem modification time supplies best-effort
+chronology. The backward reader scans fixed-size blocks without a fixed tail
+window, tolerates malformed/partial trailing data, and retains at most one
+arbitrarily large record. These lifecycle companions are private housekeeping,
+not authoritative replay content or a substitute for the versioned
+`napflow-run` envelope.
 
 **Disposable indexes.** Byte-offset / `seq` / frame / node indexes and
 cached per-frame summary tables are DERIVED, rebuildable acceleration

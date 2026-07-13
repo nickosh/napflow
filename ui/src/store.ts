@@ -112,6 +112,10 @@ let runSocket: WebSocket | null = null;
 let pendingRecords: RunRecord[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 const FLUSH_MS = 16;
+const LIVE_BATCH_LIMIT = 256;
+const WS_RESYNC_REQUIRED = 4410;
+const WS_SUBSCRIBER_LIMIT = 4411;
+const MAX_LIVE_RESYNCS = 3;
 
 function closeRunSocket() {
   if (runSocket !== null) {
@@ -236,7 +240,7 @@ export const useAppStore = create<AppState>((set, get) => {
     set({ runView: { ...view } });
   }
 
-  function watchRun(runId: string) {
+  function watchRun(runId: string, resyncs = 0) {
     closeRunSocket();
     let sawFinished = false;
     const socket = openRunSocket(runId);
@@ -246,16 +250,50 @@ export const useAppStore = create<AppState>((set, get) => {
         const record = JSON.parse(msg.data as string) as RunRecord;
         if (record.event === "run_finished") sawFinished = true;
         pendingRecords.push(record);
-        if (flushTimer === null) {
+        if (pendingRecords.length >= LIVE_BATCH_LIMIT) {
+          flushRecords();
+        } else if (flushTimer === null) {
           flushTimer = setTimeout(flushRecords, FLUSH_MS);
         }
       } catch {
         // garbled frame — the JSONL on disk stays the durable record
       }
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       if (runSocket !== socket) return; // superseded or intentional
       runSocket = null;
+      if (event.code === WS_SUBSCRIBER_LIMIT && get().runId === runId) {
+        flushRecords();
+        set({
+          runLive: false,
+          runNotice: "too many live viewers — retry after another viewer closes",
+        });
+        return;
+      }
+      if (
+        event.code === WS_RESYNC_REQUIRED &&
+        !sawFinished &&
+        get().runId === runId
+      ) {
+        if (resyncs >= MAX_LIVE_RESYNCS) {
+          flushRecords();
+          set({
+            runLive: false,
+            runNotice: "live view fell behind — reopen the run from history",
+          });
+          return;
+        }
+        if (flushTimer !== null) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        pendingRecords = [];
+        // The new socket replays a fresh durable prefix. Reset the reducer so
+        // replayed records never double-apply counters from the old attempt.
+        set({ runView: emptyRunView(), runLive: true });
+        watchRun(runId, resyncs + 1);
+        return;
+      }
       flushRecords();
       const view = get().runView;
       if (view !== null && !sawFinished) {

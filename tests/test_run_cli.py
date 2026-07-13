@@ -3,13 +3,17 @@ stderr logs, JSONL history, reports, and run-state exit codes — the S2
 DoD: a linear flow runs headless with correct exit codes."""
 
 import json
+import tracemalloc
 from pathlib import Path
 from xml.etree import ElementTree
 
 import pytest
 from typer.testing import CliRunner
 
+import napflow.cli.main as cli_main
+import napflow.cli.report as cli_report
 from napflow.cli.main import app
+from napflow.core.engine import RunResult
 
 runner = CliRunner()
 
@@ -200,18 +204,42 @@ def report_manifest(kind: str) -> str:
     return MANIFEST + f'defaults:\n  run:\n    report: "{kind}"\n'
 
 
+def retained_report_manifest(kind: str) -> str:
+    return (
+        MANIFEST
+        + f'defaults:\n  run:\n    report: "{kind}"\n    history: 1\n'
+    )
+
+
 def test_json_report(tmp_path, monkeypatch):
-    ws = make_workspace(tmp_path, manifest=report_manifest("json"))
+    leaky = HELLO_FLOW.replace("{{ env.GREETING }}", "{{ env.API_TOKEN }}")
+    ws = make_workspace(
+        tmp_path, flow_yaml=leaky, manifest=report_manifest("json")
+    )
     monkeypatch.chdir(ws)
+    seen_sinks = []
+    real_open = cli_main.open_run_stream
+
+    def observed_open(workspace, prepared, *, extra_sinks=()):
+        extra_sinks_seen = list(extra_sinks)
+        seen_sinks.extend(extra_sinks_seen)
+        return real_open(workspace, prepared, extra_sinks=extra_sinks_seen)
+
+    monkeypatch.setattr(cli_main, "open_run_stream", observed_open)
     result = runner.invoke(app, ["run", "flows/hello"])
     assert result.exit_code == 0, result.stderr
+    assert len(seen_sinks) == 1
+    assert type(seen_sinks[0]).__name__ == "_LogEcho"
     reports = list((ws / ".napflow" / "runs" / "flows" / "hello").glob("*.report.json"))
     assert len(reports) == 1
-    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    report_text = reports[0].read_text(encoding="utf-8")
+    assert "supersecret-token" not in report_text
+    payload = json.loads(report_text)
     assert payload["flow"] == "flows/hello"
     assert payload["state"] == "passed"
     assert payload["exit_code"] == 0
     assert payload["asserts"] == {"passed": 1, "failed": 0}
+    assert payload["end_outputs"] == {"result": {"msg": "***"}}
 
 
 def test_junit_report_counts_match(tmp_path, monkeypatch):
@@ -232,6 +260,185 @@ def test_junit_report_counts_match(tmp_path, monkeypatch):
     cases = suite.findall("testcase")
     assert len(cases) == int(suite.get("tests"))
     assert any(case.find("failure") is not None for case in cases)
+
+
+@pytest.mark.parametrize(
+    ("kind", "suffix"),
+    [("json", ".report.json"), ("junit", ".junit.xml")],
+)
+def test_retention_keeps_one_complete_log_and_matching_report(
+    tmp_path, monkeypatch, kind, suffix
+):
+    ws = make_workspace(tmp_path, manifest=retained_report_manifest(kind))
+    monkeypatch.chdir(ws)
+    for value in ("one", "two"):
+        result = runner.invoke(app, ["run", "flows/hello", "-i", f"msg={value}"])
+        assert result.exit_code == 0, result.stderr
+
+    runs = ws / ".napflow" / "runs" / "flows" / "hello"
+    logs = list(runs.glob("*.jsonl"))
+    reports = list(runs.glob(f"*{suffix}"))
+    assert len(logs) == len(reports) == 1
+    assert reports[0].name == f"{logs[0].stem}{suffix}"
+    assert list(runs.glob("*.active")) == []
+    assert list(runs.glob("*.deleting")) == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "suffix"),
+    [("json", ".report.json"), ("junit", ".junit.xml")],
+)
+def test_report_publication_does_not_follow_target_symlink(
+    tmp_path, monkeypatch, kind, suffix
+):
+    ws = make_workspace(tmp_path, manifest=report_manifest(kind))
+    monkeypatch.chdir(ws)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep", encoding="utf-8")
+    real_open = cli_main.open_run_stream
+    planted = None
+
+    def planted_open(workspace, prepared, *, extra_sinks=()):
+        nonlocal planted
+        opened = real_open(workspace, prepared, extra_sinks=extra_sinks)
+        planted = opened.log_path.with_name(f"{opened.run_id}{suffix}")
+        planted.symlink_to(outside)
+        return opened
+
+    monkeypatch.setattr(cli_main, "open_run_stream", planted_open)
+
+    result = runner.invoke(app, ["run", "flows/hello"])
+
+    assert result.exit_code == 0, result.stderr
+    assert outside.read_text(encoding="utf-8") == "keep"
+    assert planted is not None and planted.is_file() and not planted.is_symlink()
+
+
+def test_history_finalization_failure_does_not_replace_run_result(
+    tmp_path, monkeypatch
+):
+    ws = make_workspace(tmp_path)
+    monkeypatch.chdir(ws)
+
+    def fail_finalization(_opened, *, completed):
+        raise OSError(f"finalization failed ({completed=})")
+
+    monkeypatch.setattr(cli_main, "finalize_run_history", fail_finalization)
+
+    result = runner.invoke(app, ["run", "flows/hello"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"result": {"msg": "hello"}}
+    assert "warning: run history finalization failed" in result.stderr
+
+
+def test_junit_report_sanitizes_xml_attributes(tmp_path):
+    log_path = tmp_path / "xml.jsonl"
+    assertion_name = "check & < > \" ' \x01"
+    error_message = "failure & < > \" ' \ud800"
+    records = [
+        {
+            "event": "assert_result",
+            "node": "check",
+            "check": assertion_name,
+            "expected": None,
+            "actual": "value",
+            "passed": True,
+        },
+        {
+            "event": "run_finished",
+            "duration_ms": 1.0,
+            "unhandled_errors": [
+                {"node": "check", "kind": "control", "message": error_message}
+            ],
+        },
+    ]
+    with log_path.open("w", encoding="utf-8") as log:
+        for record in records:
+            log.write(json.dumps(record, ensure_ascii=True) + "\n")
+    result = RunResult(
+        state="failed",
+        end_outputs={},
+        asserts_passed=1,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=1.0,
+    )
+
+    report_path = cli_report.write_report("junit", log_path, "flows/xml", result)
+
+    assert report_path is not None
+    suite = ElementTree.parse(report_path).getroot()
+    assert suite.findall("testcase")[0].get("name") == assertion_name.replace(
+        "\x01", "\ufffd"
+    )
+    assert suite.find("testcase/error").get("message") == error_message.replace(
+        "\ud800", "\ufffd"
+    )
+
+
+def test_junit_report_memory_does_not_scale_with_assertion_count(tmp_path):
+    record_count = 100_000
+    log_path = tmp_path / "bounded.jsonl"
+    with log_path.open("w", encoding="utf-8") as log:
+        for seq in range(record_count):
+            log.write(
+                json.dumps(
+                    {
+                        "event": "assert_result",
+                        "seq": seq,
+                        "node": "check",
+                        "check": "present",
+                        "expected": None,
+                        "actual": "value",
+                        "passed": True,
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+        log.write(
+            json.dumps(
+                {
+                    "event": "run_finished",
+                    "duration_ms": 1.0,
+                    "unhandled_errors": [],
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+    result = RunResult(
+        state="passed",
+        end_outputs={},
+        asserts_passed=record_count,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=1.0,
+    )
+    tracemalloc.start()
+    try:
+        report_path = cli_report.write_report(
+            "junit", log_path, "flows/bounded", result
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert report_path is not None
+    assert peak < 5_000_000
+    tests = None
+    cases = 0
+    for event, element in ElementTree.iterparse(report_path, events=("start", "end")):
+        if event == "start" and element.tag == "testsuite":
+            tests = element.get("tests")
+        elif event == "end" and element.tag == "testcase":
+            cases += 1
+            element.clear()
+    assert tests == str(record_count)
+    assert cases == record_count
 
 
 def test_first_touch_smoke_flow_offline(tmp_path, monkeypatch):

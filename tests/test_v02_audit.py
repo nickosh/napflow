@@ -331,19 +331,12 @@ def test_secret_value_does_not_corrupt_state_vocabulary(secret_value, record):
 
 
 # --------------------------------------------------------------------------
-# TR-18 — a >64KB final event is still recognized (EC47/M5; owner: M3/M5)
+# TR-18 — a >64KB final event is still recognized (EC47/M3)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="M5: fixed 64KB tail window drops a large final line",
-)
 def test_large_final_event_is_recognized(tmp_path):
-    """A `run_finished` line larger than the 64KB tail window makes the
-    server report a completed run as 'incomplete'. Needs a durable summary
-    or a robust backward record reader, not a fixed-size tail read."""
-    from napflow.server.app import _tail_record
+    """A final line larger than one reverse-read block remains visible."""
+    from napflow.core.events import last_jsonl_record
 
     log = tmp_path / "r.jsonl"
     with log.open("w", encoding="utf-8") as f:
@@ -354,7 +347,7 @@ def test_large_final_event_is_recognized(tmp_path):
             )
             + "\n"
         )
-    record = _tail_record(log)
+    record = last_jsonl_record(log)
     assert record is not None and record["event"] == "run_finished"
 
 
@@ -362,11 +355,6 @@ def test_large_final_event_is_recognized(tmp_path):
 # EC47 — retention is truly chronological within a second (owner: M3)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EC47/M3: same-second runs sort by random hex",
-)
 def test_retention_keeps_newest_within_same_second(tmp_path):
     """Two runs in the same wall-clock second get run ids differing only in
     a random hex suffix, so filename sort ≠ creation order. Retention must
@@ -375,8 +363,12 @@ def test_retention_keeps_newest_within_same_second(tmp_path):
     d.mkdir()
     older = d / "20260712-100000-ffffff.jsonl"  # created first, hex sorts last
     newer = d / "20260712-100000-000000.jsonl"  # created second, hex sorts first
-    older.write_text("{}")
-    newer.write_text("{}")
+    older.write_text(
+        json.dumps({"event": "run_finished", "run_id": older.stem}) + "\n"
+    )
+    newer.write_text(
+        json.dumps({"event": "run_finished", "run_id": newer.stem}) + "\n"
+    )
     # make creation order unambiguous to the filesystem
     os.utime(older, (1_000_000, 1_000_000))
     os.utime(newer, (2_000_000, 2_000_000))

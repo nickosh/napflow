@@ -179,8 +179,9 @@ valves/mask-everywhere approach as if it were the accepted future design.
    durable saves → lifecycle/worker → bounded execution/history →
    full-fidelity blobs/redaction → scalable replay/timeline → public,
    packaging, and UI contracts → measured release gate. M0/M1 completed
-   2026-07-12 and M2 completed 2026-07-13; the next implementation
-   milestone is M3's bounded execution state and history lifecycle.
+   2026-07-12 and M2/M3 completed 2026-07-13; the next implementation
+   milestone is M4's full-fidelity history, prepared requests, and redacted
+   presentation/export views.
 
 ## Testing priorities (in order of bug-risk)
 

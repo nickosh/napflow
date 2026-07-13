@@ -19,6 +19,7 @@ export type RunRecord = {
 };
 
 export const ROOT_FRAME = "f-0";
+export const RUN_RECORD_WINDOW = 2_000;
 
 /** log-node history kept per node (M5.5) — the loop-debugging view */
 export const LOG_RING = 50;
@@ -76,6 +77,7 @@ export type RunViewState =
 export type RunView = {
   state: RunViewState;
   records: RunRecord[];
+  recordCount: number;
   nodes: Record<string, NodeRunState>;
   edges: Record<string, EdgePulse>;
   asserts: { passed: number; failed: number };
@@ -88,6 +90,7 @@ export function emptyRunView(): RunView {
   return {
     state: "running",
     records: [],
+    recordCount: 0,
     nodes: {},
     edges: {},
     asserts: { passed: 0, failed: 0 },
@@ -138,8 +141,12 @@ function touch(
  * clones the outer object per flush); per-node/per-edge entries are
  * replaced immutably (see `touch`). */
 export function applyRecord(view: RunView, record: RunRecord): void {
+  view.recordCount += 1;
   view.records.push(record);
-  const seq = record.seq ?? view.records.length;
+  if (view.records.length > RUN_RECORD_WINDOW) {
+    view.records.splice(0, view.records.length - RUN_RECORD_WINDOW);
+  }
+  const seq = record.seq ?? view.recordCount;
   const event = record.event;
 
   if (event === "run_started") {

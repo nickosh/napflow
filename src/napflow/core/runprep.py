@@ -19,8 +19,11 @@ from napflow.core.checker import (
 from napflow.core.events import (
     EventStream,
     JsonlSink,
+    RunHistoryUnit,
     SecretMasker,
-    apply_retention,
+    abandon_run_history,
+    begin_run_history,
+    complete_run_history,
     new_run_id,
 )
 from napflow.core.loader import LoadedFlow, LoadError, load_flow
@@ -137,20 +140,46 @@ class OpenedRun:
     run_id: str
     log_path: Path
     stream: EventStream
+    history_unit: RunHistoryUnit
+    history_limit: int
+
+
+def finalize_run_history(opened: OpenedRun, *, completed: bool) -> list[Path]:
+    """Publish/retain a complete unit or preserve a valid incomplete prefix."""
+    if completed:
+        return complete_run_history(opened.history_unit, opened.history_limit)
+    abandon_run_history(opened.history_unit)
+    return []
 
 
 def open_run_stream(
     workspace: Workspace, prepared: PreparedRun, *, extra_sinks: Iterable[Any] = ()
 ) -> OpenedRun:
-    """JSONL sink + retention + masker wiring (FR-701, D22). Extra
-    sinks fan out the same born-masked records (D13)."""
+    """Open JSONL + active lifecycle marker + masker wiring.
+
+    Retention runs only through ``finalize_run_history`` after execution and
+    adapter-owned reports have finished. Extra sinks receive the same
+    born-masked records (D13).
+    """
     manifest = workspace.manifest.model
     run_id = new_run_id()
     log_path = workspace.resolver.run_log(prepared.identity, run_id)
+    jsonl = JsonlSink(log_path)
+    try:
+        history_unit = begin_run_history(log_path, run_id)
+    except BaseException:
+        jsonl.close()
+        log_path.unlink(missing_ok=True)
+        raise
     stream = EventStream(
         run_id,
         SecretMasker(manifest.environments.secrets, prepared.env),
-        [JsonlSink(log_path), *extra_sinks],
+        [jsonl, *extra_sinks],
     )
-    apply_retention(log_path.parent, manifest.defaults.run.history)
-    return OpenedRun(run_id=run_id, log_path=log_path, stream=stream)
+    return OpenedRun(
+        run_id=run_id,
+        log_path=log_path,
+        stream=stream,
+        history_unit=history_unit,
+        history_limit=manifest.defaults.run.history,
+    )

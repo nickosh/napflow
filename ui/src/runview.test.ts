@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   LOG_RING,
+  RUN_RECORD_WINDOW,
   applyRecord,
   emptyRunView,
   finalizeIncomplete,
@@ -200,6 +201,22 @@ describe("applyRecord", () => {
     applyRecord(view, rec("node_fired", { frame: "f-0/f-1", node: "inner", firing_no: 1 }));
     expect(view.nodes.inner).toBeUndefined();
     expect(view.records).toHaveLength(1);
+  });
+
+  it("folds 100k events while retaining only the browser record window", () => {
+    const view = emptyRunView();
+    for (let index = 1; index <= 100_000; index += 1) {
+      applyRecord(view, {
+        event: "message_emitted",
+        seq: index,
+        frame: "f-0/f-1",
+      });
+    }
+
+    expect(view.recordCount).toBe(100_000);
+    expect(view.records).toHaveLength(RUN_RECORD_WINDOW);
+    expect(view.records[0].seq).toBe(100_000 - RUN_RECORD_WINDOW + 1);
+    expect(view.records.at(-1)?.seq).toBe(100_000);
   });
 
   it("finalizes: state, tallies, skipped nodes, actives cleared", () => {

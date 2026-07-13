@@ -42,6 +42,7 @@ npm run perf:history
 | Parallel loop timing, 10,000 items | 0.288s ≈ 34.8k items/s | Uninstrumented timing; compare like-for-like |
 | Parallel loop timing, 100,000 items | 3.410s ≈ 29.3k items/s | Uninstrumented timing; compare like-for-like |
 | Parallel loop peak heap, 100,000 items | **485.1 MB** at `max_concurrency: 16`, measured in a separate `tracemalloc` run | M3 bounded producer/fixed task set — heap must become proportional to `max_concurrency`, not item count (NFR-14) |
+| M3 parallel-loop active state, 100,000 items | v0.1 allocated one task + retained Frame per item | **Met:** 2.68s opt-in correctness run; exactly 16 helpers, ≤16 live Frames, 100,000 durable frame summaries (`test_parallel_loop_active_tasks_and_frames_100k`) |
 | History replay read (`_read_records`), 10MB | 10.0MiB / 22,623 records: **0.021s** uninstrumented, **19.5 MB peak heap** | M5 bounded/paged reads + lazy blobs (FR-1106); memory must not track total log size |
 | History replay read (`_read_records`), 100MB | 100.0MiB / 225,739 records: **0.204s** uninstrumented, **194.4 MB peak heap** | M5 must remove the roughly linear retained-memory growth |
 | Browser history first render + retained JS heap, 10MB | **127 ms median; +11.2 MB retained JS heap** | M5 compares bounded/virtualized replay against this built-bundle baseline |
@@ -70,4 +71,7 @@ reader-limit failure at the requested 100KB/10MB worker sizes.
   evidence, while successful large-result timing begins after M2.
 - The 485.1 MB / 100k-loop figure is the single most important before-number
   for M3: it is the concrete cost of `gather(one task per item)` plus one
-  frame per iteration that the bounded rewrite targets.
+  frame per iteration that the bounded rewrite targets. M3's correctness gate
+  now measures scheduler-owned helpers/live Frames separately from semantic
+  input/result/event content, which necessarily scales with the requested
+  100k-item run.

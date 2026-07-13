@@ -213,7 +213,11 @@ overwrites individual files.
 - **Reports** (`defaults.run.report`) are written next to the JSONL:
   `<run-id>.report.json` / `<run-id>.junit.xml`, built from the masked
   event records (junit: testcase per assert, errored testcase per
-  unhandled error).
+  unhandled error). `none` installs no report collector; JSON retains only
+  the final summary, while JUnit makes bounded streaming passes over the
+  closed durable JSONL. Report closeout precedes complete-history publication
+  and whole-unit retention, so a retained JSONL never loses or orphans its
+  configured report companion.
 - **Ctrl-C** = clean abort (exit 130) where asyncio signal handlers
   exist; on Windows the KeyboardInterrupt path exits 130 and the JSONL
   keeps a valid prefix (EC20).
@@ -267,12 +271,15 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   `POST /api/runs` `{flow, env?, inputs?}` → 202 `{run_id, flow,
   state, log, warnings, notes}` (gate failures: 404 `flow_not_found`,
   else 400 with `{error, message, diagnostics}`) ·
-  `GET /api/runs?flow=` (history from the JSONL dir; states from each
-  file's tail record, `incomplete` when it isn't `run_finished`) ·
-  `GET /api/runs/{run_id}` (status; result summary when finished — end
-  outputs are read from the masked `run_finished` event, NEVER from
-  this endpoint: unmasked outputs are `napf run` stdout's contract
-  only) · `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
+  `GET /api/runs?flow=` (history from the JSONL dir, ordered by a locked
+  private monotonic lifecycle value with legacy mtime fallback; states from a robust
+  backward scan for the last valid record, including records larger than
+  64 KiB; `incomplete` when it isn't `run_finished`) ·
+  `GET /api/runs/{run_id}` (status; bounded scalar summary when finished:
+  state/duration/assert counts/unhandled-error count/never-fired count —
+  detail and masked end outputs remain in `run_finished`, NEVER this endpoint;
+  unmasked outputs are `napf run` stdout's contract only) ·
+  `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
   D13; `?flow=` locates runs the server process didn't start; v0.2 M0
   validates the first `run_started` envelope before replay, accepts an
   unmarked v0.1 log best-effort, and returns 422 `history_format` for a
@@ -341,16 +348,38 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   write primitive and an interrupted clone destination is removed.
 - **WebSocket** `/ws/runs/{run_id}`: text frames are the JSONL lines
   VERBATIM (one `encode_record` — identical by construction, D13).
-  Live run: replay the buffered prefix, then stream; server closes
-  normally after `run_finished`. Finished run: validate the history
-  envelope, replay the file, close; malformed/newer/unsupported format:
-  close `4409`.
+  Live run: capture the sink's last flushed `seq`, stream the durable JSONL
+  through that boundary, then consume a 256-record subscriber queue. The
+  synchronous cutoff/register step makes every record land in exactly the
+  disk prefix or queue. Queue overflow collapses backlog to one resync signal;
+  the same handler atomically captures a new cutoff and streams only the
+  missing `last_sent_seq < seq <= cutoff` range before resuming live delivery.
+  Each send has a five-second ceiling; a transport-blocked client closes
+  `4410 resync_required`, and the UI resets/reconnects at most three times
+  without falsely marking the run incomplete. Progressing ranges have no hard
+  wall deadline; every individual send retains the five-second no-progress
+  ceiling. At most eight WebSocket presentation readers attach per run. A
+  filesystem reader lease excludes the exact unit from retention across
+  server/CLI processes and remains for the five-second reconnect window after
+  timeout. Lease release re-applies retention and reconciles the in-memory
+  registry, so watched runs do not leave history permanently over its limit.
+  Server closes normally after `run_finished`.
+  Finished-run WebSockets validate the history envelope and stream the file
+  without a full in-memory list; malformed/newer/unsupported format closes
+  `4409`. The REST replay response remains full-list until M5 paging.
   Unknown run: close `4404`; malformed run id/boundary: `4400`; rejected
   Host/Origin before accept: `4403`.
-- **Run registry**: runs the server started, in memory — live buffers
-  drop at run end (JSONL is the durable record), finished summaries
-  capped at 32. Server shutdown aborts running flows (clean JSONL
-  prefix, EC20). Reports (`defaults.run.report`) are NOT written for
+- **Run registry**: runs the server started, in memory — running entries keep
+  scalar status/last-sequence state plus bounded subscriber queues, never a
+  full event prefix (JSONL is the durable record); finished summaries are
+  capped at 32 and retain counts/scalars rather than `RunResult` payloads.
+  Browser folding keeps a 2,000-record event window and a 256-record pending
+  batch while applying every record to graph-bounded aggregate state. Private
+  `.active`/`.complete.json`/`.incomplete` plus dynamic `.reader-*` companions
+  protect execution and distinguish retainable completion; retention runs
+  after server-run finalization and removes exact whole-run companions.
+  Server shutdown aborts running flows (clean JSONL prefix, EC20). Reports
+  (`defaults.run.report`) are NOT written for
   server runs in v0.1 — they stay a `napf run`/CI concern (revisited at
   S4/M5: still deferred, D29 — the canvas gets full wire detail live
   over the WebSocket plus the JSONL history browser).

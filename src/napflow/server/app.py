@@ -14,8 +14,8 @@ import ipaddress
 import json
 import os
 import shutil
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,9 +41,12 @@ from napflow.core.events import (
     HISTORY_FORMAT_MAJOR,
     HISTORY_SUPPORTED_FEATURES,
     HistoryFormatError,
+    begin_history_reader,
     encode_record,
+    last_jsonl_record,
     parse_history_features,
     parse_history_format,
+    run_history_sort_key,
 )
 from napflow.core.files import atomic_write_text
 from napflow.core.loader import (
@@ -57,7 +60,12 @@ from napflow.core.loader import (
 from napflow.core.models import EndNode, StartNode
 from napflow.core.runprep import RunPrepError, prepare_run
 from napflow.core.workspace import Workspace, WorkspaceBoundaryError
-from napflow.server.runs import RunManager
+from napflow.server.runs import (
+    SUBSCRIBER_END,
+    SUBSCRIBER_RESYNC,
+    RunManager,
+    SubscriberLimitError,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -73,6 +81,10 @@ WS_WORKSPACE_BOUNDARY = 4400
 WS_REQUEST_ORIGIN = 4403
 WS_UNKNOWN_RUN = 4404
 WS_HISTORY_FORMAT = 4409
+WS_RESYNC_REQUIRED = 4410
+WS_SUBSCRIBER_LIMIT = 4411
+WS_SEND_TIMEOUT_S = 5.0
+WS_CLOSE_TIMEOUT_S = 1.0
 
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -344,32 +356,6 @@ def _flow_summary(ref: Any) -> dict[str, Any]:
     }
 
 
-def _tail_record(path: Path) -> dict[str, Any] | None:
-    """Last complete JSONL record, reading only the file's tail (run
-    logs can be hundreds of MB — the capture valves cap events, not
-    files). An aborted run's trailing partial line is skipped (EC20)."""
-    try:
-        with path.open("rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - 65536))
-            chunk = f.read()
-    except OSError:
-        return None
-    lines = [line for line in chunk.split(b"\n") if line.strip()]
-    # a chunk that doesn't start at byte 0 may open mid-line — drop it
-    if size > 65536 and len(lines) > 1:
-        lines = lines[1:]
-    for line in reversed(lines):
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(record, dict):
-            return record
-    return None
-
-
 def _validate_history_envelope(record: Any) -> None:
     """Validate the first nonblank history record before replaying data."""
     if (
@@ -410,16 +396,21 @@ def _validate_history_envelope(record: Any) -> None:
         raise HistoryFormatError(f"unsupported run-history feature(s): {shown}")
 
 
-def _read_records(
-    path: Path, *, validate_history: bool = True, allow_empty: bool = False
-) -> list[dict[str, Any]]:
-    """Full JSONL replay; a trailing partial line is tolerated (EC20).
+def _iter_records(
+    path: Path,
+    *,
+    validate_history: bool = True,
+    allow_empty: bool = False,
+    through_seq: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Stream a JSONL prefix; a trailing partial line is tolerated (EC20).
 
     The envelope is validated by default before later records are interpreted.
     `allow_empty` is only for the brief live-run prefix before run_started has
-    flushed; an empty completed/imported history is invalid.
+    flushed; an empty completed/imported history is invalid. ``through_seq``
+    freezes live replay at the atomically captured subscription boundary.
     """
-    records = []
+    seen = False
     with path.open(encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -427,17 +418,36 @@ def _read_records(
             try:
                 record = json.loads(line)
             except ValueError as e:
-                if validate_history and not records:
+                if validate_history and not seen:
                     raise HistoryFormatError(
                         "run history does not begin with a valid JSON envelope"
                     ) from e
                 break  # flushed-per-line: only the last line can be cut
-            if validate_history and not records:
+            if (
+                through_seq is not None
+                and type(record.get("seq")) is int
+                and record["seq"] > through_seq
+            ):
+                break
+            if validate_history and not seen:
                 _validate_history_envelope(record)
-            records.append(record)
-    if validate_history and not records and not allow_empty:
+            seen = True
+            yield record
+    if validate_history and not seen and not allow_empty:
         raise HistoryFormatError("run history is empty; no run_started envelope")
-    return records
+
+
+def _read_records(
+    path: Path, *, validate_history: bool = True, allow_empty: bool = False
+) -> list[dict[str, Any]]:
+    """Compatibility/full REST replay; M5 replaces this response with paging."""
+    return list(
+        _iter_records(
+            path,
+            validate_history=validate_history,
+            allow_empty=allow_empty,
+        )
+    )
 
 
 def _history_format_response(error: HistoryFormatError) -> Response:
@@ -452,6 +462,127 @@ def _ws_close_reason(message: str, limit: int = 120) -> str:
     if len(encoded) <= limit:
         return safe
     return encoded[: limit - 3].decode("utf-8", errors="ignore") + "..."
+
+
+class _SlowSubscriber(TimeoutError):
+    pass
+
+
+async def _send_ws_record(websocket: WebSocket, record: dict[str, Any]) -> None:
+    try:
+        await asyncio.wait_for(
+            websocket.send_text(encode_record(record)),
+            timeout=WS_SEND_TIMEOUT_S,
+        )
+    except TimeoutError as error:
+        raise _SlowSubscriber from error
+
+
+async def _send_history_range(
+    websocket: WebSocket,
+    path: Path,
+    *,
+    after_seq: int = 0,
+    through_seq: int | None = None,
+    allow_empty: bool = False,
+) -> int:
+    """Send one exact durable range and return its last sequence."""
+    last_sent = after_seq
+    for record in _iter_records(
+        path,
+        allow_empty=allow_empty,
+        through_seq=through_seq,
+    ):
+        seq = record.get("seq")
+        if type(seq) is int and seq <= after_seq:
+            continue
+        await _send_ws_record(websocket, record)
+        if type(seq) is int:
+            last_sent = seq
+    return last_sent
+
+
+async def _close_ws(websocket: WebSocket, code: int, reason: str = "") -> None:
+    with suppress(Exception):
+        await asyncio.wait_for(
+            websocket.close(code, reason), timeout=WS_CLOSE_TIMEOUT_S
+        )
+
+
+async def _stream_run_websocket(
+    websocket: WebSocket, run: Any, manager: RunManager
+) -> None:
+    """Serve one filesystem-leased run without retaining its event prefix."""
+    try:
+        lease = begin_history_reader(run.log_path)
+    except (OSError, ValueError):
+        await _close_ws(websocket, WS_UNKNOWN_RUN, "run history unavailable")
+        return
+
+    defer_release = False
+    subscriber = None
+    replay_pinned = False
+    try:
+        if run.finished:
+            manager.pin_replay(run)
+            replay_pinned = True
+            await _send_history_range(websocket, run.log_path)
+        else:
+            through_seq, subscriber = manager.subscribe(run)
+            last_sent = await _send_history_range(
+                websocket,
+                run.log_path,
+                allow_empty=True,
+                through_seq=through_seq,
+            )
+            while True:
+                item = await subscriber.queue.get()
+                if item is SUBSCRIBER_END:
+                    break
+                if item is SUBSCRIBER_RESYNC:
+                    through_seq, subscriber = manager.resubscribe(run, subscriber)
+                    last_sent = await _send_history_range(
+                        websocket,
+                        run.log_path,
+                        after_seq=last_sent,
+                        through_seq=through_seq,
+                        allow_empty=True,
+                    )
+                    continue
+                seq = item.get("seq")
+                if type(seq) is int and seq <= last_sent:
+                    continue
+                await _send_ws_record(websocket, item)
+                if type(seq) is int:
+                    last_sent = seq
+    except SubscriberLimitError:
+        await _close_ws(websocket, WS_SUBSCRIBER_LIMIT, "subscriber_limit")
+        return
+    except HistoryFormatError as error:
+        await _close_ws(
+            websocket, WS_HISTORY_FORMAT, _ws_close_reason(str(error))
+        )
+        return
+    except _SlowSubscriber:
+        manager.reserve_resync(run)
+        manager.defer_history_reader_release(
+            run.log_path,
+            lease,
+            run.history_limit,
+        )
+        defer_release = True
+        await _close_ws(websocket, WS_RESYNC_REQUIRED, "resync_required")
+        return
+    finally:
+        if replay_pinned:
+            manager.unpin_replay(run)
+        if subscriber is not None:
+            manager.unsubscribe(run, subscriber)
+        if not defer_release:
+            manager.release_history_reader(
+                run.log_path, lease, run.history_limit
+            )
+    await _close_ws(websocket, 1000)
 
 
 def build_app(workspace: Workspace) -> Application:
@@ -832,7 +963,9 @@ def build_app(workspace: Workspace) -> Application:
         except WorkspaceBoundaryError as e:
             return _workspace_boundary(e)
         entries = []
-        for candidate in sorted(runs_dir.glob("*.jsonl"), reverse=True):
+        for candidate in sorted(
+            runs_dir.glob("*.jsonl"), key=run_history_sort_key, reverse=True
+        ):
             try:
                 run_id = resolver.validate_run_id(candidate.stem)
                 log = resolver.run_log(identity, run_id)
@@ -842,7 +975,7 @@ def build_app(workspace: Workspace) -> Application:
             if live is not None and not live.finished:
                 entries.append({"run_id": run_id, "state": "running"})
                 continue
-            tail = _tail_record(log)
+            tail = last_jsonl_record(log)
             finished = tail is not None and tail.get("event") == "run_finished"
             entries.append(
                 {
@@ -897,12 +1030,26 @@ def build_app(workspace: Workspace) -> Application:
                 status=404,
             )
         try:
-            records = _read_records(
-                log_path,
-                allow_empty=run is not None and not run.finished,
+            lease = begin_history_reader(log_path)
+        except OSError:
+            return json_response(
+                {"error": "unknown_run", "message": f"no run log for {run_id!r}"},
+                status=404,
             )
-        except HistoryFormatError as e:
-            return _history_format_response(e)
+        try:
+            try:
+                records = _read_records(
+                    log_path,
+                    allow_empty=run is not None and not run.finished,
+                )
+            except HistoryFormatError as e:
+                return _history_format_response(e)
+        finally:
+            manager.release_history_reader(
+                log_path,
+                lease,
+                manifest.defaults.run.history,
+            )
         return json_response({"run_id": run_id, "events": records})
 
     @router.post("/api/runs/{run_id}/abort")
@@ -918,15 +1065,16 @@ def build_app(workspace: Workspace) -> Application:
             )
         if run.finished:
             return json_response({"run_id": run_id, "state": run.state})
+        assert run.flow_run is not None
         run.flow_run.abort()
         return json_response({"run_id": run_id, "state": "aborting"}, status=202)
 
     @router.ws("/ws/runs/{run_id}")
     async def ws_run(websocket: WebSocket, run_id: str) -> None:
         """Text frames = the JSONL lines, verbatim (D13). Live runs:
-        replay the buffered prefix, then stream until run end (normal
-        close). Finished runs: replay the file, then close. Unknown:
-        close 4404."""
+        capture a durable-prefix boundary, stream that prefix from disk, then
+        consume a bounded live queue. Slow consumers close 4410 and reconnect
+        to resync from disk. Finished runs stream the file, then close."""
         try:
             run_id = resolver.validate_run_id(run_id)
         except WorkspaceBoundaryError:
@@ -937,29 +1085,7 @@ def build_app(workspace: Workspace) -> Application:
         if run is None:
             await websocket.close(WS_UNKNOWN_RUN, f"no run {run_id!r}")
             return
-        if run.finished:
-            try:
-                log_path = resolver.run_log(run.identity, run_id)
-                records = _read_records(log_path)
-            except WorkspaceBoundaryError:
-                await websocket.close(WS_WORKSPACE_BOUNDARY, "workspace_boundary")
-                return
-            except HistoryFormatError as e:
-                await websocket.close(WS_HISTORY_FORMAT, _ws_close_reason(str(e)))
-                return
-            for record in records:
-                await websocket.send_text(encode_record(record))
-            await websocket.close()
-            return
-        snapshot, queue = manager.subscribe(run)
-        try:
-            for record in snapshot:
-                await websocket.send_text(encode_record(record))
-            while (record := await queue.get()) is not None:
-                await websocket.send_text(encode_record(record))
-        finally:
-            manager.unsubscribe(run, queue)
-        await websocket.close()
+        await _stream_run_websocket(websocket, run, manager)
 
     if STATIC_DIR.is_dir():
         # the pre-built UI bundle (S4/M2, NFR-03); SPA fallback for

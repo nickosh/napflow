@@ -533,35 +533,59 @@ contracts, real-uvicorn worker path, and 1 KiB/100 KiB/10 MiB worker probes
 are green. EC22 descendant cleanup and EC35 synchronous-Jinja preemption
 remain explicitly after v0.2.
 
-### M3 — bounded execution state and history lifecycle
+### M3 — bounded execution state and history lifecycle  ✅ done 2026-07-13
 
-- [ ] Replace parallel-loop `gather(one task per item)` with a bounded
+- [x] Replace parallel-loop `gather(one task per item)` with a bounded
       producer/fixed task set while preserving index-ordered results and
       `max_concurrency`. Compact finished child frames after emitting a
       reconstructable frame summary (parent, target flow, loop index,
       timing, state, outputs/errors/assert counts). (NFR-14, D36)
-      **Progress 2026-07-13:** fixed workers and normal-quiescence frame
-      release landed with canonical `frame_finished` records, nested outcome
-      rollups, and a bounded 200-item regression. This box remains open for
-      TR-19's 100k active-state evidence and explicit aborted-frame replay/
-      release coverage; cancelled frames currently stay bounded by active
-      concurrency and die with run cleanup rather than risking a false D18.
-- [ ] Bound live subscriber queues and disconnect/resync slow consumers;
+      **Met 2026-07-13:** fixed workers and normal-quiescence frame release
+      emit canonical `frame_finished` records with nested outcome rollups.
+      The 200-item regression proves ordering/detail; the opt-in 100k gate
+      proves exactly 16 helpers and at most 16 live Frames; abort coverage
+      proves only active-concurrency children exist and no false D18 summary
+      is emitted.
+- [x] Bound live subscriber queues and disconnect/resync slow consumers;
       replay late subscribers from the durable log instead of retaining
       an unlimited prefix in RAM. Keep running-run summaries bounded.
-- [ ] Remove the CLI's unconditional all-event `ListSink`: no report means
+      **Met 2026-07-13:** the registry keeps only scalar `last_seq`
+      plus at most eight 256-record subscriber queues. Synchronous cutoffs and
+      `last_sent_seq` disk catch-up prevent gaps/duplicates; sends time out,
+      cross-process filesystem leases exclude active readers from whole-unit
+      retention, and finished WebSockets stream from disk. Server summaries
+      are scalar; browser pending records and the retained event window are
+      bounded. Exact overflow/catch-up and older-reader/newer-retention races
+      are regression-tested.
+- [x] Remove the CLI's unconditional all-event `ListSink`: no report means
       no report buffer; JSON/JUnit retain only their required event
       classes or stream from the durable log.
-- [ ] Make run retention operate after completion on whole run units,
+      **Met 2026-07-13:** the CLI no longer installs `ListSink`; JSON
+      retains only the final summary and JUnit streams assertion cases from
+      the closed JSONL with bounded counters; a 100k-assertion disk-backed
+      memory regression covers the former growth path. XML attributes are
+      sanitized and reports publish atomically without following symlinks.
+- [x] Make run retention operate after completion on whole run units,
       never active files. Use truly chronological metadata/IDs; delete
       JSONL, blobs, indexes, `.report.json`, and `.junit.xml` together.
       Replace the fixed-64KB tail assumption with a summary/index or a
       robust backward record reader. (EC47)
+      **Met 2026-07-13:** private active/complete/incomplete lifecycle
+      metadata now gates post-adapter retention; a locked monotonic order is
+      immune to same/equal/backward clocks. Canonical-tail revalidation,
+      exact symlink-safe companion cleanup/publication, resumable deletion
+      claims with registry eviction, legacy fallback, and arbitrary-size
+      backward record reading are covered.
 
 M3 DoD: task/frame/RAM growth is proportional to configured concurrency
 and active presentation windows rather than total loop/history size;
 slow WebSocket clients cannot grow the server without bound; retention
 never deletes an active/newer run or leaves companion artifacts.
+**Met 2026-07-13:** fixed loop workers/frame compaction, bounded server/CLI/
+browser presentation state, exact durable catch-up with per-send ceilings,
+filesystem-reader-leased whole-unit retention, and the TR-19 100k/abort
+evidence are green. Full REST paging/lazy replay remains its planned M5 owner,
+not retained active state in M3.
 
 ### M4 — full-fidelity history, prepared requests, and redacted exports
 

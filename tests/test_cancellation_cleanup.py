@@ -468,18 +468,24 @@ def test_server_shutdown_uses_abort_cleanup_and_drains_run(tmp_path):
     async def scenario():
         manager = RunManager()
         active = manager.start(workspace, prepared, {})
+        flow_run = active.flow_run
+        assert flow_run is not None
         async with asyncio.timeout(5):
-            while not any(
-                record["event"] == "node_fired" and record.get("node") == "sleep"
-                for record in active.buffer
-            ):
+            while True:
+                durable_prefix = active.log_path.read_text(encoding="utf-8")
+                if (
+                    '"event":"node_fired"' in durable_prefix
+                    and '"node":"sleep"' in durable_prefix
+                ):
+                    break
                 await asyncio.sleep(0)
 
         await manager.shutdown()
 
         assert active.task is not None and active.task.done()
         assert active.result is not None and active.result.state == "aborted"
-        assert active.flow_run._stream._closed
+        assert active.flow_run is None
+        assert flow_run._stream._closed
         records = _assert_parseable_jsonl_prefix(active.log_path)
         assert records[-1]["event"] == "run_finished"
         assert records[-1]["state"] == "aborted"

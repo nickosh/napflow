@@ -20,8 +20,14 @@ Declared secrets only; runtime-acquired tokens are stored in full (roadmap).
 """
 
 import json
+import os
+import re
 import secrets as _secrets
-from collections.abc import Callable, Iterable, Mapping
+import shutil
+import stat
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import asdict as _asdict
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
@@ -30,6 +36,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar, Literal
 
+from napflow.core.files import atomic_write_text
 from napflow.core.workspace import WorkspaceResolver
 
 MASK = "***"
@@ -374,11 +381,260 @@ class SecretMasker:
 # Run log location + retention (FR-701)
 
 RUNS_DIRNAME = Path(".napflow") / "runs"
+_RUN_ID_FILENAME_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+_ACTIVE_SUFFIX = ".active"
+_INCOMPLETE_SUFFIX = ".incomplete"
+_COMPLETE_SUFFIX = ".complete.json"
+_DELETING_SUFFIX = ".deleting"
+_READER_SUFFIX_PREFIX = ".reader-"
+_ORDER_FILENAME = ".history-order.json"
+_LOCK_FILENAME = ".history.lock"
+_UNIT_FILE_SUFFIXES = (
+    ".report.json",
+    ".junit.xml",
+    _COMPLETE_SUFFIX,
+    _ACTIVE_SUFFIX,
+    _INCOMPLETE_SUFFIX,
+)
+_UNIT_DIRECTORY_SUFFIXES = (".blobs", ".index")
+
+
+@dataclass(frozen=True)
+class RunHistoryUnit:
+    """Private lifecycle companions for one persisted run.
+
+    ``active`` protects the JSONL while execution/report finalization is in
+    progress across CLI/server processes. ``complete`` publishes sortable
+    chronology only after the final record and report companions are durable.
+    """
+
+    run_id: str
+    log_path: Path
+    active_path: Path
+    incomplete_path: Path
+    complete_path: Path
+    started_ns: int
+    order: int
+
+
+def _companion(log_path: Path, suffix: str) -> Path:
+    return log_path.with_name(f"{log_path.stem}{suffix}")
+
+
+@contextmanager
+def _history_directory_lock(runs_dir: Path) -> Iterator[None]:
+    """Serialize history mutation without following a planted lock symlink."""
+    lock_path = runs_dir / _LOCK_FILENAME
+    flags = os.O_RDWR
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(lock_path, flags)
+    except FileNotFoundError:
+        try:
+            # O_EXCL makes a raced symlink/file fail without following it,
+            # including on Windows where O_NOFOLLOW is usually unavailable.
+            fd = os.open(lock_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        except OSError as error:
+            raise OSError(f"history lock creation failed: {lock_path}") from error
+    except OSError as error:
+        raise OSError(f"history lock open failed: {lock_path}") from error
+    fd_open = True
+    try:
+        opened = os.fstat(fd)
+        current = lock_path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise OSError(f"history lock changed during open: {lock_path}")
+        lock = os.fdopen(fd, "r+b")
+        fd_open = False
+        with lock:
+            if os.name == "nt":
+                import msvcrt
+
+                lock.seek(0, 2)
+                if lock.tell() == 0:
+                    lock.write(b"\0")
+                    lock.flush()
+                    os.fsync(lock.fileno())
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    finally:
+        if fd_open:
+            os.close(fd)
+
+
+def _write_exclusive_marker(path: Path, payload: dict[str, Any]) -> None:
+    """Create one fsynced private marker, removing only our partial on error."""
+    marker = None
+    try:
+        marker = path.open("x", encoding="utf-8", newline="\n")
+        with marker:
+            marker.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            marker.flush()
+            os.fsync(marker.fileno())
+    except BaseException:
+        if marker is not None:
+            with suppress(Exception):
+                marker.close()
+            path.unlink(missing_ok=True)
+        raise
+
+
+def begin_history_reader(log_path: Path) -> Path:
+    """Publish a cross-process lease that excludes this unit from retention."""
+    run_id = log_path.stem
+    if _RUN_ID_FILENAME_RE.fullmatch(run_id) is None:
+        raise ValueError(f"invalid run id for history reader: {run_id!r}")
+    with _history_directory_lock(log_path.parent):
+        try:
+            if not stat.S_ISREG(log_path.lstat().st_mode):
+                raise FileNotFoundError(log_path)
+        except OSError as error:
+            raise FileNotFoundError(log_path) from error
+        if _lexists(_companion(log_path, _DELETING_SUFFIX)):
+            raise FileNotFoundError(log_path)
+        for _ in range(10):
+            lease = log_path.with_name(
+                f"{run_id}{_READER_SUFFIX_PREFIX}{os.getpid()}-{_secrets.token_hex(6)}"
+            )
+            try:
+                _write_exclusive_marker(
+                    lease,
+                    {"version": 1, "run_id": run_id, "pid": os.getpid()},
+                )
+            except FileExistsError:
+                continue
+            return lease
+    raise FileExistsError(f"could not allocate history reader lease for {run_id}")
+
+
+def end_history_reader(lease: Path) -> None:
+    lease.unlink(missing_ok=True)
+
+
+@contextmanager
+def history_reader(log_path: Path) -> Iterator[None]:
+    lease = begin_history_reader(log_path)
+    try:
+        yield
+    finally:
+        end_history_reader(lease)
+
+
+def _private_order(path: Path) -> int | None:
+    try:
+        mode = path.lstat().st_mode
+        if not stat.S_ISREG(mode):
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    order = value.get("order") if isinstance(value, dict) else None
+    return order if type(order) is int and order > 0 else None
+
+
+def _next_history_order(runs_dir: Path) -> int:
+    """Allocate a durable per-flow creation order immune to wall-clock jumps."""
+    with _history_directory_lock(runs_dir):
+        counter_path = runs_dir / _ORDER_FILENAME
+        counter_order = _private_order(counter_path) or 0
+        marker_order = max(
+            (
+                order
+                for suffix in (_ACTIVE_SUFFIX, _INCOMPLETE_SUFFIX, _COMPLETE_SUFFIX)
+                for marker in runs_dir.glob(f"*{suffix}")
+                if (order := _private_order(marker)) is not None
+            ),
+            default=0,
+        )
+        order = max(counter_order, marker_order) + 1
+        atomic_write_text(
+            counter_path,
+            json.dumps({"version": 1, "order": order}, separators=(",", ":"))
+            + "\n",
+        )
+        return order
+
+
+def begin_run_history(log_path: Path, run_id: str) -> RunHistoryUnit:
+    """Create the exclusive active marker before any event can be emitted."""
+    started_ns = time.time_ns()
+    order = _next_history_order(log_path.parent)
+    unit = RunHistoryUnit(
+        run_id=run_id,
+        log_path=log_path,
+        active_path=_companion(log_path, _ACTIVE_SUFFIX),
+        incomplete_path=_companion(log_path, _INCOMPLETE_SUFFIX),
+        complete_path=_companion(log_path, _COMPLETE_SUFFIX),
+        started_ns=started_ns,
+        order=order,
+    )
+    payload = {
+        "version": 1,
+        "run_id": run_id,
+        "started_ns": started_ns,
+        "order": order,
+    }
+    _write_exclusive_marker(unit.active_path, payload)
+    return unit
+
+
+def abandon_run_history(unit: RunHistoryUnit) -> None:
+    """Mark a known-closed prefix incomplete without making it retainable."""
+    with suppress(FileNotFoundError):
+        unit.active_path.replace(unit.incomplete_path)
+
+
+def complete_run_history(unit: RunHistoryUnit, history: int) -> list[Path]:
+    """Publish completion metadata, release protection, then retain units."""
+    final = last_jsonl_record(unit.log_path)
+    if (
+        final is None
+        or final.get("event") != "run_finished"
+        or final.get("run_id") != unit.run_id
+    ):
+        abandon_run_history(unit)
+        return []
+    metadata = {
+        "version": 1,
+        "run_id": unit.run_id,
+        "started_ns": unit.started_ns,
+        "completed_ns": time.time_ns(),
+        "order": unit.order,
+    }
+    atomic_write_text(
+        unit.complete_path,
+        json.dumps(metadata, separators=(",", ":")) + "\n",
+    )
+    unit.active_path.unlink(missing_ok=True)
+    unit.incomplete_path.unlink(missing_ok=True)
+    return apply_retention(unit.log_path.parent, history)
 
 
 def new_run_id(now: datetime | None = None) -> str:
-    """Sortable, Windows-safe (no `:`): `YYYYmmdd-HHMMSS-xxxxxx` (UTC +
-    6 hex). Doubles as the JSONL filename stem."""
+    """Timestamp-prefixed, Windows-safe id: `YYYYmmdd-HHMMSS-xxxxxx`.
+
+    The random suffix prevents collisions; private lifecycle metadata carries
+    exact same-second chronology for retention and presentation.
+    """
     now = now if now is not None else datetime.now(UTC)
     return f"{now:%Y%m%d-%H%M%S}-{_secrets.token_hex(3)}"
 
@@ -391,15 +647,213 @@ def run_log_path(workspace_root: Path, flow_identity: str, run_id: str) -> Path:
 
 
 def apply_retention(runs_dir: Path, history: int) -> list[Path]:
-    """Keep the newest `history` run logs in one flow's directory,
-    delete the rest (returned). Filenames sort chronologically (run ids
-    are UTC-timestamp-prefixed). Called at run start, after the new
-    run's file is created — the new run counts toward the cap."""
-    logs = sorted(runs_dir.glob("*.jsonl"))
-    excess = logs[:-history] if len(logs) > history else []
-    for log in excess:
-        log.unlink()
-    return excess
+    """Retain newest completed run units; active/incomplete runs do not count.
+
+    New runs use a private, locked monotonic creation order.
+    Markerless legacy runs remain eligible when their robust last record is
+    ``run_finished`` and use JSONL mtime. Exact companions are claimed and
+    removed together; the JSONL is deleted last, and interrupted deletions
+    resume from their tombstones on the next pass.
+    """
+    claimed: list[Path] = []
+    with _history_directory_lock(runs_dir):
+        deleted = _resume_deletions(runs_dir)
+        completed: list[tuple[tuple[int, int, int, str], Path]] = []
+        for log in runs_dir.glob("*.jsonl"):
+            try:
+                mode = log.lstat().st_mode
+            except OSError:
+                continue
+            if not stat.S_ISREG(mode):
+                continue
+            run_id = log.stem
+            if _RUN_ID_FILENAME_RE.fullmatch(run_id) is None:
+                continue
+            if (
+                _lexists(_companion(log, _ACTIVE_SUFFIX))
+                or _lexists(_companion(log, _INCOMPLETE_SUFFIX))
+                or _has_history_reader(log)
+            ):
+                continue
+            final = last_jsonl_record(log)
+            if (
+                final is None
+                or final.get("event") != "run_finished"
+                or final.get("run_id") != run_id
+            ):
+                continue
+            complete_path = _companion(log, _COMPLETE_SUFFIX)
+            metadata = _completion_metadata(log)
+            if metadata is not None:
+                chronology = (
+                    1,
+                    metadata["order"],
+                    metadata["completed_ns"],
+                    run_id,
+                )
+            elif _lexists(complete_path):
+                continue  # malformed/private metadata is protected, never guessed
+            else:
+                try:
+                    modified_ns = log.lstat().st_mtime_ns
+                except OSError:
+                    continue
+                chronology = (0, modified_ns, modified_ns, run_id)
+            completed.append((chronology, log))
+
+        completed.sort(key=lambda entry: entry[0])
+        excess = completed[:-history] if len(completed) > history else []
+        for _, log in excess:
+            if _claim_deletion(log):
+                claimed.append(log)
+
+    for log in claimed:
+        try:
+            _delete_claimed_unit(log)
+        except OSError:
+            continue
+        deleted.append(log)
+    return deleted
+
+
+def _lexists(path: Path) -> bool:
+    try:
+        path.lstat()
+    except OSError:
+        return False
+    return True
+
+
+def _completion_metadata(log: Path) -> dict[str, int] | None:
+    path = _companion(log, _COMPLETE_SUFFIX)
+    try:
+        mode = path.lstat().st_mode
+        if not stat.S_ISREG(mode):
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (
+        not isinstance(value, dict)
+        or value.get("version") != 1
+        or value.get("run_id") != log.stem
+        or type(value.get("started_ns")) is not int
+        or type(value.get("completed_ns")) is not int
+        or type(value.get("order")) is not int
+        or value["order"] <= 0
+    ):
+        return None
+    return {
+        "started_ns": value["started_ns"],
+        "completed_ns": value["completed_ns"],
+        "order": value["order"],
+    }
+
+
+def run_history_sort_key(log: Path) -> tuple[int, int, int, str]:
+    """Chronological key for history lists and retention presentation."""
+    metadata = _completion_metadata(log)
+    if metadata is not None:
+        return 1, metadata["order"], metadata["completed_ns"], log.stem
+    for suffix in (_ACTIVE_SUFFIX, _INCOMPLETE_SUFFIX):
+        path = _companion(log, suffix)
+        try:
+            mode = path.lstat().st_mode
+            if not stat.S_ISREG(mode):
+                continue
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            isinstance(value, dict)
+            and value.get("version") == 1
+            and value.get("run_id") == log.stem
+            and type(value.get("started_ns")) is int
+            and type(value.get("order")) is int
+            and value["order"] > 0
+        ):
+            return 1, value["order"], value["started_ns"], log.stem
+    try:
+        modified_ns = log.lstat().st_mtime_ns
+    except OSError:
+        modified_ns = 0
+    return 0, modified_ns, modified_ns, log.stem
+
+
+def _claim_deletion(log: Path) -> bool:
+    claim = _companion(log, _DELETING_SUFFIX)
+    try:
+        _write_exclusive_marker(
+            claim,
+            {"version": 1, "run_id": log.stem},
+        )
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def _has_history_reader(log: Path) -> bool:
+    return any(
+        _lexists(path)
+        for path in log.parent.glob(f"{log.stem}{_READER_SUFFIX_PREFIX}*")
+    )
+
+
+def _remove_owned_path(path: Path) -> None:
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(mode):
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _delete_claimed_unit(log: Path) -> None:
+    run_id = log.stem
+    for suffix in (*_UNIT_FILE_SUFFIXES, *_UNIT_DIRECTORY_SUFFIXES):
+        _remove_owned_path(log.with_name(f"{run_id}{suffix}"))
+    _remove_owned_path(log)  # canonical source disappears last
+    _remove_owned_path(log.with_name(f"{run_id}{_DELETING_SUFFIX}"))
+
+
+def _resume_deletions(runs_dir: Path) -> list[Path]:
+    deleted: list[Path] = []
+    for claim in runs_dir.glob(f"*{_DELETING_SUFFIX}"):
+        try:
+            if not stat.S_ISREG(claim.lstat().st_mode):
+                continue
+        except OSError:
+            continue
+        run_id = claim.name.removesuffix(_DELETING_SUFFIX)
+        if _RUN_ID_FILENAME_RE.fullmatch(run_id) is None:
+            continue
+        log = runs_dir / f"{run_id}.jsonl"
+        if (
+            _lexists(_companion(log, _ACTIVE_SUFFIX))
+            or _lexists(_companion(log, _INCOMPLETE_SUFFIX))
+            or _has_history_reader(log)
+        ):
+            claim.unlink(missing_ok=True)
+            continue
+        if _lexists(log):
+            final = last_jsonl_record(log)
+            if (
+                final is None
+                or final.get("event") != "run_finished"
+                or final.get("run_id") != run_id
+            ):
+                claim.unlink(missing_ok=True)
+                continue
+        try:
+            _delete_claimed_unit(log)
+        except OSError:
+            continue
+        deleted.append(log)
+    return deleted
 
 
 # --------------------------------------------------------------------------
@@ -411,6 +865,63 @@ def encode_record(record: dict[str, Any]) -> str:
     JSONL lines and WebSocket frames both use it, so they are identical
     by construction (D13: replay = re-read file)."""
     return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+
+
+_JSONL_REVERSE_BLOCK_BYTES = 64 * 1024
+
+
+def _iter_jsonl_lines_reverse(
+    file: Any, *, block_bytes: int = _JSONL_REVERSE_BLOCK_BYTES
+) -> Iterator[bytes]:
+    """Yield lines from a seekable binary file, newest first.
+
+    Reads fixed-size blocks from the end and retains only the fragments for
+    the line crossing the current block boundary. A single record may exceed
+    ``block_bytes``; its fragments are joined only after its preceding newline
+    is found, avoiding both a fixed tail window and whole-file materialization.
+    """
+    file.seek(0, 2)
+    position = file.tell()
+    fragments: list[bytes] = []
+    while position:
+        read_size = min(block_bytes, position)
+        position -= read_size
+        file.seek(position)
+        parts = file.read(read_size).split(b"\n")
+        if len(parts) == 1:
+            fragments.append(parts[0])
+            continue
+
+        yield parts[-1] + b"".join(reversed(fragments))
+        yield from reversed(parts[1:-1])
+        fragments = [parts[0]]
+
+    if fragments:
+        yield b"".join(reversed(fragments))
+
+
+def last_jsonl_record(path: Path) -> dict[str, Any] | None:
+    """Return the last valid JSON-object record in ``path``.
+
+    Blank, malformed, partial, and non-object trailing lines are skipped, so
+    an interrupted append does not hide the preceding durable event (EC20).
+    The scan works backward in bounded blocks and grows only to accommodate a
+    single record, regardless of that record's line size.
+    """
+    try:
+        with path.open("rb") as file:
+            for line in _iter_jsonl_lines_reverse(file):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except (UnicodeError, ValueError):
+                    continue
+                if isinstance(record, dict):
+                    return record
+    except OSError:
+        return None
+    return None
 
 
 class JsonlSink:

@@ -17,7 +17,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from napflow.core.engine import FlowRun
-from test_engine import end, events_of, flow, run, start
+from napflow.core.events import EventStream
+from test_engine import (
+    NO_SECRETS,
+    CaptureSink,
+    end,
+    events_of,
+    flow,
+    manifest,
+    run,
+    start,
+)
 
 
 def write_flow(root, ref, nodes, edges, nodes_py=None, env_required=None):
@@ -442,6 +452,76 @@ def test_parallel_loop_bounds_workers_and_releases_finished_frames(
     summaries = events_of(records, "frame_finished")
     assert len(summaries) == count
     assert {record["loop_index"] for record in summaries} == set(range(count))
+
+
+def test_parallel_loop_abort_keeps_only_active_frames_and_replays_abort(tmp_path):
+    concurrency = 4
+    write_flow(
+        tmp_path,
+        "flows/abortable",
+        [
+            start({"name": "item", "type": "number"}),
+            {"id": "pause", "type": "delay", "config": {"seconds": 60}},
+            end({"name": "value"}),
+        ],
+        [("start.item", "pause.in"), ("pause.out", "end.value")],
+    )
+    parent = flow(
+        start(),
+        loop(
+            "lp",
+            "range(100) | list",
+            "flows/abortable",
+            mode="parallel",
+            max_concurrency=concurrency,
+        ),
+        end(),
+        edges=[("start.out", "lp.trigger")],
+    )
+
+    async def scenario():
+        reached = asyncio.Event()
+
+        class AbortSink(CaptureSink):
+            def write(self, record):
+                super().write(record)
+                active_frames = {
+                    item["frame"]
+                    for item in self.records
+                    if item["event"] == "node_fired"
+                    and item.get("node") == "pause"
+                }
+                if len(active_frames) == concurrency:
+                    reached.set()
+
+        sink = AbortSink()
+        engine = FlowRun(
+            parent,
+            flow_identity="flows/abort-parent",
+            manifest=manifest(),
+            env={},
+            env_name=None,
+            inputs={},
+            stream=EventStream("abort-loop", NO_SECRETS, [sink]),
+            workspace_root=tmp_path,
+        )
+        task = asyncio.create_task(engine.execute())
+        async with asyncio.timeout(5):
+            await reached.wait()
+            engine.abort()
+            result = await task
+        return result, sink.records
+
+    result, records = asyncio.run(scenario())
+    child_frames = {
+        record["frame"]
+        for record in records
+        if record["event"] == "node_fired" and record.get("node") == "pause"
+    }
+    assert result.state == "aborted"
+    assert len(child_frames) == concurrency
+    assert events_of(records, "frame_finished") == []
+    assert events_of(records, "run_finished")[-1]["state"] == "aborted"
 
 
 def make_small_checker(tmp_path):

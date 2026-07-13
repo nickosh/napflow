@@ -27,7 +27,8 @@ from contextlib import suppress
 
 import pytest
 
-from napflow.core.events import HISTORY_FORMAT
+from napflow.core.engine import FlowRun
+from napflow.core.events import HISTORY_FORMAT, EventStream, SecretMasker
 from napflow.core.worker import WorkerPool, default_interpreter
 from napflow.server.app import _read_records
 from test_engine import end, flow, manifest, run, start
@@ -248,6 +249,91 @@ def test_parallel_loop_peak_memory_100k(tmp_path):
         tracemalloc.stop()
     _report("parallel loop peak heap", f"n={n:,}, peak {peak / 1e6:.1f} MB")
     assert result.state == "passed"
+
+
+def test_parallel_loop_active_tasks_and_frames_100k(tmp_path, monkeypatch):
+    """M3/TR-19 scale gate: semantic outputs may grow; active runtime may not."""
+    n = 100_000
+    concurrency = 16
+    _parallel_loop_flow(tmp_path, n)  # writes the referenced body flow
+    # Results are deliberately unwired: the loop must still process all items,
+    # but the root result does not retain the 100k output dictionaries.
+    f = flow(
+        start(),
+        loop(
+            "lp",
+            f"range({n}) | list",
+            "flows/body",
+            mode="parallel",
+            max_concurrency=concurrency,
+        ),
+        end(),
+        edges=[("start.out", "lp.trigger")],
+    )
+
+    active = 0
+    peak = 0
+    worker_count = 0
+    original_spawn = FlowRun._spawn_frame
+    original_finish = FlowRun._finish_child
+    original_create_task = asyncio.TaskGroup.create_task
+
+    def tracked_spawn(self, *args, **kwargs):
+        nonlocal active, peak
+        child = original_spawn(self, *args, **kwargs)
+        active += 1
+        peak = max(peak, active)
+        return child
+
+    def tracked_finish(self, *args, **kwargs):
+        nonlocal active
+        try:
+            return original_finish(self, *args, **kwargs)
+        finally:
+            active -= 1
+
+    def tracked_create_task(group, coro, *, name=None, context=None):
+        nonlocal worker_count
+        if name and name.startswith("napf-loop-"):
+            worker_count += 1
+        return original_create_task(group, coro, name=name, context=context)
+
+    class SummarySink:
+        def __init__(self):
+            self.count = 0
+            self.index_sum = 0
+
+        def write(self, record):
+            if record["event"] == "frame_finished":
+                self.count += 1
+                self.index_sum += record["loop_index"]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(FlowRun, "_spawn_frame", tracked_spawn)
+    monkeypatch.setattr(FlowRun, "_finish_child", tracked_finish)
+    monkeypatch.setattr(asyncio.TaskGroup, "create_task", tracked_create_task)
+    sink = SummarySink()
+    engine = FlowRun(
+        f,
+        flow_identity="flows/perf",
+        manifest=BIG_BUDGET,
+        env={},
+        env_name=None,
+        inputs={},
+        stream=EventStream("perf-loop", SecretMasker([], {}), [sink]),
+        workspace_root=tmp_path,
+    )
+
+    result = asyncio.run(engine.execute())
+
+    assert result.state == "passed"
+    assert worker_count == concurrency
+    assert peak <= concurrency
+    assert active == 0
+    assert sink.count == n
+    assert sink.index_sum == n * (n - 1) // 2
 
 
 def _write_history_log(log, target_mb):

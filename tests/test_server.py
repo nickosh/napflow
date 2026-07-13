@@ -11,24 +11,47 @@ and the ASGI/WebSocket stack coexist (EC28/EC33).
 
 import asyncio
 import json
+import os
 import socket
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import pytest
 from blacksheep.contents import Content, JSONContent
 from blacksheep.testing import TestClient
 
+import napflow.core.events as events_module
+import napflow.server.app as app_module
+import napflow.server.runs as runs_module
 from napflow.cli.main import DEFAULT_UI_PORT, _pick_ui_port
 from napflow.cli.scaffold import scaffold_workspace
-from napflow.core.events import HISTORY_FEATURE_CONTENT_BLOBS, HISTORY_FORMAT
+from napflow.core.engine import RunResult
+from napflow.core.events import (
+    HISTORY_FEATURE_CONTENT_BLOBS,
+    HISTORY_FORMAT,
+    apply_retention,
+    begin_history_reader,
+)
 from napflow.core.workspace import Workspace, load_workspace
 from napflow.server import build_app
 from napflow.server.app import (
     WS_HISTORY_FORMAT,
     WS_REQUEST_ORIGIN,
     _read_records,
+    _send_history_range,
+    _send_ws_record,
     _SourceWriteCoordinator,
+    _stream_run_websocket,
+)
+from napflow.server.runs import (
+    SUBSCRIBER_QUEUE_LIMIT,
+    SUBSCRIBER_RESYNC,
+    SUBSCRIBERS_PER_RUN_LIMIT,
+    ActiveRun,
+    RunManager,
+    SubscriberLimitError,
+    _LiveSink,
 )
 
 # --------------------------------------------------------------------------
@@ -40,6 +63,18 @@ def make_scaffold_ws(tmp_path: Path) -> Workspace:
     fixture→python→assert flow (EC34), i.e. it exercises the worker."""
     wsdir = tmp_path / "ws"
     list(scaffold_workspace(wsdir))
+    return load_workspace(wsdir)
+
+
+def make_retained_scaffold_ws(tmp_path: Path, history: int = 1) -> Workspace:
+    wsdir = tmp_path / "ws"
+    list(scaffold_workspace(wsdir))
+    manifest = wsdir / "napflow.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + f'defaults:\n  run:\n    history: {history}\n',
+        encoding="utf-8",
+    )
     return load_workspace(wsdir)
 
 
@@ -178,6 +213,190 @@ def test_run_smoke_flow_to_passed_with_replay(tmp_path):
         history = await client.get("/api/runs", query={"flow": "flows/smoke"})
         runs = (await history.json())["runs"]
         assert {"run_id": started["run_id"], "state": "passed"} in runs
+
+    with_client(ws, scenario)
+
+
+def test_server_retention_runs_after_completion_and_evicts_registry(tmp_path):
+    ws = make_retained_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        first = await start_run(client, "flows/smoke")
+        await wait_finished(client, first["run_id"])
+        second = await start_run(client, "flows/smoke")
+        await wait_finished(client, second["run_id"])
+
+        history = await client.get("/api/runs", query={"flow": "flows/smoke"})
+        assert (await history.json())["runs"] == [
+            {"run_id": second["run_id"], "state": "passed"}
+        ]
+        evicted = await client.get(f"/api/runs/{first['run_id']}")
+        assert evicted.status == 404
+        runs_dir = ws.root / ".napflow" / "runs" / "flows" / "smoke"
+        assert list(runs_dir.glob("*.active")) == []
+        assert list(runs_dir.glob("*.deleting")) == []
+
+    with_client(ws, scenario)
+
+
+def test_live_subscriber_queue_is_bounded_and_collapses_to_resync():
+    manager = RunManager()
+    run = SimpleNamespace(
+        finished=False,
+        last_seq=0,
+        subscribers=set(),
+        replay_readers=0,
+        presentation_changed=asyncio.Event(),
+    )
+    through_seq, subscriber = manager.subscribe(run)
+    sink = _LiveSink()
+    sink.run = run
+
+    for seq in range(1, SUBSCRIBER_QUEUE_LIMIT + 2):
+        sink.write({"event": "node_fired", "seq": seq})
+
+    assert through_seq == 0
+    assert run.last_seq == SUBSCRIBER_QUEUE_LIMIT + 1
+    assert subscriber.queue.maxsize == SUBSCRIBER_QUEUE_LIMIT
+    assert subscriber.queue.qsize() == 1
+    assert subscriber.queue.get_nowait() is SUBSCRIBER_RESYNC
+    assert subscriber.overflowed
+
+
+def test_live_subscriber_count_is_bounded():
+    manager = RunManager()
+    run = SimpleNamespace(
+        finished=False,
+        last_seq=0,
+        subscribers=set(),
+        replay_readers=0,
+        presentation_changed=asyncio.Event(),
+    )
+    for _ in range(SUBSCRIBERS_PER_RUN_LIMIT):
+        manager.subscribe(run)
+
+    with pytest.raises(SubscriberLimitError):
+        manager.subscribe(run)
+
+
+def test_run_history_finalization_drops_engine_state(tmp_path, monkeypatch):
+    finalized = False
+
+    def finalize(_opened, *, completed):
+        nonlocal finalized
+        assert completed
+        finalized = True
+        return []
+
+    monkeypatch.setattr(runs_module, "finalize_run_history", finalize)
+
+    class Flow:
+        async def execute(self):
+            return RunResult(
+                state="passed",
+                end_outputs={},
+                asserts_passed=0,
+                asserts_failed=0,
+                unhandled_errors=[],
+                nodes_never_fired=[],
+                duration_ms=1.0,
+            )
+
+    class Stream:
+        def close(self):
+            pass
+
+    async def scenario():
+        manager = RunManager()
+        run = ActiveRun("run", "flows/run", tmp_path / "run.jsonl", Flow())
+        _through_seq, subscriber = manager.subscribe(run)
+        drive = asyncio.create_task(
+            manager._drive(run, SimpleNamespace(stream=Stream()))
+        )
+        await drive
+        assert run.finished
+        assert run.flow_run is None
+        assert finalized
+        assert subscriber.queue.get_nowait() is runs_module.SUBSCRIBER_END
+        manager.unsubscribe(run, subscriber)
+
+    asyncio.run(scenario())
+
+
+def test_server_shutdown_releases_deferred_resync_reader(tmp_path):
+    run_id = "20260712-100000-000001"
+    log = tmp_path / f"{run_id}.jsonl"
+    log.write_text(
+        json.dumps({"event": "run_finished", "run_id": run_id}) + "\n",
+        encoding="utf-8",
+    )
+
+    async def scenario():
+        manager = RunManager()
+        lease = begin_history_reader(log)
+        manager.defer_history_reader_release(log, lease, history_limit=20)
+        assert lease.exists()
+        await manager.shutdown()
+        assert not lease.exists()
+        assert manager._deferred_readers == {}
+
+    asyncio.run(scenario())
+
+
+def test_server_evicts_registry_when_interrupted_deletion_resumes(
+    tmp_path, monkeypatch
+):
+    ws = make_retained_scaffold_ws(tmp_path)
+    real_remove = events_module._remove_owned_path
+    failed_once = False
+
+    def fail_first_tombstone_removal(path):
+        nonlocal failed_once
+        if path.name.endswith(".deleting") and not failed_once:
+            failed_once = True
+            raise OSError("simulated sharing violation")
+        real_remove(path)
+
+    monkeypatch.setattr(
+        events_module, "_remove_owned_path", fail_first_tombstone_removal
+    )
+
+    async def scenario(client):
+        first = await start_run(client, "flows/smoke")
+        await wait_finished(client, first["run_id"])
+        second = await start_run(client, "flows/smoke")
+        await wait_finished(client, second["run_id"])
+        assert failed_once
+
+        # A later retention pass resumes the first tombstone and must report
+        # that deletion back to the registry as well as its newly claimed unit.
+        third = await start_run(client, "flows/smoke")
+        await wait_finished(client, third["run_id"])
+        for deleted in (first, second):
+            response = await client.get(f"/api/runs/{deleted['run_id']}")
+            assert response.status == 404
+
+    with_client(ws, scenario)
+
+
+def test_history_listing_recognizes_large_completion_before_partial_tail(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    run_id = "19700101-000000-abcdef"
+    log_path = ws.root / ".napflow" / "runs" / "flows" / "smoke" / f"{run_id}.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_bytes(
+        json.dumps({"event": "run_started", "seq": 1}).encode()
+        + b"\n"
+        + json.dumps(
+            {"event": "run_finished", "state": "failed", "detail": "z" * 80_000}
+        ).encode()
+        + b'\n{"event":"partial"'
+    )
+
+    async def scenario(client):
+        history = await client.get("/api/runs", query={"flow": "flows/smoke"})
+        assert history.status == 200
+        assert (await history.json())["runs"] == [{"run_id": run_id, "state": "failed"}]
 
     with_client(ws, scenario)
 
@@ -1348,6 +1567,195 @@ def test_clone_flow_rejections(tmp_path):
 # WebSocket (D13: frames identical to JSONL lines)
 
 
+def test_ws_history_range_resumes_without_duplicates(tmp_path):
+    path = tmp_path / "range.jsonl"
+    records = [
+        {
+            "event": "run_started" if seq == 1 else "node_fired",
+            "run_id": "range",
+            "seq": seq,
+            **(
+                {"format": HISTORY_FORMAT, "features": []}
+                if seq == 1
+                else {}
+            ),
+        }
+        for seq in range(1, 6)
+    ]
+    path.write_text(
+        "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+
+        async def send_text(self, text):
+            self.sent.append(json.loads(text))
+
+    socket = Socket()
+    last_sent = asyncio.run(
+        _send_history_range(socket, path, after_seq=2, through_seq=4)
+    )
+
+    assert [record["seq"] for record in socket.sent] == [3, 4]
+    assert last_sent == 4
+
+
+def test_ws_overflow_catches_up_exactly_once_on_same_socket(tmp_path):
+    run_id = "20260712-100000-000001"
+    log = tmp_path / f"{run_id}.jsonl"
+    header = {
+        "event": "run_started",
+        "run_id": run_id,
+        "seq": 1,
+        "format": HISTORY_FORMAT,
+        "features": [],
+    }
+    log.write_text(json.dumps(header, separators=(",", ":")) + "\n", encoding="utf-8")
+    run = SimpleNamespace(
+        run_id=run_id,
+        log_path=log,
+        history_limit=20,
+        finished=False,
+        last_seq=1,
+        subscribers=set(),
+        replay_readers=0,
+        resync_until=0.0,
+    )
+    manager = RunManager()
+    sink = _LiveSink()
+    sink.run = run
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+            self.first_send = asyncio.Event()
+            self.release = asyncio.Event()
+            self.closed = None
+
+        async def send_text(self, text):
+            self.sent.append(json.loads(text))
+            if len(self.sent) == 1:
+                self.first_send.set()
+                await self.release.wait()
+
+        async def close(self, code, reason):
+            self.closed = (code, reason)
+
+    async def scenario():
+        socket = Socket()
+        serving = asyncio.create_task(_stream_run_websocket(socket, run, manager))
+        await socket.first_send.wait()
+        final_seq = SUBSCRIBER_QUEUE_LIMIT + 20
+        with log.open("a", encoding="utf-8") as history:
+            for seq in range(2, final_seq + 1):
+                record = {
+                    "event": "run_finished" if seq == final_seq else "node_fired",
+                    "run_id": run_id,
+                    "seq": seq,
+                    **({"state": "passed"} if seq == final_seq else {}),
+                }
+                history.write(json.dumps(record, separators=(",", ":")) + "\n")
+                history.flush()
+                sink.write(record)
+        run.finished = True
+        socket.release.set()
+        await serving
+        return socket, final_seq
+
+    socket, final_seq = asyncio.run(scenario())
+    assert [record["seq"] for record in socket.sent] == list(
+        range(1, final_seq + 1)
+    )
+    assert socket.closed == (1000, "")
+
+
+def test_finished_ws_reader_lease_blocks_newer_run_retention(tmp_path):
+    old_id = "20260712-100000-000001"
+    new_id = "20260712-100000-000002"
+    old = tmp_path / f"{old_id}.jsonl"
+    new = tmp_path / f"{new_id}.jsonl"
+    old.write_text(
+        json.dumps(
+            {
+                "event": "run_started",
+                "run_id": old_id,
+                "seq": 1,
+                "format": HISTORY_FORMAT,
+                "features": [],
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+        + json.dumps(
+            {"event": "run_finished", "run_id": old_id, "seq": 2},
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    new.write_text(
+        json.dumps({"event": "run_finished", "run_id": new_id}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(old, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(new, ns=(2_000_000_000, 2_000_000_000))
+    run = SimpleNamespace(
+        run_id=old_id,
+        log_path=old,
+        history_limit=20,
+        finished=True,
+        subscribers=set(),
+        replay_readers=0,
+        resync_until=0.0,
+    )
+    manager = RunManager()
+
+    class Socket:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def send_text(self, _text):
+            self.started.set()
+            await self.release.wait()
+
+        async def close(self, _code, _reason):
+            pass
+
+    async def scenario():
+        socket = Socket()
+        serving = asyncio.create_task(_stream_run_websocket(socket, run, manager))
+        await socket.started.wait()
+        assert len(list(tmp_path.glob(f"{old_id}.reader-*"))) == 1
+        assert apply_retention(tmp_path, history=1) == []
+        assert old.exists()
+        socket.release.set()
+        await serving
+
+    asyncio.run(scenario())
+    assert list(tmp_path.glob(f"{old_id}.reader-*")) == []
+    assert apply_retention(tmp_path, history=1) == [old]
+
+
+def test_ws_send_timeout_bounds_blocked_subscriber(monkeypatch):
+    monkeypatch.setattr(app_module, "WS_SEND_TIMEOUT_S", 0.01)
+
+    class BlockedSocket:
+        async def send_text(self, _text):
+            await asyncio.Event().wait()
+
+    async def scenario():
+        with pytest.raises(app_module._SlowSubscriber):
+            await _send_ws_record(
+                BlockedSocket(), {"event": "node_fired", "seq": 1}
+            )
+
+    asyncio.run(scenario())
+
+
 def test_ws_frames_are_the_jsonl_lines_verbatim(tmp_path):
     ws = make_scaffold_ws(tmp_path)
 
@@ -1364,6 +1772,45 @@ def test_ws_frames_are_the_jsonl_lines_verbatim(tmp_path):
         log_path = ws.root / started["log"]
         lines = log_path.read_text(encoding="utf-8").strip().split("\n")
         assert frames == lines  # byte-identical: replay = re-read (D13)
+
+    with_client(ws, scenario)
+
+
+def test_ws_late_subscriber_replays_durable_prefix_then_live_tail(tmp_path):
+    ws = make_scaffold_ws(tmp_path)
+    slow = ws.root / "flows" / "late"
+    slow.mkdir()
+    (slow / "flow.yaml").write_text(
+        DELAY_FLOW.replace('name: "slow"', 'name: "late"').replace(
+            "seconds: 30", "seconds: 0.5"
+        ),
+        encoding="utf-8",
+    )
+
+    async def scenario(client):
+        started = await start_run(client, "flows/late")
+        log_path = ws.root / started["log"]
+        deadline = asyncio.get_running_loop().time() + 2
+        while True:
+            prefix = log_path.read_text(encoding="utf-8").splitlines()
+            if len(prefix) >= 2:
+                break
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.005)
+        assert (await client.get(f"/api/runs/{started['run_id']}")).status == 200
+
+        frames = []
+        async with client.websocket_connect(f"/ws/runs/{started['run_id']}") as sock:
+            while True:
+                frame = await sock.receive_text()
+                frames.append(frame)
+                if json.loads(frame)["event"] == "run_finished":
+                    break
+
+        await wait_finished(client, started["run_id"])
+        lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+        assert frames == lines
+        assert frames[: len(prefix)] == prefix
 
     with_client(ws, scenario)
 
