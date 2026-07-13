@@ -58,12 +58,17 @@ function PortRows({
   );
 }
 
-function RunSummary({ view }: { view: RunView }) {
-  const { detail } = useAppStore();
+function RunSummary({
+  view,
+  flowName,
+}: {
+  view: RunView;
+  flowName: string | null;
+}) {
   return (
     <>
       <h3 style={{ margin: "0 0 0.5rem", fontSize: 14 }}>
-        {detail?.flow.flow.name ?? "—"} — run
+        {flowName ?? "—"} — run
       </h3>
       <p style={{ color: "#666", margin: "0 0 0.5rem" }}>
         {view.state}
@@ -79,16 +84,27 @@ function RunSummary({ view }: { view: RunView }) {
 }
 
 export default function RunInspector() {
-  const { detail, selectedNode } = useAppStore();
-  const runView = useAppStore((s) => s.runView);
+  const {
+    detail,
+    selectedNode,
+    runView: rootRunView,
+    runFramePath,
+    runFrameDetail,
+    runFrameView,
+  } = useAppStore();
+  const inFrameDetail = runFramePath.length > 0;
+  const activeDetail = inFrameDetail ? runFrameDetail : detail;
+  const runView = inFrameDetail ? runFrameView : rootRunView;
   // per-node subscription keeps identity semantics with FlowNode
-  const run = useAppStore((s) =>
-    s.selectedNode === null
-      ? null
-      : (s.runView?.nodes[s.selectedNode] ?? null),
-  );
+  const run = useAppStore((s) => {
+    if (s.selectedNode === null) return null;
+    const activeView =
+      s.runFramePath.length > 0 ? s.runFrameView : s.runView;
+    return activeView?.nodes[s.selectedNode] ?? null;
+  });
   if (runView === null) return null; // App only mounts this in run mode
-  const node = detail?.flow.nodes.find((n) => n.id === selectedNode) ?? null;
+  const node =
+    activeDetail?.flow.nodes.find((n) => n.id === selectedNode) ?? null;
   const ports = Object.entries(run?.ports ?? {});
 
   return (
@@ -104,7 +120,10 @@ export default function RunInspector() {
       }}
     >
       {node === null ? (
-        <RunSummary view={runView} />
+        <RunSummary
+          view={runView}
+          flowName={activeDetail?.flow.flow.name ?? null}
+        />
       ) : (
         <>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>

@@ -15,9 +15,11 @@ full-fidelity blob-backed history, raw local truth, and optional
 terminal/report masking are implemented. Amended 2026-07-13 for v0.2/M4:
 production streams activate `content-blobs/1`, full messages and prepared-wire
 HTTP records replace previews, destructive capture valves are removed, and
-core/report/server/UI consumers preserve lazy descriptor boundaries. Basic
-paged REST/browser blob fetch remains M5; exports and advanced replay remain
-deferred.
+core/report/server/UI consumers preserve lazy descriptor boundaries. Amended
+2026-07-13 for v0.2/M5: versioned REST pages bound event/frame responses,
+browser rows resolve one record's blobs only when expanded, and direct-child
+summary pages reconstruct completed frame trees. Exports, advanced replay,
+and the 100k-event performance target remain deferred.
 
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
@@ -539,8 +541,8 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
   - Cancelled children are not compacted through this path: queued
     deliveries may still reference them, and abort must not synthesize a
     D18 required-End failure. They remain bounded by active concurrency and
-    are released with the run lifecycle; a later M3 slice owns richer
-    aborted-frame replay evidence.
+    are released with the run lifecycle. No durable completion summary is
+    invented for them, so M5 drilldown intentionally covers completed frames.
 - Pins made at S3/M3 (2026-07-06, engine `_run_node` / `_load_fixture`
   / `_seed`):
   - **switch**: the evaluated value is compared to each case `equals`
@@ -824,8 +826,9 @@ Rules:
   request. Thus a redirect may legitimately make start and finish URLs differ.
 - Feature-aware consumers call the schema-gated resolver only when they need a
   content field. Reports skip unrelated events (and therefore unrelated
-  missing blobs); REST/finished WebSocket replay passes canonical descriptors
-  unchanged. Browser on-demand blob fetch is the next M5 boundary.
+  missing blobs); paged REST and finished WebSocket replay pass canonical
+  descriptors unchanged. A historical browser row resolves only its selected
+  canonical record on expansion, surfacing missing/corrupt/omitted content.
 - Timing fields included where niquests exposes them, else omitted.
 - On abort, an in-flight request leaves a `request_started` with no
   matching `request_finished`; replay tolerates a dangling start (EC20).
@@ -836,7 +839,7 @@ Rules:
   `end_outputs` is that frame's own End interface. Additive event kinds are
   safe for older v0.x readers to retain/display generically and do not
   activate a storage feature flag (D33).
-- UI replay = re-read the JSONL.
+- UI replay = re-read the JSONL through bounded pages; it never re-executes.
 
 Pins made at S2/M2 (2026-07-05, `core/events.py`):
 - **Run id** = `YYYYmmdd-HHMMSS-xxxxxx` (UTC + 6 hex): Windows-safe
@@ -871,8 +874,8 @@ immutable per-run store, exhaustive event policy, full-value schemas,
 shared JSONL/WebSocket encoding, and lazy consumer resolver were present
 together. Production `napflow-run/1` logs now declare
 `features: ["content-blobs/1"]`; deliberately ephemeral EventStreams remain
-featureless and inline. M5 adds paged REST/browser fetching without changing
-the canonical JSONL or descriptor format below.
+featureless and inline. M5's paged REST/browser readers do not change the
+canonical JSONL or descriptor format below.
 
 **Envelope + version.** `run_started` is the envelope header: it is
 always `seq` 1 and carries `format: "napflow-run/<major>"`
@@ -1038,6 +1041,59 @@ unchanged large End value retains the canonical descriptor/hash instead of
 being duplicated inline. JUnit materializes only rendered assertion/error
 values. An unrelated missing request blob therefore does not block a report
 that never reads it.
+
+**Paged browser readers.** The versioned `napflow-replay/1` adapter reads the
+canonical file in `seq` order and returns at most 500 selected records per
+response (200 by default). `after_seq` is an exclusive canonical cursor and
+`next_after_seq` is the last record returned. The first later match sets
+`has_more`; the reader then validates the rest of its frozen sequence snapshot
+without retaining it. An optional exact-frame filter keeps root and child
+event loading independent; root pages also carry the frame-less run envelope
+records. Beside the page, `view_summary` is a disposable full-snapshot,
+frame-scoped projection of node/edge counts, latest port/request state, and a
+fixed per-node Log ring. It contains no canonical record array or run outputs,
+so the canvas stays accurate without transferring the other event pages.
+Direct-child frame pages, requested recursively by `parent_frame`, project
+`frame_finished` into navigation/scalar fields, error counts, and End-port
+names. Full errors and End values remain exclusively in the canonical event
+behind its sequence-detail request. No offset index is required: rescanning is
+an accepted v0.2 prototype tradeoff, while disposable indexes remain available
+for a later measured need.
+
+Every replay record must carry the next exact positive integer `seq`; a
+missing, boolean, duplicate, gapped, or regressing sequence is a
+`history_format` error rather than an ambiguous cursor. A malformed final
+partial line remains an EC20-tolerated tail, but malformed data before a later
+nonblank record is an error.
+
+Before a scan, the adapter captures the last valid sequence plus its lifecycle
+classification and reads only through that boundary. The page, full-history
+projection, frame summaries, and `history_state` therefore describe one
+snapshot even if another local process appends while the request is reading.
+Invalid UTF-8 anywhere inside that snapshot is `history_format`, never a 500.
+
+Each page reports `run_format`, declared `features`, `root_frame`,
+`history_state`, and a bounded `run_summary` separately from the page cursor.
+`run_finished` remains the only durable completion fact; `run_summary` is its
+scalar state/duration/assert/error-count/skipped-count projection and never
+copies End outputs or error bodies. A known server-owned live run is
+`running`; an exact regular `.active` companion owned by another process is
+`indeterminate`; a known-closed or markerless legacy prefix without the final
+fact is `incomplete` (EC20), including when the final valid record itself
+exceeds 64 KiB. Event pages never resolve descriptors. `GET .../events/{seq}` selects
+one canonical record, applies `resolve_record_content`, verifies referenced
+bytes, and either returns the complete event or an explicit typed content
+error. The browser opens the root or a selected child with exactly one bounded
+event page plus one direct-child summary page; explicit cursor navigation
+loads one further page at a time. It retains only the active event/frame pages
+and the bounded `view_summary`, never an expanding record array or frame tree.
+Live WebSocket folding retains its separate 2,000-record tail window. Selecting
+a completed child fetches its current flow definition only to draw the locked
+canvas; if that source was moved or deleted, durable event/descendant replay
+remains available with a localized canvas error. Only completed children have
+`frame_finished` facts; cancelled/aborted active children are not invented as
+drillable frames. Runtime frame compaction is therefore invisible to
+completed-frame replay.
 
 **Retention unit.** A run is one atomic retention unit: its JSONL, blobs,
 indexes, and reports are created and deleted together. Retention operates

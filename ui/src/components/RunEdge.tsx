@@ -20,9 +20,12 @@ export default function RunEdge({
   selected,
 }: EdgeProps) {
   // undefined = not in run mode; null = run mode, wire never fired
-  const pulse = useAppStore((s) =>
-    s.runView === null ? undefined : (s.runView.edges[id] ?? null),
-  );
+  const pulse = useAppStore((s) => {
+    if (s.runView === null) return undefined;
+    const activeView =
+      s.runFramePath.length > 0 ? s.runFrameView : s.runView;
+    return activeView?.edges[id] ?? null;
+  });
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,

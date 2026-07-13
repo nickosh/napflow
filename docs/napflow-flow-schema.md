@@ -401,7 +401,8 @@ as everywhere else.
   library/session headers and cookies, exact body/no-body, final redirect
   request, status, timing, retries, and redirects. Runtime port values remain
   complete and independent of persistence (EC32/EC50). Replay = re-reading the
-  recording, never re-execution; M5 adds paged/on-demand browser resolution.
+  recording, never re-execution; bounded pages and per-record on-demand browser
+  resolution keep blob reads and child-frame detail lazy.
 - Platforms: macOS, Windows, and Linux from day one (D26; pathlib
   discipline, no shell-isms); all three in the CI matrix.
 

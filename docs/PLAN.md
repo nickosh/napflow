@@ -591,8 +591,8 @@ never deletes an active/newer run or leaves companion artifacts.
 **Met 2026-07-13:** fixed loop workers/frame compaction, bounded server/CLI/
 browser presentation state, exact durable catch-up with per-send ceilings,
 filesystem-reader-leased whole-unit retention, and the TR-19 100k/abort
-evidence are green. Full REST paging/lazy replay remains its planned M5 owner,
-not retained active state in M3.
+evidence are green. Full REST paging/lazy replay was deliberately left to M5,
+not retained active state in M3; M5 below now closes that remaining surface.
 
 ### M4 — full-fidelity history and prepared requests ✅ done 2026-07-13
 
@@ -689,17 +689,17 @@ feature gating, lazy consumers, marker collisions, and structural integrity.
 
 ### M5 — usable paged replay and frame drilldown
 
-- [ ] Version replay APIs and page event records rather than returning one
+- [x] Version replay APIs and page event records rather than returning one
       unbounded JSON array. A simple cursor/sequence contract is sufficient;
       no derived seek index or advanced filter matrix is required for v0.2.
       Canonical JSONL remains unchanged. (FR-1106)
-- [ ] Fetch blobs lazily. The browser keeps a bounded/virtualized event
+- [x] Fetch blobs lazily. The browser keeps a bounded/virtualized event
       window plus reduced node/frame summaries, not every full record.
       Opening detail resolves the blob and verifies/handles missing data.
-- [ ] Reconstruct the frame tree from durable events and summaries.
+- [x] Reconstruct the frame tree from durable events and summaries.
       Root canvas loads first; subflow/loop iteration detail loads when
       expanded. Runtime frame compaction must be invisible to replay.
-- [ ] Preserve EC20 behavior for genuinely incomplete runs while using a
+- [x] Preserve EC20 behavior for genuinely incomplete runs while using a
       durable final summary to distinguish them from one large final line.
 
 M5 DoD: a representative full-fidelity run opens without returning every
@@ -707,6 +707,14 @@ event or fetching every blob, keeps the active browser window bounded, and
 drills into completed child frames without re-execution. Timeline playback,
 checkpoints, advanced seeking, and the 100k-event replay target remain named
 future work.
+
+**Met 2026-07-13:** `test_replay_api.py` pins bounded/versioned pages,
+full-snapshot node/edge projections, scalar frame pages, frozen lifecycle
+boundaries, strict sequence/UTF-8 validation, lazy typed content failures,
+large finals, and EC20 prefixes. Store/Vitest coverage proves a 1,101-event
+history opens with one event/frame page and explicit continuation; Playwright
+opens a real 72 KiB child result, swaps to its completed frame canvas without
+re-execution, and performs exactly one detail read only after expansion.
 
 ### M6 — public/package/UI contract completion
 
@@ -734,9 +742,11 @@ future work.
       request TLS/timeout, and typed Start defaults. Add schema-to-form
       coverage so drift fails a test. Fix abort-response status handling.
       (FR-1114, EC49)
-- [ ] Refactor only the live/history orchestration needed by the paged/lazy
+- [x] Refactor only the live/history orchestration needed by the paged/lazy
       API. Preserve pure graph/run reducers; a standalone global-store split
       is not a v0.2 deliverable unless implementation proves it necessary.
+      **Landed with M5:** one-page store orchestration keeps reducers pure and
+      uses generation guards without a global-store rewrite.
 - [ ] Generate/audit third-party notices for bundled frontend code before
       public distribution.
 

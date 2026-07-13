@@ -44,9 +44,9 @@ npm run perf:history
 | Parallel loop timing, 100,000 items | 3.410s ≈ 29.3k items/s | Uninstrumented timing; compare like-for-like |
 | Parallel loop peak heap, 100,000 items | **485.1 MB** at `max_concurrency: 16`, measured in a separate `tracemalloc` run | M3 bounded producer/fixed task set — heap must become proportional to `max_concurrency`, not item count (NFR-14) |
 | M3 parallel-loop active state, 100,000 items | v0.1 allocated one task + retained Frame per item | **Met:** 2.68s opt-in correctness run; exactly 16 helpers, ≤16 live Frames, 100,000 durable frame summaries (`test_parallel_loop_active_tasks_and_frames_100k`) |
-| History replay read (`_read_records`), 10MB | 10.0MiB / 22,623 records: **0.021s** uninstrumented, **19.5 MB peak heap** | M5 adds basic paged reads + lazy blobs (FR-1106); this remains a future scale comparison |
+| History replay read (`_read_records`), 10MB | 10.0MiB / 22,623 records: **0.021s** uninstrumented, **19.5 MB peak heap** | M5 replaced the public full-list path with frozen bounded pages + graph-sized projections; this remains a future scale comparison |
 | History replay read (`_read_records`), 100MB | 100.0MiB / 225,739 records: **0.204s** uninstrumented, **194.4 MB peak heap** | Future 100k/large-replay gate under D39; not a v0.2 release target |
-| Browser history first render + retained JS heap, 10MB | **127 ms median; +11.2 MB retained JS heap** | M5 keeps an active window bounded; formal comparison remains future work |
+| Browser history first render + retained JS heap, 10MB | **127 ms median; +11.2 MB retained JS heap** | Historical before-state: M5 now opens one event/frame page and retains bounded projections; formal remeasurement remains future work |
 | Browser history first render + retained JS heap, 100MB | **810 ms median; +99.8 MB retained JS heap** | Future large-replay performance candidate under D39 |
 
 Timing and heap are deliberately separate passes for the loop and history

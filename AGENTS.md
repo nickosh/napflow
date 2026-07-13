@@ -136,9 +136,10 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
 Current v0.2 development behavior under D34–D36/D39 has no destructive body/
 run valves and never masks canonical events. It includes hash-verified lazy
 resolution, prepared-wire request capture, bounded cooperative lifecycle,
-cleanup, tasks/frames, and subscriber windows. M5 still owns paged REST and
-on-demand browser blob fetch. Never rebuild the v0.1 valves/mask-everywhere
-approach or ACL/export hardening as if either were the accepted v0.2 design.
+cleanup, tasks/frames, subscriber windows, frozen versioned replay pages,
+graph-sized view/frame projections, and on-demand browser blob reads. Never
+rebuild the v0.1 valves/mask-everywhere approach or ACL/export hardening as if
+either were the accepted v0.2 design.
 
 ## Version and compatibility policy
 
@@ -180,9 +181,9 @@ approach or ACL/export hardening as if either were the accepted v0.2 design.
    durable saves → lifecycle/worker → bounded execution/history →
    full-fidelity blobs/prepared requests → basic paged/lazy replay →
    public Workspace/Flow catalog, packaging, and UI contracts → focused
-   release gate. M0/M1 completed 2026-07-12 and M2/M3/M4 completed
-   2026-07-13. Next is M5's versioned paging, on-demand blob reads, bounded
-   replay window, and reconstructable frame drilldown.
+   release gate. M0/M1 completed 2026-07-12 and M2/M3/M4/M5 completed
+   2026-07-13. Next is M6's public Workspace/Flow API, deterministic
+   packaging, and remaining UI/schema contract work.
    Timeline playback, 100k-event replay performance, run bundles, and
    security-grade history are future work (D39).
 

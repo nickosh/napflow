@@ -251,6 +251,46 @@ edges:
   - {from: "start.out", to: "wait.in"}
   - {from: "wait.out", to: "end.done"}
 `;
+// flows/replay-parent + flows/replay-child — run.spec's M5 real-history
+// fixture. The nested Python result exceeds the 64 KiB inline threshold,
+// so the completed run exercises both durable frame_finished summaries and
+// content-blobs/1 lazy detail through the browser (without touching the
+// parent/child pair exclusively owned by subflow.spec).
+const REPLAY_PARENT_FLOW = `schema: "napflow/v1"
+flow: {name: "replay-parent"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "child", type: "flow", config: {flow: "flows/replay-child"}}
+  - {id: "end", type: "end", config: {ports: [{name: "done"}]}}
+edges:
+  - {from: "start.out", to: "child.seed"}
+  - {from: "child.done", to: "end.done"}
+`;
+const REPLAY_CHILD_FLOW = `schema: "napflow/v1"
+flow: {name: "replay-child"}
+nodes:
+  - id: "start"
+    type: "start"
+    config: {ports: [{name: "seed"}]}
+  - id: "produce"
+    type: "python"
+    config: {function: "make_large", outputs: ["large"]}
+  - {id: "observe", type: "log", config: {label: "lazy child value"}}
+  - id: "end"
+    type: "end"
+    config: {ports: [{name: "done"}, {name: "python_error", required: false}]}
+edges:
+  - {from: "start.seed", to: "produce.seed"}
+  - {from: "produce.large", to: "observe.in"}
+  - {from: "observe.out", to: "end.done"}
+  - {from: "produce.error", to: "end.python_error"}
+`;
+const REPLAY_CHILD_NODES = `"""M5 browser replay fixture: one blob-backed child value."""
+
+
+def make_large(seed):
+    return {"large": "M5-LAZY-BLOB:" + ("x" * (72 * 1024)) + ":END"}
+`;
 for (const [name, content] of [
   ["warn", WARN_FLOW],
   ["broken", BROKEN_FLOW],
@@ -262,10 +302,17 @@ for (const [name, content] of [
   ["child", CHILD_FLOW],
   ["ghostcase", GHOSTCASE_FLOW],
   ["slow", SLOW_FLOW],
+  ["replay-parent", REPLAY_PARENT_FLOW],
+  ["replay-child", REPLAY_CHILD_FLOW],
 ]) {
   mkdirSync(join(workspace, "flows", name));
   writeFileSync(join(workspace, "flows", name, "flow.yaml"), content, "utf-8");
 }
+writeFileSync(
+  join(workspace, "flows", "replay-child", "nodes.py"),
+  REPLAY_CHILD_NODES,
+  "utf-8",
+);
 
 // a truncated JSONL — a run that died mid-request (abort/crash). The
 // history browser must list it `incomplete` and replay it without
@@ -282,6 +329,81 @@ writeFileSync(
     `{"event":"request_started","run_id":"${DANGLING_RUN_ID}","frame":"f-0","node":"echo","ts":"1970-01-01T00:00:00.002Z","seq":3,"method":"GET","url":"http://127.0.0.1:1/never","headers":{},"body_preview":null,"attempt":1}`,
     "",
   ].join("\n"),
+  "utf-8",
+);
+
+// A complete, strictly consecutive run whose log value is a valid blob
+// descriptor but whose companion blob directory is intentionally absent.
+// Replay pages and frame discovery must remain usable; only explicit row
+// expansion is allowed to surface history_content_missing.
+const MISSING_BLOB_RUN_ID = "19700101-000001-b10b00";
+const missingBlobDir = join(
+  workspace,
+  ".napflow",
+  "runs",
+  "flows",
+  "replay-parent",
+);
+mkdirSync(missingBlobDir, { recursive: true });
+const missingBlob = {
+  $napflow: {
+    kind: "blob",
+    hash: `sha256:${"0".repeat(64)}`,
+    bytes: 72 * 1024,
+    media_type: "text/plain; charset=utf-8",
+    codec: "utf-8",
+  },
+};
+const missingBlobRecords = [
+  {
+    event: "run_started",
+    run_id: MISSING_BLOB_RUN_ID,
+    frame: "f-0",
+    ts: "1970-01-01T00:00:01.000Z",
+    seq: 1,
+    format: "napflow-run/1",
+    features: ["content-blobs/1"],
+    flow: "flows/replay-parent",
+    env_name: null,
+    inputs: {},
+    engine_version: "0.0.0",
+  },
+  {
+    event: "node_fired",
+    run_id: MISSING_BLOB_RUN_ID,
+    frame: "f-0",
+    node: "missing_blob",
+    ts: "1970-01-01T00:00:01.001Z",
+    seq: 2,
+    firing_no: 1,
+  },
+  {
+    event: "log",
+    run_id: MISSING_BLOB_RUN_ID,
+    frame: "f-0",
+    node: "missing_blob",
+    ts: "1970-01-01T00:00:01.002Z",
+    seq: 3,
+    label: "missing blob fixture",
+    level: "info",
+    value: missingBlob,
+  },
+  {
+    event: "run_finished",
+    run_id: MISSING_BLOB_RUN_ID,
+    ts: "1970-01-01T00:00:01.003Z",
+    seq: 4,
+    state: "passed",
+    duration_ms: 3,
+    asserts: { passed: 0, failed: 0 },
+    unhandled_errors: [],
+    end_outputs: {},
+    nodes_never_fired: [],
+  },
+];
+writeFileSync(
+  join(missingBlobDir, `${MISSING_BLOB_RUN_ID}.jsonl`),
+  `${missingBlobRecords.map((record) => JSON.stringify(record)).join("\n")}\n`,
   "utf-8",
 );
 

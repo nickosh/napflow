@@ -8,8 +8,10 @@ import {
   fetchEtags,
   fetchFlowDetail,
   fetchFlows,
-  fetchRunEvents,
+  fetchRunEventPage,
+  fetchRunFramePage,
   fetchWorkspace,
+  RUN_REPLAY_PAGE_LIMIT,
   listRuns,
   openRunSocket,
   putFlow,
@@ -19,6 +21,7 @@ import {
   type FlowModelNode,
   type FlowSummary,
   type RunListEntry,
+  type RunFramePage,
   type SavedFlow,
   type WorkspaceInfo,
 } from "./api";
@@ -34,8 +37,13 @@ import {
   applyRecord,
   emptyRunView,
   finalizeIncomplete,
-  reduceRun,
+  finalizeFrameReplay,
+  foldRunEventPage,
+  ROOT_FRAME,
+  RUN_FRAME_WINDOW,
+  settleRootReplay,
   type RunRecord,
+  type RunFrameSummary,
   type RunTrafficSelection,
   type RunView,
 } from "./runview";
@@ -84,10 +92,33 @@ type AppState = {
   runView: RunView | null;
   runId: string | null;
   runLive: boolean; // a WebSocket is attached (live run, not replay)
+  runSource: "live" | "history" | null;
   runPanelTab: "events" | "history" | null; // null = panel closed
   runHistory: RunListEntry[] | null;
   runEnv: string | null; // selected env profile for the next run
   runNotice: string | null; // start/abort failures, shown by controls
+  runReplayLoading: boolean;
+  runReplayError: string | null;
+  runRootFrame: string;
+  // Historical child frames render in a separate detail view so their node
+  // ids never paint the root canvas overlay. Only the active path/window is
+  // retained; there is deliberately no in-memory frame tree.
+  runFramePath: RunFrameSummary[];
+  runFrameDetail: FlowDetail | null;
+  runFrameView: RunView | null;
+  runFrameChildren: RunFrameSummary[];
+  runFrameChildrenAfterSeq: number;
+  runFrameChildrenNextAfterSeq: number;
+  runFrameChildrenHasMore: boolean;
+  runFrameLoading: boolean;
+  runFrameError: string | null;
+  // The aggregate keeps a tail ring, while this optional one-page browser
+  // makes every older durable event reachable without growing active state.
+  runEventPage: RunRecord[] | null;
+  runEventPageAfterSeq: number;
+  runEventPageNextAfterSeq: number;
+  runEventPageHasMore: boolean;
+  runEventPageLoading: boolean;
   // M5.5: selected wire/port whose crossed messages the panel lists —
   // mutually exclusive with selectedNode (one filter at a time)
   runSelection: RunTrafficSelection | null;
@@ -98,6 +129,11 @@ type AppState = {
   exitRun: () => void;
   openRunPanel: (tab: "events" | "history") => void;
   openHistoryRun: (runId: string) => Promise<void>;
+  openRunFrame: (summary: RunFrameSummary) => Promise<void>;
+  backRunFrame: () => Promise<void>;
+  rootRunFrame: () => Promise<void>;
+  pageRunFrames: (where: "first" | "next") => Promise<void>;
+  pageRunEvents: (where: "first" | "next") => Promise<void>;
 };
 
 function splitRef(ref: string): [string, string] {
@@ -116,6 +152,8 @@ const LIVE_BATCH_LIMIT = 256;
 const WS_RESYNC_REQUIRED = 4410;
 const WS_SUBSCRIBER_LIMIT = 4411;
 const MAX_LIVE_RESYNCS = 3;
+
+class StaleReplay extends Error {}
 
 function closeRunSocket() {
   if (runSocket !== null) {
@@ -139,6 +177,8 @@ export const useAppStore = create<AppState>((set, get) => {
   let detailGeneration = 0;
   let activeHistoryIndex = 0;
   let restoringHistory = false;
+  let replayGeneration = 0;
+  let eventPageGeneration = 0;
   const flowSaves = new SaveCoordinator<FlowSaveValue, SavedFlow>({
     debounceMs: AUTOSAVE_MS,
     save: ({ identity, flow }, baseEtag, force) =>
@@ -290,7 +330,7 @@ export const useAppStore = create<AppState>((set, get) => {
         pendingRecords = [];
         // The new socket replays a fresh durable prefix. Reset the reducer so
         // replayed records never double-apply counters from the old attempt.
-        set({ runView: emptyRunView(), runLive: true });
+        set({ runView: emptyRunView(), runLive: true, runSource: "live" });
         watchRun(runId, resyncs + 1);
         return;
       }
@@ -318,6 +358,181 @@ export const useAppStore = create<AppState>((set, get) => {
     }
   }
 
+  function requireCurrentReplay(
+    generation: number,
+    runId: string,
+    identity: string,
+  ): void {
+    if (!isCurrentReplay(generation, runId, identity)) {
+      throw new StaleReplay();
+    }
+  }
+
+  function isCurrentReplay(
+    generation: number,
+    runId: string,
+    identity: string,
+  ): boolean {
+    const state = get();
+    return !(
+      generation !== replayGeneration ||
+      state.runId !== runId ||
+      state.selectedFlow !== identity ||
+      state.runSource !== "history"
+    );
+  }
+
+  function requireFramePage(
+    page: RunFramePage,
+    parentFrame: string,
+    afterSeq: number,
+    rootFrame: string,
+  ): void {
+    if (page.parent_frame !== parentFrame || page.after_seq !== afterSeq) {
+      throw new Error("frame replay page cursor/parent mismatch");
+    }
+    if (page.root_frame !== rootFrame) {
+      throw new Error("replay root frame changed between pages");
+    }
+    if (page.frames.length > RUN_FRAME_WINDOW) {
+      throw new Error(
+        `frame page exceeds the ${RUN_FRAME_WINDOW}-summary browser window`,
+      );
+    }
+  }
+
+  async function loadFrameChildrenPage(
+    runId: string,
+    identity: string,
+    parentFrame: string,
+    afterSeq: number,
+    generation: number,
+  ): Promise<void> {
+    set({ runFrameLoading: true, runFrameError: null });
+    try {
+      const page = await fetchRunFramePage(runId, identity, {
+        parentFrame,
+        afterSeq,
+      });
+      requireCurrentReplay(generation, runId, identity);
+      requireFramePage(page, parentFrame, afterSeq, get().runRootFrame);
+      set({
+        runFrameChildren: page.frames,
+        runFrameChildrenAfterSeq: afterSeq,
+        runFrameChildrenNextAfterSeq: page.next_after_seq,
+        runFrameChildrenHasMore: page.has_more,
+        runFrameLoading: false,
+        runFrameError: null,
+      });
+    } catch (error) {
+      if (
+        error instanceof StaleReplay ||
+        !isCurrentReplay(generation, runId, identity)
+      ) {
+        return;
+      }
+      set({
+        runFrameChildren: [],
+        runFrameChildrenHasMore: false,
+        runFrameLoading: false,
+        runFrameError: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async function loadFramePath(
+    path: RunFrameSummary[],
+    generation: number,
+  ): Promise<void> {
+    const state = get();
+    const runId = state.runId;
+    const identity = state.selectedFlow;
+    const summary = path.at(-1);
+    const rootFrame = state.runRootFrame;
+    if (
+      runId === null ||
+      identity === null ||
+      summary === undefined ||
+      state.runSource !== "history"
+    ) {
+      return;
+    }
+    set({
+      runFramePath: path,
+      runFrameDetail: null,
+      runFrameView: emptyRunView(summary.frame),
+      runFrameChildren: [],
+      runFrameChildrenAfterSeq: 0,
+      runFrameChildrenNextAfterSeq: 0,
+      runFrameChildrenHasMore: false,
+      runFrameLoading: true,
+      runFrameError: null,
+      runEventPage: null,
+      runEventPageLoading: false,
+      selectedNode: null,
+      runSelection: null,
+    });
+    try {
+      const [eventPage, childPage, frameDetailResult] = await Promise.all([
+        fetchRunEventPage(runId, identity, {
+          afterSeq: 0,
+          frame: summary.frame,
+        }),
+        fetchRunFramePage(runId, identity, {
+          parentFrame: summary.frame,
+          afterSeq: 0,
+        }),
+        fetchFlowDetail(summary.flow)
+          .then((frameDetail) => ({ frameDetail, error: null }))
+          .catch((error: unknown) => ({
+            frameDetail: null,
+            error: `current flow source is unavailable; durable frame events remain inspectable: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          })),
+      ]);
+      requireCurrentReplay(generation, runId, identity);
+      if (eventPage.frame !== summary.frame) {
+        throw new Error("event replay frame changed between request and response");
+      }
+      if (eventPage.events.length > RUN_REPLAY_PAGE_LIMIT) {
+        throw new Error(
+          `event page exceeds the ${RUN_REPLAY_PAGE_LIMIT}-record browser window`,
+        );
+      }
+      requireFramePage(childPage, summary.frame, 0, rootFrame);
+      const view = emptyRunView(summary.frame);
+      foldRunEventPage(view, eventPage, 0, rootFrame);
+      finalizeFrameReplay(view, summary);
+      set({
+        runFrameDetail: frameDetailResult.frameDetail,
+        runFrameView: { ...view },
+        runFrameChildren: childPage.frames,
+        runFrameChildrenAfterSeq: 0,
+        runFrameChildrenNextAfterSeq: childPage.next_after_seq,
+        runFrameChildrenHasMore: childPage.has_more,
+        runFrameLoading: false,
+        runFrameError: frameDetailResult.error,
+        runEventPage: eventPage.events,
+        runEventPageAfterSeq: 0,
+        runEventPageNextAfterSeq: eventPage.next_after_seq,
+        runEventPageHasMore: eventPage.has_more,
+        runEventPageLoading: false,
+      });
+    } catch (error) {
+      if (
+        error instanceof StaleReplay ||
+        !isCurrentReplay(generation, runId, identity)
+      ) {
+        return;
+      }
+      set({
+        runFrameLoading: false,
+        runFrameError: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   return {
     workspace: null,
     flows: [],
@@ -334,10 +549,28 @@ export const useAppStore = create<AppState>((set, get) => {
     runView: null,
     runId: null,
     runLive: false,
+    runSource: null,
     runPanelTab: null,
     runHistory: null,
     runEnv: null,
     runNotice: null,
+    runReplayLoading: false,
+    runReplayError: null,
+    runRootFrame: ROOT_FRAME,
+    runFramePath: [],
+    runFrameDetail: null,
+    runFrameView: null,
+    runFrameChildren: [],
+    runFrameChildrenAfterSeq: 0,
+    runFrameChildrenNextAfterSeq: 0,
+    runFrameChildrenHasMore: false,
+    runFrameLoading: false,
+    runFrameError: null,
+    runEventPage: null,
+    runEventPageAfterSeq: 0,
+    runEventPageNextAfterSeq: 0,
+    runEventPageHasMore: false,
+    runEventPageLoading: false,
     runSelection: null,
 
     load: async () => {
@@ -386,6 +619,8 @@ export const useAppStore = create<AppState>((set, get) => {
       }
       if (navigation !== navigationGeneration) return false;
 
+      replayGeneration += 1;
+      eventPageGeneration += 1;
       closeRunSocket(); // a run view belongs to its flow
       detailGeneration += 1;
       flowSaves.reset(null);
@@ -399,9 +634,27 @@ export const useAppStore = create<AppState>((set, get) => {
         runView: null,
         runId: null,
         runLive: false,
+        runSource: null,
         runPanelTab: null,
         runHistory: null,
         runNotice: null,
+        runReplayLoading: false,
+        runReplayError: null,
+        runRootFrame: ROOT_FRAME,
+        runFramePath: [],
+        runFrameDetail: null,
+        runFrameView: null,
+        runFrameChildren: [],
+        runFrameChildrenAfterSeq: 0,
+        runFrameChildrenNextAfterSeq: 0,
+        runFrameChildrenHasMore: false,
+        runFrameLoading: false,
+        runFrameError: null,
+        runEventPage: null,
+        runEventPageAfterSeq: 0,
+        runEventPageNextAfterSeq: 0,
+        runEventPageHasMore: false,
+        runEventPageLoading: false,
         runSelection: null,
       });
       if (
@@ -625,11 +878,28 @@ export const useAppStore = create<AppState>((set, get) => {
           get().runEnv,
           inputs,
         );
+        replayGeneration += 1;
+        eventPageGeneration += 1;
         set({
           runView: emptyRunView(),
           runId: started.run_id,
           runLive: true,
+          runSource: "live",
           runPanelTab: "events",
+          runReplayLoading: false,
+          runReplayError: null,
+          runRootFrame: ROOT_FRAME,
+          runFramePath: [],
+          runFrameDetail: null,
+          runFrameView: null,
+          runFrameChildren: [],
+          runFrameChildrenAfterSeq: 0,
+          runFrameChildrenNextAfterSeq: 0,
+          runFrameChildrenHasMore: false,
+          runFrameLoading: false,
+          runFrameError: null,
+          runEventPage: null,
+          runEventPageLoading: false,
           selectedNode: null,
           runSelection: null,
         });
@@ -658,13 +928,28 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     exitRun: () => {
+      replayGeneration += 1;
+      eventPageGeneration += 1;
       closeRunSocket(); // the run keeps going server-side; Abort stops it
       set({
         runView: null,
         runId: null,
         runLive: false,
+        runSource: null,
         runPanelTab: null,
         runNotice: null,
+        runReplayLoading: false,
+        runReplayError: null,
+        runFramePath: [],
+        runFrameDetail: null,
+        runFrameView: null,
+        runFrameChildren: [],
+        runFrameChildrenHasMore: false,
+        runFrameLoading: false,
+        runFrameError: null,
+        runEventPage: null,
+        runEventPageLoading: false,
+        selectedNode: null,
         runSelection: null,
       });
     },
@@ -677,20 +962,319 @@ export const useAppStore = create<AppState>((set, get) => {
     openHistoryRun: async (runId) => {
       const { detail } = get();
       if (detail === null) return;
+      const generation = ++replayGeneration;
+      eventPageGeneration += 1;
       closeRunSocket();
-      try {
-        const events = await fetchRunEvents(runId, detail.identity);
+      set({
+        runView: emptyRunView(ROOT_FRAME),
+        runId,
+        runLive: false,
+        runSource: "history",
+        runPanelTab: "events",
+        runNotice: null,
+        runReplayLoading: true,
+        runReplayError: null,
+        runRootFrame: ROOT_FRAME,
+        runFramePath: [],
+        runFrameDetail: null,
+        runFrameView: null,
+        runFrameChildren: [],
+        runFrameChildrenAfterSeq: 0,
+        runFrameChildrenNextAfterSeq: 0,
+        runFrameChildrenHasMore: false,
+        runFrameLoading: false,
+        runFrameError: null,
+        runEventPage: null,
+        runEventPageAfterSeq: 0,
+        runEventPageNextAfterSeq: 0,
+        runEventPageHasMore: false,
+        runEventPageLoading: false,
+        selectedNode: null,
+        runSelection: null,
+      });
+
+      // A history row for a manager-owned live run belongs on the existing
+      // bounded WebSocket catch-up path, not a settled REST snapshot.
+      const listedState = get().runHistory?.find(
+        (entry) => entry.run_id === runId,
+      )?.state;
+      if (listedState === "running") {
         set({
-          runView: reduceRun(events as RunRecord[]),
-          runId,
+          runView: emptyRunView(ROOT_FRAME),
+          runLive: true,
+          runSource: "live",
+          runReplayLoading: false,
+        });
+        watchRun(runId);
+        return;
+      }
+
+      try {
+        // Capture root events first. A later frame-page snapshot may contain
+        // more completed children, but can never omit a child already covered
+        // by a `complete` event projection.
+        const eventPage = await fetchRunEventPage(runId, detail.identity, {
+          afterSeq: 0,
+          frame: ROOT_FRAME,
+        });
+        requireCurrentReplay(generation, runId, detail.identity);
+        if (eventPage.frame !== eventPage.root_frame) {
+          throw new Error("root replay page did not select the root frame");
+        }
+        if (eventPage.events.length > RUN_REPLAY_PAGE_LIMIT) {
+          throw new Error(
+            `event page exceeds the ${RUN_REPLAY_PAGE_LIMIT}-record browser window`,
+          );
+        }
+        if (eventPage.history_state === "running") {
+          set({
+            runView: emptyRunView(eventPage.root_frame),
+            runLive: true,
+            runSource: "live",
+            runReplayLoading: false,
+            runRootFrame: eventPage.root_frame,
+          });
+          watchRun(runId);
+          return;
+        }
+        const framePage = await fetchRunFramePage(runId, detail.identity, {
+          parentFrame: eventPage.root_frame,
+          afterSeq: 0,
+        });
+        requireCurrentReplay(generation, runId, detail.identity);
+        requireFramePage(framePage, eventPage.root_frame, 0, eventPage.root_frame);
+        const view = emptyRunView(eventPage.root_frame);
+        foldRunEventPage(view, eventPage, 0, eventPage.root_frame);
+        settleRootReplay(view, eventPage);
+        set({
+          runView: { ...view },
           runLive: false,
-          runPanelTab: "events",
-          runNotice: null,
+          runSource: "history",
+          runReplayLoading: false,
+          runReplayError:
+            eventPage.history_state === "indeterminate"
+              ? "run activity is indeterminate; showing the durable prefix without settling it"
+              : null,
+          runRootFrame: eventPage.root_frame,
+          runFrameChildren: framePage.frames,
+          runFrameChildrenAfterSeq: 0,
+          runFrameChildrenNextAfterSeq: framePage.next_after_seq,
+          runFrameChildrenHasMore: framePage.has_more,
+          runFrameLoading: false,
+          runFrameError: null,
+          runEventPage: eventPage.events,
+          runEventPageAfterSeq: 0,
+          runEventPageNextAfterSeq: eventPage.next_after_seq,
+          runEventPageHasMore: eventPage.has_more,
+          runEventPageLoading: false,
+        });
+      } catch (e) {
+        if (e instanceof StaleReplay) return;
+        try {
+          requireCurrentReplay(generation, runId, detail.identity);
+        } catch (stale) {
+          if (stale instanceof StaleReplay) return;
+          throw stale;
+        }
+        set({
+          runReplayLoading: false,
+          runReplayError: e instanceof Error ? e.message : String(e),
+        });
+      }
+    },
+
+    openRunFrame: async (summary) => {
+      const state = get();
+      if (state.runSource !== "history") return;
+      const parent = state.runFramePath.at(-1)?.frame ?? state.runRootFrame;
+      if (summary.parent_frame !== parent) return;
+      const generation = ++replayGeneration;
+      eventPageGeneration += 1;
+      await loadFramePath([...state.runFramePath, summary], generation);
+    },
+
+    backRunFrame: async () => {
+      const state = get();
+      if (state.runSource !== "history" || state.runFramePath.length === 0) {
+        return;
+      }
+      const nextPath = state.runFramePath.slice(0, -1);
+      const generation = ++replayGeneration;
+      eventPageGeneration += 1;
+      if (nextPath.length === 0) {
+        set({
+          runFramePath: [],
+          runFrameDetail: null,
+          runFrameView: null,
+          runFrameChildren: [],
+          runFrameChildrenAfterSeq: 0,
+          runFrameChildrenNextAfterSeq: 0,
+          runFrameChildrenHasMore: false,
+          runFrameError: null,
+          runEventPage: null,
+          runEventPageLoading: false,
           selectedNode: null,
           runSelection: null,
         });
-      } catch (e) {
-        set({ runNotice: e instanceof Error ? e.message : String(e) });
+        if (state.runId !== null && state.selectedFlow !== null) {
+          await loadFrameChildrenPage(
+            state.runId,
+            state.selectedFlow,
+            state.runRootFrame,
+            0,
+            generation,
+          );
+        }
+        return;
+      }
+      await loadFramePath(nextPath, generation);
+    },
+
+    rootRunFrame: async () => {
+      const state = get();
+      if (state.runSource !== "history" || state.runFramePath.length === 0) {
+        return;
+      }
+      const generation = ++replayGeneration;
+      eventPageGeneration += 1;
+      set({
+        runFramePath: [],
+        runFrameDetail: null,
+        runFrameView: null,
+        runFrameChildren: [],
+        runFrameChildrenAfterSeq: 0,
+        runFrameChildrenNextAfterSeq: 0,
+        runFrameChildrenHasMore: false,
+        runFrameError: null,
+        runEventPage: null,
+        runEventPageLoading: false,
+        selectedNode: null,
+        runSelection: null,
+      });
+      if (state.runId !== null && state.selectedFlow !== null) {
+        await loadFrameChildrenPage(
+          state.runId,
+          state.selectedFlow,
+          state.runRootFrame,
+          0,
+          generation,
+        );
+      }
+    },
+
+    pageRunFrames: async (where) => {
+      const state = get();
+      if (
+        state.runSource !== "history" ||
+        state.runId === null ||
+        state.selectedFlow === null
+      ) {
+        return;
+      }
+      if (where === "next" && !state.runFrameChildrenHasMore) return;
+      const parent = state.runFramePath.at(-1)?.frame ?? state.runRootFrame;
+      const afterSeq =
+        where === "first" ? 0 : state.runFrameChildrenNextAfterSeq;
+      const generation = ++replayGeneration;
+      await loadFrameChildrenPage(
+        state.runId,
+        state.selectedFlow,
+        parent,
+        afterSeq,
+        generation,
+      );
+    },
+
+    pageRunEvents: async (where) => {
+      const state = get();
+      if (
+        state.runSource !== "history" ||
+        state.runId === null ||
+        state.selectedFlow === null
+      ) {
+        return;
+      }
+      if (where === "next" && !state.runEventPageHasMore) return;
+      const frame = state.runFramePath.at(-1)?.frame ?? state.runRootFrame;
+      const afterSeq = where === "first" ? 0 : state.runEventPageNextAfterSeq;
+      const generation = ++eventPageGeneration;
+      set({ runEventPageLoading: true, runReplayError: null });
+      try {
+        const page = await fetchRunEventPage(state.runId, state.selectedFlow, {
+          afterSeq,
+          frame,
+        });
+        const current = get();
+        const currentFrame =
+          current.runFramePath.at(-1)?.frame ?? current.runRootFrame;
+        if (
+          generation !== eventPageGeneration ||
+          current.runId !== state.runId ||
+          current.selectedFlow !== state.selectedFlow ||
+          current.runSource !== "history" ||
+          currentFrame !== frame ||
+          (where === "next" &&
+            current.runEventPageNextAfterSeq !== afterSeq)
+        ) {
+          return;
+        }
+        if (page.frame !== frame) {
+          throw new Error("event replay frame changed between request and response");
+        }
+        if (page.events.length > RUN_REPLAY_PAGE_LIMIT) {
+          throw new Error(
+            `event page exceeds the ${RUN_REPLAY_PAGE_LIMIT}-record browser window`,
+          );
+        }
+        const activeSummary = current.runFramePath.at(-1) ?? null;
+        if (activeSummary === null && page.history_state === "running") {
+          set({
+            runView: emptyRunView(page.root_frame),
+            runLive: true,
+            runSource: "live",
+            runReplayLoading: false,
+            runReplayError: null,
+            runRootFrame: page.root_frame,
+            runEventPage: null,
+            runEventPageLoading: false,
+          });
+          watchRun(state.runId);
+          return;
+        }
+        const view =
+          where === "first"
+            ? emptyRunView(frame)
+            : activeSummary === null
+              ? current.runView
+              : current.runFrameView;
+        if (view === null) return;
+        foldRunEventPage(view, page, afterSeq, current.runRootFrame);
+        if (activeSummary === null) {
+          settleRootReplay(view, page);
+        } else {
+          finalizeFrameReplay(view, activeSummary);
+        }
+        set({
+          ...(activeSummary === null
+            ? { runView: { ...view } }
+            : { runFrameView: { ...view } }),
+          runEventPage: page.events,
+          runEventPageAfterSeq: afterSeq,
+          runEventPageNextAfterSeq: page.next_after_seq,
+          runEventPageHasMore: page.has_more,
+          runEventPageLoading: false,
+          runReplayError:
+            activeSummary === null && page.history_state === "indeterminate"
+              ? "run activity is indeterminate; showing the durable prefix without settling it"
+              : null,
+        });
+      } catch (error) {
+        if (generation !== eventPageGeneration) return;
+        set({
+          runEventPageLoading: false,
+          runReplayError:
+            error instanceof Error ? error.message : String(error),
+        });
       }
     },
   };

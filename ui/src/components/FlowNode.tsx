@@ -139,9 +139,12 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
   // undefined = not in run mode; null = run mode, node untouched yet.
   // Entries are replaced immutably per event, so only touched nodes
   // re-render during a live stream.
-  const run = useAppStore((s) =>
-    s.runView === null ? undefined : (s.runView.nodes[data.nodeId] ?? null),
-  );
+  const run = useAppStore((s) => {
+    if (s.runView === null) return undefined;
+    const activeView =
+      s.runFramePath.length > 0 ? s.runFrameView : s.runView;
+    return activeView?.nodes[data.nodeId] ?? null;
+  });
   const inRunMode = run !== undefined;
   const selectRunTraffic = useAppStore((s) => s.selectRunTraffic);
   const lastLog =

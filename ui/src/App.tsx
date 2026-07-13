@@ -41,6 +41,8 @@ function Canvas() {
   const {
     detail,
     detailError,
+    runFramePath,
+    runFrameDetail,
     graphVersion,
     selectNode,
     moveNode,
@@ -55,6 +57,8 @@ function Canvas() {
   // run mode (S4/M5): the canvas locks editing and animates instead —
   // clicks still select (they filter the event stream)
   const inRunMode = useAppStore((s) => s.runView !== null);
+  const canvasDetail =
+    runFramePath.length > 0 ? runFrameDetail : detail;
   const { screenToFlowPosition } = useReactFlow();
 
   // xyflow holds interactive state (drag positions, selection); the
@@ -62,17 +66,20 @@ function Canvas() {
   // from it after structural edits or external reloads
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const identity = detail?.identity ?? null;
+  const identity = canvasDetail?.identity ?? null;
   useEffect(() => {
-    if (detail !== null) {
-      const graph = toGraph(detail);
+    if (canvasDetail !== null) {
+      const graph = toGraph(canvasDetail);
       setNodes(graph.nodes);
       setEdges(graph.edges);
+    } else {
+      setNodes([]);
+      setEdges([]);
     }
     // rebuild on flow switch or explicit invalidation only — NOT on
     // every autosaved detail replacement (drag positions would snap)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity, graphVersion]);
+  }, [identity, graphVersion, runFramePath.length]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
@@ -137,7 +144,7 @@ function Canvas() {
     [connectEdge],
   );
 
-  if (detailError !== null) {
+  if (runFramePath.length === 0 && detailError !== null) {
     // broken flow: no canvas to draw — the E-codes ARE the view
     return (
       <div style={{ flex: 1, padding: "1rem", overflowY: "auto" }}>
@@ -155,13 +162,13 @@ function Canvas() {
       </div>
     );
   }
-  if (detail === null) {
+  if (canvasDetail === null) {
     return <div style={{ flex: 1 }} data-testid="canvas" />;
   }
   return (
     <div style={{ flex: 1, minWidth: 0, position: "relative" }} data-testid="canvas">
       <ReactFlow
-        key={detail.identity} // remount per flow: fresh fitView
+        key={`${canvasDetail.identity}:${runFramePath.at(-1)?.frame ?? "root"}`}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -182,8 +189,10 @@ function Canvas() {
         onNodeDoubleClick={(_event, node) => {
           // drill-in (FR-1007, D09): pure navigation into the
           // referenced flow; browser back returns (popstate)
-          const target = drillTarget(node.data);
-          if (target !== null) void openFlow(target);
+          if (!inRunMode) {
+            const target = drillTarget(node.data);
+            if (target !== null) void openFlow(target);
+          }
         }}
         onEdgeClick={(_event, edge) => {
           // run mode: a wire click lists its crossed messages (M5.5)

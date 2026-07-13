@@ -2,6 +2,14 @@
 // surface"). The UI never constructs run semantics — core owns them.
 
 import { apiIdentityPath } from "./identity";
+import type {
+  ReplayHistoryState,
+  RunEventPageLike,
+  RunFramePageLike,
+  RunFrameSummary,
+  RunRecord,
+  RunReplaySummary,
+} from "./runview";
 
 export type WorkspaceInfo = {
   name: string | null;
@@ -301,16 +309,113 @@ export async function listRuns(flow: string): Promise<RunListEntry[]> {
   return payload.runs;
 }
 
-/** Replay = re-read the JSONL (D13). `flow` locates runs this server
- * process didn't start (history from an earlier `napf ui`/`napf run`). */
-export async function fetchRunEvents(
+export const REPLAY_API_FORMAT = "napflow-replay/1" as const;
+export const RUN_REPLAY_PAGE_LIMIT = 500;
+export const FRAME_REPLAY_PAGE_LIMIT = 200;
+
+type ReplayEnvelope = {
+  api_format: typeof REPLAY_API_FORMAT;
+  run_id: string;
+  run_format: string | null;
+  features: string[];
+  root_frame: string;
+  history_state: ReplayHistoryState;
+  run_summary: RunReplaySummary | null;
+};
+
+export type RunEventPage = ReplayEnvelope &
+  RunEventPageLike & {
+    frame: string | null;
+  };
+
+export type RunFramePage = ReplayEnvelope &
+  RunFramePageLike & {
+    parent_frame: string;
+    after_seq: number;
+    frames: RunFrameSummary[];
+  };
+
+export type RunEventDetail = ReplayEnvelope & {
+  event: RunRecord;
+};
+
+/** A version marker only protects replay if consumers reject unknown and
+ * missing formats before interpreting any fields. */
+export function requireReplayV1<T>(payload: T): T & ReplayEnvelope {
+  const format =
+    typeof payload === "object" && payload !== null
+      ? (payload as { api_format?: unknown }).api_format
+      : undefined;
+  if (format !== REPLAY_API_FORMAT) {
+    const shown = format === undefined ? "missing" : JSON.stringify(format);
+    throw new Error(
+      `unsupported replay API format: ${shown}; expected ${REPLAY_API_FORMAT}`,
+    );
+  }
+  return payload as T & ReplayEnvelope;
+}
+
+function runReplayPath(
   runId: string,
   flow: string,
-): Promise<Record<string, unknown>[]> {
-  const payload = await getJson<{ events: Record<string, unknown>[] }>(
-    `/api/runs/${encodeURIComponent(runId)}/events?flow=${encodeURIComponent(flow)}`,
+  suffix: string,
+  params: Record<string, string | number | undefined>,
+): string {
+  const query = new URLSearchParams({ flow });
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) query.set(key, String(value));
+  }
+  return `/api/runs/${encodeURIComponent(runId)}/${suffix}?${query.toString()}`;
+}
+
+/** Replay = paged reads of the JSONL (D13). Canonical blob descriptors stay
+ * unresolved here; the row-detail endpoint is the explicit lazy boundary. */
+export async function fetchRunEventPage(
+  runId: string,
+  flow: string,
+  options: { afterSeq: number; limit?: number; frame?: string },
+): Promise<RunEventPage> {
+  const payload = await getJson<unknown>(
+    runReplayPath(runId, flow, "events", {
+      after_seq: options.afterSeq,
+      limit: options.limit ?? RUN_REPLAY_PAGE_LIMIT,
+      frame: options.frame,
+    }),
   );
-  return payload.events;
+  return requireReplayV1(payload) as RunEventPage;
+}
+
+export async function fetchRunFramePage(
+  runId: string,
+  flow: string,
+  options: { parentFrame: string; afterSeq: number; limit?: number },
+): Promise<RunFramePage> {
+  const payload = await getJson<unknown>(
+    runReplayPath(runId, flow, "frames", {
+      parent_frame: options.parentFrame,
+      after_seq: options.afterSeq,
+      limit: options.limit ?? FRAME_REPLAY_PAGE_LIMIT,
+    }),
+  );
+  return requireReplayV1(payload) as RunFramePage;
+}
+
+/** Resolve schema-declared content (including hash-verified blobs) for one
+ * explicitly expanded event. Replay pages never call this eagerly. */
+export async function fetchRunEventDetail(
+  runId: string,
+  flow: string,
+  seq: number,
+): Promise<RunEventDetail> {
+  const payload = await getJson<unknown>(
+    runReplayPath(
+      runId,
+      flow,
+      `events/${encodeURIComponent(String(seq))}`,
+      {},
+    ),
+  );
+  return requireReplayV1(payload) as RunEventDetail;
 }
 
 export async function abortRun(runId: string): Promise<void> {

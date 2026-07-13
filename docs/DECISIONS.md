@@ -616,13 +616,15 @@ references, deduplication, and lazy loading remain v0.2 commitments.
 Self-contained export/import, explicit hard-limit omission policy, advanced
 seek indexes, and the 100k-event replay gate move to the future ledger.
 
-**Implemented 2026-07-13 (M4):** production streams advertise
+**Implemented 2026-07-13 (M4+M5):** production streams advertise
 `content-blobs/1` and apply the exhaustive field policy before the shared
 JSONL/WebSocket fan-out. The same structured HTTP response is hashed once
 across request, message, Log, End, and blob-aware JSON report records; public
 feature-gated resolution verifies size/hash and preserves marker-shaped user
-data. Destructive capture settings and previews are removed. M5 still owns
-paged REST and on-demand browser blob fetch.
+data. Destructive capture settings and previews are removed. Versioned frozen
+REST pages return bounded events plus graph-sized scalar projections; browser
+detail resolves one canonical record on demand and completed frame drilldown
+never re-executes.
 
 ## D35 — Preserve raw local truth; redact presentation and exports, never protocol structure
 
@@ -810,15 +812,18 @@ continuing a partial filesystem security boundary that adds platform risk
 without securing every raw-data path; silently dropping the timeline or scale
 ideas instead of preserving them as future candidates.
 
-Implementation status: M4 completed on 2026-07-13. New scaffolds default to an
-empty secret-pattern list; production history activates the full-value blob
+Implementation status: M4 and M5 completed on 2026-07-13. New scaffolds
+default to an empty secret-pattern list; production history activates the full-value blob
 schema; reports resolve only consumed records and retain large JSON values by
 reference; and request events carry initial/final prepared-wire snapshots.
 Inherited permissions, no-overwrite creation, containment, and blob
-verification remain as decided. M5 paging and browser fetch are next.
+verification remain as decided. `napflow-replay/1` now supplies bounded
+sequence pages, scalar frame/final and graph-sized view projections, lazy
+verified event detail, and completed child-canvas drilldown. M6 public and
+packaging/UI contracts are next.
 
 ## Known open risks (watch during implementation)
-- EC10/EC22/EC27/EC35, EC42/EC44/EC47/EC49 are open—not
+- EC10/EC22/EC27/EC35, EC42/EC44/EC49 are open—not
   “resolved by documentation.” Their ledger rows name v0.2 or
   post-v0.2 closure conditions; close them only with the stated tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —

@@ -2,14 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import {
   LOG_RING,
+  RUN_FRAME_WINDOW,
   RUN_RECORD_WINDOW,
   applyRecord,
+  appendFrameSummaries,
   emptyRunView,
+  finalizeFrameReplay,
   finalizeIncomplete,
+  foldRunEventPage,
   matchesTraffic,
   reduceRun,
+  settleRootReplay,
   summarize,
   type RunRecord,
+  type RunFrameSummary,
 } from "./runview";
 
 let seq = 0;
@@ -333,6 +339,170 @@ describe("reduceRun (history replay)", () => {
     finalizeIncomplete(view);
     expect(view.state).toBe("incomplete");
     expect(view.nodes.req.active).toBe(false);
+  });
+});
+
+describe("paged replay", () => {
+  const summary = {
+    state: "passed" as const,
+    duration_ms: 17,
+    asserts: { passed: 3, failed: 0 },
+    unhandled_error_count: 0,
+    nodes_never_fired_count: 0,
+  };
+  const viewSummary = (
+    recordCount: number,
+    nodes: ReturnType<typeof emptyRunView>["nodes"] = {},
+  ) => ({
+    scope_frame: "f-0",
+    record_count: recordCount,
+    nodes,
+    edges: {},
+    asserts: { passed: 3, failed: 0 },
+    started_ts: "2026-07-13T00:00:00.000Z",
+  });
+
+  it("folds one page but hydrates the complete >500-event node projection", () => {
+    const events = Array.from({ length: 500 }, (_, index) => ({
+      event: index === 0 ? "run_started" : "node_fired",
+      seq: index + 1,
+      ...(index > 0 ? { frame: "f-0", node: "work", firing_no: index } : {}),
+    }));
+    const view = emptyRunView("f-0");
+    const page = {
+      root_frame: "f-0",
+      history_state: "complete" as const,
+      run_summary: summary,
+      view_summary: viewSummary(1_102, {
+        work: {
+          firings: 1_100,
+          active: false,
+          outcome: "ok",
+          guard: null,
+          lastSeq: 1_101,
+          log: null,
+          ports: {},
+          request: null,
+        },
+      }),
+      after_seq: 0,
+      next_after_seq: 500,
+      has_more: true,
+      events,
+    };
+
+    foldRunEventPage(view, page, 0, "f-0");
+    settleRootReplay(view, page);
+
+    expect(view.records).toHaveLength(500);
+    expect(view.recordCount).toBe(1_102);
+    expect(view.nodes.work.firings).toBe(1_100);
+    expect(view.state).toBe("passed");
+    expect(view.durationMs).toBe(17);
+    expect(view.asserts).toEqual({ passed: 3, failed: 0 });
+  });
+
+  it("settles only a known incomplete root and leaves running/indeterminate distinct", () => {
+    const settle = (
+      history_state: "running" | "incomplete" | "indeterminate",
+    ) => {
+      const view = emptyRunView();
+      settleRootReplay(view, {
+        root_frame: "f-0",
+        history_state,
+        run_summary: null,
+        view_summary: viewSummary(0),
+        after_seq: 0,
+        next_after_seq: 0,
+        has_more: false,
+        events: [],
+      });
+      return view.state;
+    };
+
+    expect(settle("incomplete")).toBe("incomplete");
+    expect(settle("running")).toBe("running");
+    expect(settle("indeterminate")).toBe("indeterminate");
+  });
+
+  it("rejects a duplicate/non-advancing cursor before mutating the view", () => {
+    const view = emptyRunView();
+    expect(() =>
+      foldRunEventPage(view, {
+        root_frame: "f-0",
+        history_state: "complete",
+        run_summary: summary,
+        view_summary: viewSummary(0),
+        after_seq: 0,
+        next_after_seq: 0,
+        has_more: true,
+        events: [],
+      }, 0, "f-0"),
+    ).toThrow("did not advance");
+    expect(view.recordCount).toBe(0);
+  });
+});
+
+describe("frame drilldown", () => {
+  function frame(index: number, parent = "f-0"): RunFrameSummary {
+    return {
+      event: "frame_finished",
+      seq: index + 1,
+      frame: `${parent}/f-${index}`,
+      parent_frame: parent,
+      parent_node: "items",
+      flow: "flows/item",
+      kind: "loop",
+      loop_index: index,
+      duration_ms: index,
+      state: "passed",
+      asserts: { passed: 0, failed: 0 },
+      unhandled_error_count: 0,
+      end_output_names: [],
+    };
+  }
+
+  it("bounds the active direct-child summary window and keys identity by frame", () => {
+    const window = { frames: [], frameCount: 0 } as {
+      frames: RunFrameSummary[];
+      frameCount: number;
+    };
+    const summaries = Array.from(
+      { length: RUN_FRAME_WINDOW + 7 },
+      (_, index) => frame(index),
+    );
+    appendFrameSummaries(window, summaries);
+    expect(window.frameCount).toBe(RUN_FRAME_WINDOW + 7);
+    expect(window.frames).toHaveLength(RUN_FRAME_WINDOW);
+    expect(window.frames[0].frame).toBe("f-0/f-7");
+    expect(new Set(window.frames.map((summary) => summary.frame)).size).toBe(
+      RUN_FRAME_WINDOW,
+    );
+  });
+
+  it("folds child nodes in a separate scope and settles from frame_finished", () => {
+    const summary = frame(3);
+    const child = emptyRunView(summary.frame);
+    applyRecord(child, {
+      event: "node_fired",
+      seq: 2,
+      frame: summary.frame,
+      node: "inner",
+      firing_no: 1,
+    });
+    applyRecord(child, {
+      event: "node_fired",
+      seq: 3,
+      frame: "f-0",
+      node: "root_only",
+      firing_no: 1,
+    });
+    finalizeFrameReplay(child, summary);
+
+    expect(child.nodes.inner).toMatchObject({ firings: 1, active: false });
+    expect(child.nodes.root_only).toBeUndefined();
+    expect(child.state).toBe("passed");
+    expect(child.state).not.toBe("incomplete");
   });
 });
 

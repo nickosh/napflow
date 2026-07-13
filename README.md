@@ -45,7 +45,7 @@ full-fidelity prototype plan is in [docs/PLAN.md](docs/PLAN.md)
 | `napf list`  | ✅     | discovered flows with their input/output ports |
 | `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with `file:line` diagnostics and CI exit codes |
 | `napf run`   | ✅     | headless engine — full node catalog incl. python worker, full-value JSONL/blob history, prepared requests, exit codes 0/1/2/130 |
-| `napf ui`    | ✅     | visual canvas on localhost — edit flows (autosaved through the canonical serializer, clean diffs), edit `nodes.py` in-browser, run with live animated events + full request/response detail, replay any run from history, drill into subflows, clone shared flows |
+| `napf ui`    | ✅     | visual canvas on localhost — edit flows (autosaved through the canonical serializer, clean diffs), edit `nodes.py` in-browser, run with live animated events + full request/response detail, replay bounded history pages with lazy blob detail, drill into completed frame canvases, clone shared flows |
 
 > **Raw history warning:** `.napflow/runs/` may contain complete request and
 > response headers/bodies, cookies, credentials, bearer tokens, log values,

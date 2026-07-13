@@ -4,6 +4,16 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M5 usable replay complete
+
+- Done: `napflow-replay/1` adds frozen bounded event/frame pages, graph-sized
+  projections, lazy verified detail, and honest complete/incomplete/indeterminate state.
+- Proved: a 1,101-event history opens one page with a complete overlay; a real
+  72 KiB child swaps to its durable canvas without re-execution or eager blob reads.
+- Verified: 564 pytest, 62 Vitest, and 42 Playwright tests pass (1 pytest
+  skipped, 1 expected xfail); Ruff, both import contracts, typecheck, and build pass.
+- Next: M6 public Workspace/Flow API, deterministic packaging, and UI/schema parity.
+
 ## 2026-07-13 — v0.2 M4 full-fidelity history complete
 
 - Done: scaffold masking is opt-in; `content-blobs/1` now covers every

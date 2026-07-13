@@ -254,7 +254,7 @@ nicety: `napf check --write-env-example` to regenerate a committed
 `napf check` is the CI pre-gate: fails fast on broken references before
 anything executes.
 
-## Server surface — v0.1 API plus v0.2/M1 boundary (2026-07-12)
+## Server surface — v0.1 API plus v0.2/M5 boundary (2026-07-13)
 
 `napf ui [--port] [--no-browser]` serves UI + API + WebSocket on ONE
 localhost port (D03) and opens the default browser (stdlib
@@ -298,19 +298,50 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   `GET /api/runs?flow=` (history from the JSONL dir, ordered by a locked
   internal monotonic lifecycle value with legacy mtime fallback; states from a robust
   backward scan for the last valid record, including records larger than
-  64 KiB; `incomplete` when it isn't `run_finished`) ·
+  64 KiB; active server runs are `running`, exact external `.active` units are
+  `indeterminate`, markerless/known-closed prefixes are `incomplete`, and a
+  durable `run_finished` contributes its outcome state) ·
   `GET /api/runs/{run_id}` (status; bounded scalar summary when finished:
   state/duration/assert counts/unhandled-error count/never-fired count —
   detail and raw End outputs remain in canonical `run_finished`, NEVER this
   scalar endpoint) ·
-  `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
-  D13; records are the same raw local-inspection view as WebSocket frames;
-  `?flow=` locates runs the server process didn't start; the reader validates
-  the first `run_started` envelope, supports `content-blobs/1`, accepts an
-  unmarked v0.1 log best-effort, and returns 422 `history_format` for a
-  malformed/newer format or unsupported declared feature. Canonical blob
-  descriptors pass through unchanged without eager reads; this response
-  remains a full list until M5 paging) ·
+  `GET /api/runs/{run_id}/events?flow=&after_seq=&limit=&frame=` (replay =
+  re-read the JSONL, D13; returns a bounded `napflow-replay/1` page with
+  `run_format`, `features`, `root_frame`, `history_state`, bounded
+  `run_summary`/`view_summary`, sequence cursor, `has_more`, and `events`.
+  `run_summary` is a scalar projection of the durable final fact (state,
+  duration, assertion and
+  error/skipped counts), so the browser can settle after one page without
+  returning tail End/error values. `view_summary` scans the frozen snapshot
+  into frame-scoped node/edge/port/request aggregates and a fixed per-node Log
+  ring without returning the other event pages or resolving descriptors.
+  `history_state` is `running` for a run owned live
+  by this server, `complete` for a durable `run_finished`, `incomplete` for a
+  known-closed/legacy EC20 prefix, or `indeterminate` for another process's
+  exact regular `.active` unit. `limit` defaults to 200 and is capped at 500;
+  `next_after_seq` is the last returned canonical sequence. An optional
+  `frame` selects that exact frame; the root-frame view also includes the
+  frame-less `run_started`/`run_finished` run envelopes. Blob descriptors pass
+  through unchanged) ·
+  `GET /api/runs/{run_id}/frames?flow=&parent_frame=&after_seq=&limit=`
+  (the same versioned bounded envelope over direct-child `frame_finished`
+  projections; absent `parent_frame` means the root, and recursively requesting
+  a selected completed child reconstructs the durable frame tree without
+  retained runtime `Frame` objects. Each entry keeps navigation/scalar fields,
+  assertion/error counts, and End-port names only; full errors/End values remain
+  lazy on that canonical event's sequence. Cancelled children have no false
+  summary) ·
+  `GET /api/runs/{run_id}/events/{seq}?flow=` (resolve only that canonical
+  event's schema-declared content on demand, verifying blob size/hash before
+  returning `event`; missing, corrupt, omitted, and malformed content use
+  explicit `history_content_*` errors rather than a partial value). All three
+  readers validate the first `run_started` envelope, support
+  `content-blobs/1`, accept an unmarked v0.1 log best-effort, return 422
+  `history_format` for malformed/newer/unsupported history, and hold a
+  retention reader lease for the request. Each request captures a sequence and
+  lifecycle boundary before scanning, validates every record through that
+  boundary (including the unreturned tail), and rejects invalid UTF-8,
+  malformed middle data, or non-consecutive sequences as `history_format` ·
   `POST /api/runs/{run_id}/abort` (202 aborting; on a finished run:
   200 + final state, idempotent no-op).
 - Identity, run-id, or resolved-containment failures on these REST paths are
@@ -393,7 +424,10 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   Server closes normally after `run_finished`.
   Finished-run WebSockets validate the history envelope and stream the file
   without a full in-memory list; malformed/newer/unsupported format closes
-  `4409`. The REST replay response remains full-list until M5 paging.
+  `4409`. Historical browser inspection uses the bounded REST pages above;
+  opening the root or a completed child requests one event page and one
+  direct-child-summary page, while explicit page controls continue from the
+  cursor. The WebSocket remains the bounded live/catch-up transport.
   Unknown run: close `4404`; malformed run id/boundary: `4400`; rejected
   Host/Origin before accept: `4403`.
 - **Run registry**: runs the server started, in memory — running entries keep

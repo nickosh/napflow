@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { fetchRunEventDetail } from "../api";
 import {
   ROOT_FRAME,
   matchesTraffic,
@@ -7,6 +8,7 @@ import {
   preview,
   summarize,
   trafficLabel,
+  type RunFrameSummary,
   type RunRecord,
 } from "../runview";
 import { useAppStore } from "../store";
@@ -18,6 +20,7 @@ const STATE_COLORS: Record<string, string> = {
   error: "#b71c1c",
   aborted: "#616161",
   incomplete: "#ef6c00",
+  indeterminate: "#ef6c00",
 };
 
 // keep the DOM sane on huge runs — the JSONL stays the full record
@@ -52,8 +55,126 @@ function clock(ts: string | undefined): string {
   return ts?.slice(11, 23) ?? "";
 }
 
-function EventRow({ record }: { record: RunRecord }) {
+type ReplayTarget = { runId: string; flow: string } | null;
+
+type RecordExpansion = {
+  open: boolean;
+  toggle: () => void;
+  detail: RunRecord | null;
+  loading: boolean;
+  error: string | null;
+};
+
+/** REST pages and production WebSocket records both carry canonical blob
+ * descriptors. Fetch and resolve exactly one event only after its row opens;
+ * a record without a server run/sequence is the only local fallback. */
+function useRecordExpansion(
+  record: RunRecord,
+  replay: ReplayTarget,
+): RecordExpansion {
+  const seq = typeof record.seq === "number" ? record.seq : null;
+  const remote = replay !== null && seq !== null;
   const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<RunRecord | null>(
+    remote ? null : record,
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
+
+  useEffect(
+    () => () => {
+      requestGeneration.current += 1;
+    },
+    [],
+  );
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (
+      !next ||
+      !remote ||
+      replay === null ||
+      seq === null ||
+      detail !== null ||
+      loading
+    ) {
+      return;
+    }
+    const generation = ++requestGeneration.current;
+    setLoading(true);
+    setError(null);
+    void fetchRunEventDetail(replay.runId, replay.flow, seq)
+      .then((payload) => {
+        if (generation === requestGeneration.current) setDetail(payload.event);
+      })
+      .catch((caught: unknown) => {
+        if (generation === requestGeneration.current) {
+          setError(
+            `full event unavailable: ${
+              caught instanceof Error ? caught.message : String(caught)
+            }`,
+          );
+        }
+      })
+      .finally(() => {
+        if (generation === requestGeneration.current) setLoading(false);
+      });
+  };
+
+  return { open, toggle, detail, loading, error };
+}
+
+function ExpandedRecord({ expansion }: { expansion: RecordExpansion }) {
+  if (expansion.loading) {
+    return (
+      <p
+        data-testid="run-event-detail-loading"
+        style={{ margin: "4px 0 6px 92px", color: "#666" }}
+      >
+        loading full event…
+      </p>
+    );
+  }
+  if (expansion.error !== null) {
+    return (
+      <p
+        data-testid="run-event-detail-error"
+        style={{ margin: "4px 0 6px 92px", color: "#c62828" }}
+      >
+        {expansion.error}
+      </p>
+    );
+  }
+  if (expansion.detail === null) return null;
+  return (
+    <pre
+      data-testid="run-event-detail"
+      style={{
+        margin: "2px 0 6px 92px",
+        padding: "6px 8px",
+        background: "#f7f7f7",
+        borderRadius: 4,
+        maxHeight: 300,
+        overflow: "auto",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-all",
+      }}
+    >
+      {JSON.stringify(expansion.detail, null, 2)}
+    </pre>
+  );
+}
+
+function EventRow({
+  record,
+  replay,
+}: {
+  record: RunRecord;
+  replay: ReplayTarget;
+}) {
+  const expansion = useRecordExpansion(record, replay);
   return (
     <li
       data-testid="run-event"
@@ -61,7 +182,7 @@ function EventRow({ record }: { record: RunRecord }) {
       style={{ borderBottom: "1px solid #f0f0f0" }}
     >
       <div
-        onClick={() => setOpen(!open)}
+        onClick={expansion.toggle}
         style={{
           display: "flex",
           gap: 8,
@@ -83,41 +204,28 @@ function EventRow({ record }: { record: RunRecord }) {
           {summarize(record)}
         </span>
       </div>
-      {open && (
-        // The expanded row preserves the complete persisted event shape.
-        // Large content may be represented by a typed blob reference for
-        // lazy consumers rather than duplicated inline.
-        <pre
-          data-testid="run-event-detail"
-          style={{
-            margin: "2px 0 6px 92px",
-            padding: "6px 8px",
-            background: "#f7f7f7",
-            borderRadius: 4,
-            maxHeight: 300,
-            overflow: "auto",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-          }}
-        >
-          {JSON.stringify(record, null, 2)}
-        </pre>
-      )}
+      {expansion.open && <ExpandedRecord expansion={expansion} />}
     </li>
   );
 }
 
 /** One crossed message on the selected wire/port (M5.5): complete value,
  * ts, msg_id — with value_preview fallback for featureless legacy replay. */
-function MessageRow({ record }: { record: RunRecord }) {
-  const [open, setOpen] = useState(false);
+function MessageRow({
+  record,
+  replay,
+}: {
+  record: RunRecord;
+  replay: ReplayTarget;
+}) {
+  const expansion = useRecordExpansion(record, replay);
   return (
     <li
       data-testid="run-message"
       style={{ borderBottom: "1px solid #f0f0f0" }}
     >
       <div
-        onClick={() => setOpen(!open)}
+        onClick={expansion.toggle}
         style={{
           display: "flex",
           gap: 8,
@@ -144,22 +252,10 @@ function MessageRow({ record }: { record: RunRecord }) {
           {preview(messageValue(record), 200)}
         </span>
       </div>
-      {open && (
-        <pre
-          data-testid="run-message-detail"
-          style={{
-            margin: "2px 0 6px 92px",
-            padding: "6px 8px",
-            background: "#f7f7f7",
-            borderRadius: 4,
-            maxHeight: 300,
-            overflow: "auto",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-          }}
-        >
-          {JSON.stringify(record, null, 2)}
-        </pre>
+      {expansion.open && (
+        <div data-testid="run-message-detail">
+          <ExpandedRecord expansion={expansion} />
+        </div>
       )}
     </li>
   );
@@ -202,6 +298,134 @@ function HistoryTab() {
   );
 }
 
+function frameLabel(summary: RunFrameSummary): string {
+  const index =
+    typeof summary.loop_index === "number" ? ` #${summary.loop_index}` : "";
+  return `${summary.kind} ${summary.flow}${index}`;
+}
+
+/** Direct-child summaries are one replaceable bounded page. Earlier loop
+ * iterations remain reachable via "first" and later ones via "next"; no
+ * expanding frame tree is retained in browser memory. */
+function FrameBrowser() {
+  const {
+    runRootFrame,
+    runFramePath,
+    runFrameChildren,
+    runFrameChildrenAfterSeq,
+    runFrameChildrenHasMore,
+    runFrameLoading,
+    runFrameError,
+    openRunFrame,
+    backRunFrame,
+    rootRunFrame,
+    pageRunFrames,
+  } = useAppStore();
+  const active = runFramePath.at(-1) ?? null;
+  return (
+    <div
+      data-testid="run-frame-browser"
+      style={{
+        borderBottom: "1px solid #e5e5e5",
+        paddingBottom: 4,
+        marginBottom: 4,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <strong>frame</strong>
+        {active === null ? (
+          <span data-testid="run-frame-active">root {runRootFrame}</span>
+        ) : (
+          <>
+            <button
+              data-testid="run-frame-root"
+              onClick={() => void rootRunFrame()}
+              style={{ fontSize: 11 }}
+            >
+              root
+            </button>
+            <button
+              data-testid="run-frame-parent"
+              onClick={() => void backRunFrame()}
+              style={{ fontSize: 11 }}
+            >
+              ← parent
+            </button>
+            <span data-testid="run-frame-active" title={active.frame}>
+              {frameLabel(active)}
+            </span>
+            <StateChip state={active.state} testId="run-frame-state" />
+          </>
+        )}
+        <span style={{ flex: 1 }} />
+        {runFrameChildrenAfterSeq > 0 && (
+          <button
+            data-testid="run-frames-first"
+            onClick={() => void pageRunFrames("first")}
+            style={{ fontSize: 11 }}
+          >
+            first children
+          </button>
+        )}
+        {runFrameChildrenHasMore && (
+          <button
+            data-testid="run-frames-next"
+            onClick={() => void pageRunFrames("next")}
+            style={{ fontSize: 11 }}
+          >
+            next children →
+          </button>
+        )}
+      </div>
+      {runFrameLoading && (
+        <span data-testid="run-frame-loading" style={{ color: "#777" }}>
+          loading frame detail…
+        </span>
+      )}
+      {runFrameError !== null && (
+        <span data-testid="run-frame-error" style={{ color: "#c62828" }}>
+          {runFrameError}
+        </span>
+      )}
+      {runFrameChildren.length > 0 && (
+        <ul
+          data-testid="run-frame-children"
+          style={{
+            display: "flex",
+            gap: 6,
+            margin: "3px 0 0",
+            padding: 0,
+            overflowX: "auto",
+            listStyle: "none",
+          }}
+        >
+          {runFrameChildren.map((summary) => (
+            <li key={summary.frame}>
+              <button
+                data-testid="run-frame-child"
+                data-frame={summary.frame}
+                onClick={() => void openRunFrame(summary)}
+                title={`${summary.frame} · ${Math.round(summary.duration_ms)}ms`}
+                style={{
+                  display: "flex",
+                  gap: 5,
+                  alignItems: "center",
+                  whiteSpace: "nowrap",
+                  fontSize: 11,
+                  fontFamily: "inherit",
+                }}
+              >
+                <StateChip state={summary.state} testId="run-frame-child-state" />
+                {frameLabel(summary)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Bottom run surface (FR-1005): live/replayed event stream with
  * expandable full wire detail, plus the run history browser (replay =
  * re-read the JSONL, D13; EC20 dangling starts read `incomplete`). */
@@ -210,7 +434,17 @@ export default function RunPanel() {
     runView,
     runId,
     runLive,
+    runSource,
     runPanelTab,
+    selectedFlow,
+    runReplayLoading,
+    runReplayError,
+    runFramePath,
+    runFrameView,
+    runEventPage,
+    runEventPageAfterSeq,
+    runEventPageHasMore,
+    runEventPageLoading,
     selectedNode,
     selectNode,
     runSelection,
@@ -218,6 +452,7 @@ export default function RunPanel() {
     abortRun,
     exitRun,
     openRunPanel,
+    pageRunEvents,
   } = useAppStore();
   const listRef = useRef<HTMLDivElement>(null);
   // tail-following with an explicit toggle (owner fork): the button
@@ -241,21 +476,32 @@ export default function RunPanel() {
   if (runPanelTab === null) return null;
   const tab = runPanelTab;
 
+  const inFrameDetail = runFramePath.length > 0;
+  const activeView = inFrameDetail ? runFrameView : runView;
+  const sourceRecords = runEventPage ?? activeView?.records ?? [];
   const records =
-    runView === null
+    activeView === null
       ? []
       : selectedNode === null
-        ? runView.records
-        : runView.records.filter((r) => r.node === selectedNode);
+        ? sourceRecords
+        : sourceRecords.filter((r) => r.node === selectedNode);
   const overflow =
-    runView === null || selectedNode !== null
+    activeView === null || runEventPage !== null
+      ? 0
+      : selectedNode !== null
       ? records.length - MAX_ROWS
-      : runView.recordCount - Math.min(records.length, MAX_ROWS);
+      : activeView.recordCount - Math.min(records.length, MAX_ROWS);
   // M5.5: a selected wire/port swaps the stream for its message list
   const messages =
-    runView === null || runSelection === null
+    activeView === null || runSelection === null
       ? []
-      : runView.records.filter((r) => matchesTraffic(r, runSelection));
+      : sourceRecords.filter((r) =>
+          matchesTraffic(r, runSelection, activeView.scopeFrame),
+        );
+  const replayTarget: ReplayTarget =
+    runId !== null && selectedFlow !== null
+      ? { runId, flow: selectedFlow }
+      : null;
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     fontSize: 12,
@@ -435,6 +681,60 @@ export default function RunPanel() {
         }}
         style={{ flex: 1, overflowY: "auto", padding: "0.3rem 1rem" }}
       >
+        {tab === "events" && runSource === "history" && <FrameBrowser />}
+        {tab === "events" && runReplayLoading && (
+          <p data-testid="run-replay-loading" style={{ color: "#666", margin: 0 }}>
+            loading replay page…
+          </p>
+        )}
+        {tab === "events" && runReplayError !== null && (
+          <p data-testid="run-replay-error" style={{ color: "#c62828", margin: 0 }}>
+            {runReplayError}
+          </p>
+        )}
+        {tab === "events" &&
+          runSource === "history" &&
+          replayTarget !== null &&
+          activeView !== null && (
+          <div
+            data-testid="run-event-pager"
+            style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 3 }}
+          >
+            {runEventPageLoading && <span>loading event page…</span>}
+            {runEventPage === null && activeView.recordCount > 0 && (
+                <button
+                  data-testid="run-events-first"
+                  onClick={() => void pageRunEvents("first")}
+                  style={{ fontSize: 11 }}
+                >
+                  browse from first event
+                </button>
+              )}
+            {runEventPage !== null && (
+              <>
+                <span>page after seq {runEventPageAfterSeq}</span>
+                {runEventPageAfterSeq > 0 && (
+                  <button
+                    data-testid="run-events-first"
+                    onClick={() => void pageRunEvents("first")}
+                    style={{ fontSize: 11 }}
+                  >
+                    first
+                  </button>
+                )}
+                {runEventPageHasMore && (
+                  <button
+                    data-testid="run-events-next"
+                    onClick={() => void pageRunEvents("next")}
+                    style={{ fontSize: 11 }}
+                  >
+                    next →
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {tab === "history" ? (
           <HistoryTab />
         ) : runSelection !== null ? (
@@ -446,7 +746,11 @@ export default function RunPanel() {
             )}
             <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
               {messages.slice(-MAX_ROWS).map((record, index) => (
-                <MessageRow key={record.seq ?? `${index}`} record={record} />
+                <MessageRow
+                  key={`${runId ?? "live"}:${activeView?.scopeFrame ?? ROOT_FRAME}:${record.seq ?? index}`}
+                  record={record}
+                  replay={replayTarget}
+                />
               ))}
             </ul>
           </>
@@ -460,8 +764,9 @@ export default function RunPanel() {
             <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
               {records.slice(-MAX_ROWS).map((record, index) => (
                 <EventRow
-                  key={record.seq ?? `${index}`}
+                  key={`${runId ?? "live"}:${activeView?.scopeFrame ?? ROOT_FRAME}:${record.seq ?? index}`}
                   record={record}
+                  replay={replayTarget}
                 />
               ))}
             </ul>

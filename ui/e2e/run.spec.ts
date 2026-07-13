@@ -176,6 +176,239 @@ test("a live run pulses and can be aborted", async ({ page }) => {
   await page.getByTestId("exit-run").click();
 });
 
+test("history frame drilldown resolves a blob only after row expansion", async ({
+  page,
+}) => {
+  const runStarts: string[] = [];
+  const eventPages: URL[] = [];
+  const framePages: URL[] = [];
+  const detailRequests: URL[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" && url.pathname === "/api/runs") {
+      runStarts.push(request.url());
+    }
+    if (request.method() !== "GET") return;
+    if (/\/api\/runs\/[^/]+\/events$/.test(url.pathname)) {
+      eventPages.push(url);
+    } else if (/\/api\/runs\/[^/]+\/frames$/.test(url.pathname)) {
+      framePages.push(url);
+    } else if (/\/api\/runs\/[^/]+\/events\/\d+$/.test(url.pathname)) {
+      detailRequests.push(url);
+    }
+  });
+
+  await page.goto("/flow/flows/replay-parent");
+  await expect(page.getByTestId("node-child")).toBeVisible();
+  const started = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "POST" && url.pathname === "/api/runs";
+  });
+  await page.getByTestId("run-button").click();
+  const startedPayload = (await (await started).json()) as { run_id: string };
+  const runId = startedPayload.run_id;
+
+  // This is a real engine run: the child Python worker returns 72 KiB,
+  // quiesces, and publishes its frame_finished before the root settles.
+  await expect(page.getByTestId("run-state")).toHaveAttribute(
+    "data-state",
+    "passed",
+  );
+  expect(runStarts).toHaveLength(1);
+  await page.getByTestId("exit-run").click();
+
+  // Reopen that exact run from durable history. Root events and direct-child
+  // summaries use their paged endpoints; event detail must remain untouched.
+  await page.getByTestId("open-history").click();
+  const historyRow = page
+    .getByTestId("history-run")
+    .filter({ hasText: runId });
+  await expect(historyRow).toBeVisible();
+  const rootFramesResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === `/api/runs/${runId}/frames`
+    );
+  });
+  await historyRow.click();
+  await expect(page.getByTestId("run-state")).toHaveAttribute(
+    "data-state",
+    "passed",
+  );
+  const childFrame = page
+    .getByTestId("run-frame-child")
+    .filter({ hasText: "flows/replay-child" });
+  await expect(childFrame).toBeVisible();
+  const rootFramesPayload = (await (await rootFramesResponse).json()) as {
+    frames: Array<{ event: string; flow: string; state: string }>;
+  };
+  expect(rootFramesPayload.frames).toEqual([
+    expect.objectContaining({
+      event: "frame_finished",
+      flow: "flows/replay-child",
+      state: "passed",
+    }),
+  ]);
+  await expect(page.getByTestId("run-replay-error")).toHaveCount(0);
+  expect(
+    eventPages.filter((url) => url.pathname.includes(`/runs/${runId}/`)),
+  ).toHaveLength(1);
+  expect(
+    framePages.filter((url) => url.pathname.includes(`/runs/${runId}/`)),
+  ).toHaveLength(1);
+  expect(detailRequests).toHaveLength(0);
+
+  // Drill into the completed child from frame_finished history. This issues
+  // one bounded child-event page and one child-summary page, never a new run
+  // and never an eager per-event detail request.
+  const childFrameId = await childFrame.getAttribute("data-frame");
+  expect(childFrameId).not.toBeNull();
+  const childEventsResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === `/api/runs/${runId}/events` &&
+      url.searchParams.get("frame") === childFrameId
+    );
+  });
+  await childFrame.click();
+  await expect(page.getByTestId("run-frame-active")).toContainText(
+    "flow flows/replay-child",
+  );
+  await expect(page.getByTestId("run-frame-state")).toHaveAttribute(
+    "data-state",
+    "passed",
+  );
+  // Frame drilldown swaps the locked run canvas itself, not only the event
+  // list: child nodes and their durable overlay replace the parent graph.
+  await expect(page.getByTestId("node-produce")).toBeVisible();
+  await expect(page.getByTestId("node-observe")).toHaveAttribute(
+    "data-run-status",
+    "ok",
+  );
+  await expect(page.getByTestId("node-child")).toHaveCount(0);
+  await expect(page.getByTestId("run-frame-loading")).toHaveCount(0);
+  await expect(page.getByTestId("run-frame-error")).toHaveCount(0);
+  expect(
+    eventPages.filter((url) => url.pathname.includes(`/runs/${runId}/`)),
+  ).toHaveLength(2);
+  expect(
+    framePages.filter((url) => url.pathname.includes(`/runs/${runId}/`)),
+  ).toHaveLength(2);
+  expect(new Set(eventPages.map((url) => url.searchParams.get("frame"))).size).toBe(
+    2,
+  );
+  expect(runStarts).toHaveLength(1);
+  expect(detailRequests).toHaveLength(0);
+
+  const childEventsPayload = (await (await childEventsResponse).json()) as {
+    features: string[];
+    events: Array<{ event: string; value?: unknown }>;
+  };
+  expect(childEventsPayload.features).toContain("content-blobs/1");
+  const persistedLog = childEventsPayload.events.find(
+    (event) => event.event === "log",
+  );
+  expect(persistedLog).toBeDefined();
+  expect(
+    (persistedLog?.value as { $napflow?: { kind?: string } }).$napflow?.kind,
+  ).toBe("blob");
+
+  const blobRow = page
+    .locator('[data-testid="run-event"][data-event="log"]')
+    .filter({ hasText: "lazy child value" });
+  await expect(blobRow).toBeVisible();
+  await expect(blobRow).toContainText("$napflow");
+  await expect(blobRow).toContainText('"kind":"blob"');
+  await expect(blobRow).not.toContainText("M5-LAZY-BLOB");
+
+  const detailResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      new RegExp(`/api/runs/${runId}/events/\\d+$`).test(url.pathname)
+    );
+  });
+  await blobRow.locator("div").first().click();
+  expect((await detailResponse).status()).toBe(200);
+  await expect(blobRow.getByTestId("run-event-detail")).toContainText(
+    "M5-LAZY-BLOB:",
+  );
+  await expect(blobRow.getByTestId("run-event-detail")).toContainText(":END");
+  expect(detailRequests).toHaveLength(1);
+  expect(runStarts).toHaveLength(1);
+});
+
+test("a missing history blob fails only its explicitly expanded row", async ({
+  page,
+}) => {
+  const runId = "19700101-000001-b10b00";
+  const detailRequests: URL[] = [];
+  const framePages: URL[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "GET") return;
+    const url = new URL(request.url());
+    if (/\/api\/runs\/[^/]+\/events\/\d+$/.test(url.pathname)) {
+      detailRequests.push(url);
+    }
+    if (/\/api\/runs\/[^/]+\/frames$/.test(url.pathname)) {
+      framePages.push(url);
+    }
+  });
+
+  await page.goto("/flow/flows/replay-parent");
+  await page.getByTestId("open-history").click();
+  const historyRow = page
+    .getByTestId("history-run")
+    .filter({ hasText: runId });
+  await expect(historyRow).toBeVisible();
+  await historyRow.click();
+
+  // The descriptor is valid protocol data, so root paging and empty child
+  // discovery both succeed without touching the absent companion file.
+  await expect(page.getByTestId("run-state")).toHaveAttribute(
+    "data-state",
+    "passed",
+  );
+  await expect(page.getByTestId("run-frame-browser")).toBeVisible();
+  await expect(page.getByTestId("run-replay-error")).toHaveCount(0);
+  await expect(page.getByTestId("run-frame-error")).toHaveCount(0);
+  expect(framePages).toHaveLength(1);
+  expect(detailRequests).toHaveLength(0);
+
+  const missingRow = page
+    .locator('[data-testid="run-event"][data-event="log"]')
+    .filter({ hasText: "missing blob fixture" });
+  await expect(missingRow).toBeVisible();
+  await expect(missingRow).toContainText("$napflow");
+  const detailResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === `/api/runs/${runId}/events/3`
+    );
+  });
+  await missingRow.locator("div").first().click();
+  expect((await detailResponse).status()).toBe(404);
+  await expect(missingRow.getByTestId("run-event-detail-error")).toContainText(
+    "full event unavailable",
+  );
+  await expect(missingRow.getByTestId("run-event-detail-error")).toContainText(
+    "run-history blob is missing",
+  );
+  expect(detailRequests).toHaveLength(1);
+
+  // The localized detail failure does not poison the replay/frame surfaces.
+  await expect(page.getByTestId("run-state")).toHaveAttribute(
+    "data-state",
+    "passed",
+  );
+  await expect(page.getByTestId("run-replay-error")).toHaveCount(0);
+  await expect(page.getByTestId("run-frame-error")).toHaveCount(0);
+  await expect(page.getByTestId("run-event")).toHaveCount(4);
+});
+
 test("history browser lists and replays runs; EC20 dangling start", async ({
   page,
 }) => {
