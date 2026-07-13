@@ -21,6 +21,10 @@ const cellInput: React.CSSProperties = {
 type StartPort = { name: string; type?: string; default?: unknown };
 type EndPort = { name: string; required?: boolean };
 
+function isTemplateSource(text: string): boolean {
+  return text.includes("{{") || text.includes("{%");
+}
+
 /** Parse the default cell's text per the port's declared type
  * (M4 leftover: the cell wrote strings only). Returns {ok:false} when
  * the text doesn't fit the type — the cell stays local and turns red.
@@ -28,7 +32,19 @@ type EndPort = { name: string; required?: boolean };
 export function parseDefault(
   text: string,
   type: string,
+  allowTemplate = true,
 ): { ok: true; value: unknown } | { ok: false } {
+  // Typed Start defaults are evaluated before post-render coercion (D25).
+  // Keep template source as a string even for number/bool/object/list ports;
+  // plain non-template text must still fit the declared native type.
+  if (
+    allowTemplate &&
+    type !== "string" &&
+    type !== "any" &&
+    isTemplateSource(text)
+  ) {
+    return { ok: true, value: text };
+  }
   switch (type) {
     case "string":
       return { ok: true, value: text };
@@ -69,9 +85,10 @@ function showDefault(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-/** Type-aware default cell: local text state, committed on blur; a
- * value that doesn't parse for the declared type stays local (red
- * border) — the model never sees it. Empty = no default (required). */
+/** Type-aware default cell: local text state, committed on blur; a value that
+ * doesn't parse for the declared type stays local (red border). The explicit
+ * checkbox separates an absent default (required input) from the valid native
+ * empty-string default accepted by string/any ports. */
 function DefaultCell({
   port,
   index,
@@ -83,42 +100,68 @@ function DefaultCell({
 }) {
   const type = port.type ?? "any";
   const shown = showDefault(port.default);
+  const hasModelDefault = Object.prototype.hasOwnProperty.call(port, "default");
   const [text, setText] = useState(shown);
   const [bad, setBad] = useState(false);
+  const [enabled, setEnabled] = useState(hasModelDefault);
   useEffect(() => {
     setText(shown);
     setBad(false);
+    setEnabled(hasModelDefault);
     // re-sync when the model value OR the declared type changes (a
     // type switch re-validates the same text on next blur)
-  }, [shown, type]);
+  }, [shown, type, hasModelDefault]);
 
   return (
-    <input
-      data-testid={`start-port-default-${index}`}
-      style={{
-        ...cellInput,
-        flex: 2,
-        borderColor: bad ? "#c62828" : "#ccc",
-      }}
-      value={text}
-      placeholder="(required)"
-      title={`default value (${type}); empty = required at bind`}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => {
-        if (text === "") {
-          setBad(false);
-          onCommit(undefined); // absent default = required input
-          return;
-        }
-        const parsed = parseDefault(text, type);
-        if (parsed.ok) {
-          setBad(false);
-          onCommit(parsed.value);
-        } else {
-          setBad(true); // stays local until it fits the type
-        }
-      }}
-    />
+    <span style={{ display: "flex", flex: 2, gap: 3, alignItems: "center" }}>
+      <input
+        data-testid={`start-port-default-${index}`}
+        style={{
+          ...cellInput,
+          flex: 1,
+          borderColor: bad ? "#c62828" : "#ccc",
+        }}
+        value={text}
+        placeholder={enabled ? "(empty value)" : "(required)"}
+        title={`default value (${type}); use the checkbox to distinguish empty from required`}
+        onChange={(e) => {
+          setText(e.target.value);
+          if (e.target.value !== "") setEnabled(true);
+        }}
+        onBlur={() => {
+          if (!enabled) return;
+          const parsed = parseDefault(text, type);
+          if (parsed.ok) {
+            setBad(false);
+            onCommit(parsed.value);
+          } else {
+            setBad(true); // stays local until it fits the type
+          }
+        }}
+      />
+      <label
+        title="default is present; unchecked means this input is required"
+        style={{ fontSize: 10, whiteSpace: "nowrap", color: "#666" }}
+      >
+        <input
+          data-testid={`start-port-default-enabled-${index}`}
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            setEnabled(checked);
+            setBad(false);
+            if (!checked) {
+              setText("");
+              onCommit(undefined);
+            } else if (text === "" && (type === "string" || type === "any")) {
+              onCommit("");
+            }
+          }}
+        />
+        default
+      </label>
+    </span>
   );
 }
 
@@ -146,8 +189,8 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
       list.map((p, i) => {
         if (i !== index) return { ...p };
         const next = { ...p, ...patch } as Record<string, unknown>;
-        // absent default = required input; empty string in the default
-        // cell means "no default", not a "" default
+        // Only an undefined patch removes the default (required input); the
+        // explicit checkbox lets a native empty-string default remain "".
         if ("default" in patch && patch.default === undefined) {
           delete next.default;
         }

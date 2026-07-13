@@ -51,17 +51,10 @@ def write_nodes(tmp_path, source):
 # TR-11 — public core API (FR-1112, EC42; owner: M6)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="FR-1112/M6: no public run_flow wrapper yet",
-)
 def test_public_run_flow_import():
-    """`from napflow.core import run_flow` is the documented pytest entry
-    point (D32 note); today core exposes no such wrapper."""
-    import napflow.core as core
+    """`from napflow.core import run_flow` is the pytest entry point."""
+    from napflow.core import run_flow
 
-    run_flow = core.run_flow
     assert callable(run_flow)
 
 
@@ -585,11 +578,10 @@ def test_blob_marker_shaped_user_payload_round_trips_as_literal(tmp_path):
     )
 
 
-@pytest.mark.skip(
-    reason="TR-11/FR-1113 owner M6: clean-tree wheel/UI-bundle build is a "
-    "subprocess build check; see napf git-install gotcha"
-)
-def test_clean_tree_wheel_contains_ui(): ...
+# TR-11/FR-1113's clean release-sdist -> wheel -> installed `napf ui`
+# subprocess check lives in tools/smoke_release_artifact.py. It is explicit
+# release-gate work rather than an ordinary pytest because it creates an
+# isolated environment and installs dependencies.
 
 
 # TR-20 immediate navigation, editor close, unload prompt, and overlapping

@@ -29,7 +29,7 @@ Core promises (never compromise these):
 - `docs/napflow-workspace-manifest.md` — napflow.yaml, CLI surface, env model
 - `docs/napflow-engine-spec.md`     — scheduler, frames, firing rules, events
 - `docs/yaml-profile.md`            — canonical YAML read/emit profile (D23)
-- `docs/DECISIONS.md`               — why each major decision was made (D01–D39)
+- `docs/DECISIONS.md`               — why each major decision was made (D01–D40)
 - `docs/EDGE_CASES.md`              — resolution ledger; append new cases here
 - `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; v0.1 + v0.2 FR/NFR checklist
   (tick requirements in the PR that lands them, with a test)
@@ -181,9 +181,9 @@ either were the accepted v0.2 design.
    durable saves → lifecycle/worker → bounded execution/history →
    full-fidelity blobs/prepared requests → basic paged/lazy replay →
    public Workspace/Flow catalog, packaging, and UI contracts → focused
-   release gate. M0/M1 completed 2026-07-12 and M2/M3/M4/M5 completed
-   2026-07-13. Next is M6's public Workspace/Flow API, deterministic
-   packaging, and remaining UI/schema contract work.
+   release gate. M0/M1 completed 2026-07-12 and M2/M3/M4/M5/M6 completed
+   2026-07-13. Next is M7's focused reusable release gate, exact tag/version
+   contract, and v0.2 promotion evidence.
    Timeline playback, 100k-event replay performance, run bundles, and
    security-grade history are future work (D39).
 

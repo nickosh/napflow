@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M6 public/package/UI contracts complete
+
+- Done: reusable Workspace/Flow and functional APIs share isolated execution;
+  D40 supports release-built artifacts and rejects raw VCS/source installs.
+- Done: schema/form parity covers safety and templated typed fields; audited,
+  deterministic frontend notices ship in both artifacts.
+- Verified: 582 pytest, 76 Vitest, and 43 Playwright tests; Ruff, import
+  contracts, typecheck/build, and release-sdist → no-Node-wheel smoke pass.
+- Next: M7 wires these checks into the authoritative gate and pins exact
+  tag/package version refusal before v0.2 promotion.
+
 ## 2026-07-13 — v0.2 M5 usable replay complete
 
 - Done: `napflow-replay/1` adds frozen bounded event/frame pages, graph-sized

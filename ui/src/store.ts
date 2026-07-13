@@ -84,6 +84,7 @@ type AppState = {
   deleteNode: (id: string) => void;
   addNode: (type: string, position?: [number, number]) => void;
   updateNodeConfig: (id: string, config: Record<string, unknown>) => void;
+  updateNodeMaxSeconds: (id: string, maxSeconds: number | undefined) => void;
   setInteracting: (interacting: boolean) => void;
   resolveConflict: (how: "reload" | "overwrite") => Promise<void>;
   pollEtags: () => Promise<void>;
@@ -820,6 +821,18 @@ export const useAppStore = create<AppState>((set, get) => {
         { rebuild: true },
       ),
 
+    updateNodeMaxSeconds: (id, maxSeconds) =>
+      edit((flow) => ({
+        ...flow,
+        nodes: flow.nodes.map((node) => {
+          if (node.id !== id) return node;
+          const next = { ...node };
+          if (maxSeconds === undefined) delete next.max_seconds;
+          else next.max_seconds = maxSeconds;
+          return next;
+        }),
+      })),
+
     setInteracting: (interacting) => set({ interacting }),
 
     resolveConflict: async (how) => {
@@ -919,11 +932,17 @@ export const useAppStore = create<AppState>((set, get) => {
     abortRun: async () => {
       const { runId, runLive } = get();
       if (runId === null || !runLive) return;
+      set({ runNotice: null });
       try {
         await apiAbortRun(runId);
         // state flips via the stream's run_finished (aborted)
-      } catch {
-        // finished in the meantime — the stream already said so
+      } catch (error) {
+        // A finished-in-the-meantime run is a successful 200 from the
+        // idempotent server endpoint. Real HTTP/network failures stay visible.
+        set({
+          runNotice:
+            error instanceof Error ? error.message : String(error),
+        });
       }
     },
 

@@ -54,11 +54,14 @@ napflow/
 Hard rule: `core` is importable standalone (`from napflow.core import run_flow`)
 — this is the pytest/CI/codegen surface.
 
-### Public Python embedding contract (v0.2 M6 target; D38)
+### Public Python embedding contract (v0.2 M6; D38)
 
-M6 exposes the same run semantics through functional and object surfaces:
+The core package exposes the same run semantics through functional and object
+surfaces, with no CLI or server import:
 
 ```python
+from napflow.core import load_workspace, run_flow, run_flow_async
+
 workspace = load_workspace(path)
 flow_identity = "flows/<flow-identity>"  # illustrative workspace-relative id
 flow = workspace.flow(flow_identity)
@@ -68,23 +71,38 @@ result = flow.run(inputs={"username": "qa"}, env="test")
 result = run_flow(workspace, flow_identity, inputs={"username": "qa"}, env="test")
 ```
 
+The async counterparts are `await flow.run_async(...)` and
+`await run_flow_async(workspace, flow_identity, ...)`; importing
+`run_flow_async` from `napflow.core` keeps the async path explicit rather than
+nesting an event loop inside `run_flow`.
+
 - A Workspace is a reusable source/configuration boundary, never a mutable run
   session. A Flow handle binds only that workspace plus a canonical identity;
   every sync or async run repeats the preparation gate and creates fresh frames,
   HTTP sessions, workers, variables, cookies, event lifecycle, and cleanup.
-- Workspace discovery remains an explicit fresh filesystem operation and yields
-  runnable Flow handles. `workspace.flow(identity)` is the universal exact
-  lookup. A runtime `workspace.flows` catalog maps the flow identity segments
-  below the configured flows root onto nested attributes: conceptually,
-  `workspace.flows.<identity segments>`. Attribute access applies only to exact
-  Python-identifier segments; bracket or explicit identity lookup covers spaces,
-  punctuation, reserved members, and every other legal identity. Names are never
+- `workspace.discover()` is an explicit fresh filesystem operation and yields
+  an immutable tuple of runnable Flow handles. `workspace.flow(identity)` is
+  the universal exact lookup. A runtime `workspace.flows` catalog maps the flow
+  identity segments below the configured flows root onto nested attributes:
+  conceptually, `workspace.flows.<identity segments>`. Attribute access applies
+  only to exact Python-identifier segments; bracket or explicit identity lookup
+  covers spaces, punctuation, reserved members, and every other legal identity.
+  Catalog bracket keys are always relative to the configured flows root;
+  `workspace.flow(...)` always takes the full workspace-relative identity, so a
+  legal first segment equal to the root name is never ambiguous. Names are never
   silently normalized. A directory may be both a runnable flow and a namespace
-  containing child flows.
+  containing child flows: the returned Flow remains runnable and also exposes
+  exact child lookup. Catalog objects perform fresh discovery when accessed, so
+  a previously obtained catalog observes newly added flow folders.
 - The public wrapper owns LOAD/CHECK/ENV/BIND, history/event setup, execution,
   and cleanup without importing CLI/server/UI. Inputs, environment/profile
   choices, overrides, deadlines, and history policy are per-run keyword options,
-  so one loaded workspace/flow can safely serve independent test cases.
+  so one loaded workspace/flow can safely serve independent test cases. The
+  concrete v0.2 keywords are `inputs`, profile name `env`, string-to-string
+  `env_overrides`, deadline `timeout`, and `history` (default `True`; `False`
+  suppresses durable JSONL history). Preparation failures raise `RunPrepError`;
+  a started run returns `RunResult` with the ordinary
+  `passed|failed|error|aborted` state contract.
 - Runtime discovery/`__dir__` may offer interactive completion but cannot make a
   type checker infer filesystem contents. Deterministic generated bindings for
   flow names and typed Start/End shapes are explicitly post-v0.2; the generic

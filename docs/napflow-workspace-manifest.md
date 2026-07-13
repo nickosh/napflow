@@ -84,7 +84,17 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
 
 1. **Flow discovery** — any directory under `flows.root` containing
    `flow.yaml` is a flow; identity = workspace-relative path. Recursive,
-   so grouping like `flows/payments/refund/` is free.
+   so grouping like `flows/payments/refund/` is free. The public Python surface
+   keeps the existing `discover_flows()` metadata operation and adds fresh
+   runnable discovery through `workspace.discover()`, exact binding through
+   `workspace.flow(identity)`, and the dynamic catalog below `flows.root` at
+   `workspace.flows`. Identifier-safe relative segments are available as exact
+   attribute chains (`workspace.flows.payments.refund`); bracket lookup and
+   `workspace.flow(...)` cover punctuation, keywords, member collisions, and
+   arbitrary legal identities without normalization. Catalog brackets are
+   flows-root-relative; `workspace.flow(...)` takes a full workspace-relative
+   identity, avoiding ambiguity when a legal first segment equals the root
+   name. A flow directory may also be a namespace containing child flows (D38).
 2. **Env discovery** — every `envs/*.env` file is a profile; profile name =
    filename stem. All env files are gitignored by `napf init`. No file
    registry in the manifest — drop a file in `envs/`, it appears in the UI.

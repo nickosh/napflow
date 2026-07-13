@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
+  abortRun: vi.fn(),
   fetchRunEventPage: vi.fn(),
   fetchRunFramePage: vi.fn(),
   fetchFlowDetail: vi.fn(),
@@ -10,6 +11,7 @@ vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
   return {
     ...actual,
+    abortRun: apiMocks.abortRun,
     fetchRunEventPage: apiMocks.fetchRunEventPage,
     fetchRunFramePage: apiMocks.fetchRunFramePage,
     fetchFlowDetail: apiMocks.fetchFlowDetail,
@@ -173,6 +175,7 @@ beforeEach(() => {
     ) => framePage(options.parentFrame),
   );
   apiMocks.fetchFlowDetail.mockResolvedValue(detail("flows/item"));
+  apiMocks.abortRun.mockResolvedValue({ run_id: RUN_ID, state: "aborting" });
 });
 
 describe("bounded history store", () => {
@@ -255,5 +258,21 @@ describe("bounded history store", () => {
     expect(state.runFrameChildren).toEqual([]);
     expect(state.runFrameError).toContain("durable frame events remain inspectable");
     expect(state.runFrameError).toContain("flow not found");
+  });
+});
+
+describe("run transport", () => {
+  it("surfaces a failed abort response instead of treating it as a race", async () => {
+    useAppStore.setState({
+      runId: RUN_ID,
+      runLive: true,
+      runNotice: null,
+    });
+    apiMocks.abortRun.mockRejectedValueOnce(new Error("no run 'gone'"));
+
+    await useAppStore.getState().abortRun();
+
+    expect(apiMocks.abortRun).toHaveBeenCalledWith(RUN_ID);
+    expect(useAppStore.getState().runNotice).toBe("no run 'gone'");
   });
 });

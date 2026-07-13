@@ -59,6 +59,7 @@ export type FlowModelNode = {
   id: string;
   type: string;
   config?: Record<string, unknown> | null;
+  max_seconds?: number | null;
 };
 
 export type FlowModel = {
@@ -418,8 +419,24 @@ export async function fetchRunEventDetail(
   return requireReplayV1(payload) as RunEventDetail;
 }
 
-export async function abortRun(runId: string): Promise<void> {
-  await fetch(`/api/runs/${encodeURIComponent(runId)}/abort`, { method: "POST" });
+export type AbortRunResult = { run_id: string; state: string };
+
+export async function abortRun(runId: string): Promise<AbortRunResult> {
+  const response = await fetch(
+    `/api/runs/${encodeURIComponent(runId)}/abort`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    let message = `abort failed: HTTP ${response.status}`;
+    try {
+      const body = (await response.json()) as { message?: string };
+      if (body.message) message = body.message;
+    } catch {
+      // non-JSON error body — keep the status-bearing message
+    }
+    throw new ApiError(message, response.status, []);
+  }
+  return (await response.json()) as AbortRunResult;
 }
 
 /** Live tail: text frames are the JSONL lines verbatim (durable disk prefix,

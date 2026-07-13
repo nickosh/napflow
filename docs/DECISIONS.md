@@ -4,7 +4,7 @@ Why things are the way they are. Date format: 2026-06. D01–D17 decided
 during initial design (June 2026); D18–D22 in the 2026-06-14 edge-case
 review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02; D26–D32
 during v0.1 implementation; D33–D37 from the 2026-07-11 v0.2 design
-review; D38–D39 from 2026-07-13 API and scope reviews. Reversing any
+review; D38–D40 from 2026-07-13 API, scope, and distribution reviews. Reversing any
 of these requires understanding the rationale first.
 
 ## D01 — Build new instead of adopting existing tools
@@ -757,7 +757,10 @@ escape hatch for punctuation, spaces, reserved-member collisions, and arbitrary
 legal identities; names are never lossy-normalized. A catalog entry may be both
 runnable and a namespace when a flow directory contains child flows. Dynamic
 catalog lookup may improve interactive completion but must not be advertised as
-static typing derived from the filesystem.
+static typing derived from the filesystem. Catalog bracket keys are always
+relative to the configured flows root; `workspace.flow(...)` is the distinct
+full workspace-relative form, so a legal first segment equal to the root name
+cannot alias a shallower flow.
 
 After v0.2, deterministic generated Python bindings/stubs may expose discovered
 flow names plus typed Start inputs and End outputs to IDEs/type checkers, with a
@@ -819,13 +822,40 @@ reference; and request events carry initial/final prepared-wire snapshots.
 Inherited permissions, no-overwrite creation, containment, and blob
 verification remain as decided. `napflow-replay/1` now supplies bounded
 sequence pages, scalar frame/final and graph-sized view projections, lazy
-verified event detail, and completed child-canvas drilldown. M6 public and
-packaging/UI contracts are next.
+verified event detail, and completed child-canvas drilldown. M6 now also
+supplies the public Workspace/Flow API, artifact-only distribution contract,
+schema/UI coverage, and audited frontend notices. M7's focused release gate is
+next.
+
+## D40 — Distribution supports release-built artifacts, not arbitrary Git/source installs
+
+(2026-07-13, owner-confirmed at M6 implementation start.)
+
+The Git-friendly product promise applies to user flow workspaces, not to
+installing napflow itself from an arbitrary repository checkout. Supported
+installation paths are PyPI and GitHub Release artifacts: a wheel containing
+the compiled UI, or a release sdist that already contains that same bundle and
+can produce the wheel without Node.
+
+The generated frontend remains build output and is not committed. The release
+pipeline builds it once before producing artifacts; PEP 517 does not invoke a
+frontend toolchain, and direct VCS (`git+https`) or raw-checkout builds are
+explicitly unsupported. The UI placeholder must report this boundary honestly.
+A deterministic smoke starts from the release-built sdist, blocks Node/npm/npx,
+builds and installs its wheel in isolation, exercises both public Python API
+forms, requires identical sdist/wheel static trees, and probes the real
+`napf ui` HTML, every packaged/referenced lazy asset, and workspace API.
+
+Rejected: committing the generated bundle; adding Node to the PEP 517 build;
+continuing to imply that an arbitrary Git checkout is an install artifact. M7
+wires the reusable smoke, notice check, frontend suites, and exact tag/version
+refusal into the authoritative PR/tag gate.
 
 ## Known open risks (watch during implementation)
-- EC10/EC22/EC27/EC35, EC42/EC44/EC49 are open—not
-  “resolved by documentation.” Their ledger rows name v0.2 or
-  post-v0.2 closure conditions; close them only with the stated tests.
+- EC10/EC22/EC27/EC35 remain open post-v0.2 limitations; EC44 remains
+  partially open for M7's exact-version and authoritative-gate work. Their
+  ledger rows name the closure conditions; close them only with the stated
+  tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.
 - Ghost-wires for template references — elegant on paper, may be noisy

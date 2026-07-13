@@ -2,7 +2,8 @@
 
 Surface pinned in the workspace-manifest spec ("Server surface"):
 REST under /api, one WebSocket per run under /ws/runs/{run_id}, static
-UI bundle at / (arrives S4/M2 — until then a placeholder page).
+UI bundle at / (release artifacts carry it; unsupported raw-source installs
+get an explanatory placeholder page).
 Everything binds to localhost only; the server trusts core for all
 semantics (gate, env, masking) via core/runprep.py.
 """
@@ -82,8 +83,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 _PLACEHOLDER = """<!doctype html>
 <html><head><title>napflow</title></head><body>
 <h1>napflow server is running</h1>
-<p>The canvas UI ships in a later build — this wheel carries no static
-bundle. The API is live under <code>/api</code>.</p>
+<p>This installation does not contain the pre-built canvas bundle. Install
+napflow from PyPI or a GitHub release artifact; direct VCS and raw-source
+installs are unsupported. The API is live under <code>/api</code>.</p>
 </body></html>"""
 
 # WebSocket close codes (4xxx = application-defined)

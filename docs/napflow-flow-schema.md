@@ -17,6 +17,8 @@ Amended 2026-07-13 for v0.2/M4: full message/request/response event values,
 store-once `content-blobs/1` persistence, and prepared-wire request capture
 replace the historical preview/capture-valve behavior; the flow YAML shape is
 unchanged except that removed manifest settings are no longer accepted.
+Amended 2026-07-13 for v0.2/M6: visual-schema coverage, universal
+`max_seconds`, and template-aware typed form controls are pinned below.
 
 Changes from v0.3: End ports gain `required:` (default `true` — an
 unreached required port fails the run, **D18**); guard `exhausted`/`expired`
@@ -258,6 +260,33 @@ landed (`core/models/`; the models are the schema source of truth):
   `label` optional.
 - **`fixture.format`**: `json | csv`, optional — inferred from the file
   extension when omitted.
+
+### Visual editor coverage (v0.2/M6)
+
+The Pydantic models remain the schema authority. The cross-language
+`ui/src/form-coverage.json` contract is checked against every model field by
+pytest and against the implemented form descriptors/dedicated editors by
+Vitest, so a new field must gain a visual path or an explicit classification.
+
+- The canvas authors `nodes`, `edges`, and `layout`; the palette chooses a new
+  node's `type` and generates its stable `id`. Every node `config` field in the
+  v1 catalog has a dedicated control, structured row/port editor, or JSON cell.
+  Nested request retry fields remain authorable through the request's JSON
+  cell; no node config key is silently YAML-only.
+- `max_seconds` is shown for every node, including Start/End and instant nodes,
+  and is saved at node level (beside `id`/`type`/`config`), never inside config.
+- Templatable number/boolean controls accept either a native value or Jinja
+  source without forcing a numeric HTML input/select. This covers request
+  `timeout_s`/`verify_tls`, Delay `seconds`, status/response-time checks, and
+  typed Start defaults. Start defaults keep native values native; template
+  source is rendered at BIND and then coerced to the declared port type (D25).
+  An explicit default toggle distinguishes an absent default (required input)
+  from the valid native empty-string default; the run popover likewise omits
+  only untouched defaults and preserves an intentionally blank override.
+- Explicitly YAML-only in v0.2: the schema marker, flow `name`/`description`,
+  `env.required`, and renaming/retyping an existing stable node. New IDs/types
+  are still visually authorable through the palette; changing an existing one
+  means delete/recreate in the canvas or edit YAML intentionally.
 - **assert `expr` checks**: `op` defaults to `present`; every other op
   requires `value` (an explicit `value: null` is legal, e.g. for
   `equals`); `present` takes no `value`.

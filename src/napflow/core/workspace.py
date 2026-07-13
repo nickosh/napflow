@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+import napflow
 from napflow.core.loader import LoadedFlow, LoadedManifest, load_flow, load_manifest
 
 MANIFEST_NAME = "napflow.yaml"
@@ -302,6 +303,45 @@ class Workspace:
                     )
                 )
         return sorted(refs, key=lambda ref: ref.identity)
+
+    def discover(self) -> tuple["napflow.core.api.Flow", ...]:
+        """Fresh runnable-flow discovery for the public embedding API.
+
+        The workspace is reusable source/configuration, not a cached runtime
+        session.  Each call observes the filesystem again and returns immutable
+        handles that bind only this workspace and an exact identity (D38).
+        """
+        from napflow.core.api import Flow
+
+        return tuple(Flow(self, ref.identity) for ref in self.discover_flows())
+
+    def flow(self, identity: str) -> "napflow.core.api.Flow":
+        """Bind an exact workspace-relative flow identity.
+
+        Loading and checking deliberately remain per-run, so a reusable handle
+        observes edits made after it was created.  Lookup only establishes that
+        the exact canonical ``flow.yaml`` exists now; names are never normalized
+        beyond the workspace's platform-independent identity grammar.
+        """
+        from napflow.core.api import Flow
+
+        normalized = self.resolver.normalize_identity(identity)
+        file = self.resolver.flow_file(normalized)
+        if not file.is_file():
+            raise KeyError(f"no flow at {normalized!r}")
+        return Flow(self, normalized)
+
+    @property
+    def flows(self) -> "napflow.core.api.FlowCatalog":
+        """Dynamic nested catalog below the configured ``flows.root``.
+
+        Catalog access performs fresh discovery.  Attribute access is only an
+        ergonomic view for exact identifier-safe segments; bracket and
+        :meth:`flow` lookup retain every legal identity without normalization.
+        """
+        from napflow.core.api import FlowCatalog
+
+        return FlowCatalog(self)
 
     def load_flow(self, identity: str) -> LoadedFlow:
         """Load a flow by its workspace-relative identity."""

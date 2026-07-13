@@ -1797,11 +1797,15 @@ async def execute_flow(
     workspace_root: Path | None = None,
     workspace_resolver: WorkspaceResolver | None = None,
 ) -> RunResult:
-    """Run one flow to quiescence (BIND → EXECUTE → FINALIZE). The
-    caller owns LOAD/CHECK; once execution starts, the run owns and closes
-    the event stream and its sinks (D36). `flow_dir` locates nodes.py;
-    `workspace_root` sets the worker cwd and resolves a relative
-    `python.interpreter`."""
+    """Construct and run one isolated flow to quiescence.
+
+    The caller owns LOAD/CHECK plus stream/history creation and history
+    publication. ``FlowRun.execute`` owns runtime cleanup for frames, tasks,
+    HTTP sessions, workers, and the first stream close; callers re-close the
+    stream idempotently to observe sink failures before finalizing or abandoning
+    history (D36). ``flow_dir`` locates nodes.py; ``workspace_root`` sets the
+    worker cwd and resolves a relative ``python.interpreter``.
+    """
     run = FlowRun(
         flow,
         flow_identity=flow_identity,

@@ -934,7 +934,10 @@ def test_placeholder_page_without_a_ui_bundle(tmp_path, monkeypatch):
     async def scenario(client):
         response = await client.get("/")
         assert response.status == 200
-        assert "napflow server is running" in await response.text()
+        page = await response.text()
+        assert "napflow server is running" in page
+        assert "PyPI or a GitHub release artifact" in page
+        assert "raw-source" in page and "unsupported" in page
 
     with_client(ws, scenario)
 

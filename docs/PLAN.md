@@ -716,9 +716,9 @@ history opens with one event/frame page and explicit continuation; Playwright
 opens a real 72 KiB child result, swaps to its completed frame canvas without
 re-execution, and performs exactly one detail read only after expansion.
 
-### M6 — public/package/UI contract completion
+### M6 — public/package/UI contract completion  ✅ done 2026-07-13
 
-- [ ] Implement and document an ergonomic stable-for-v0.2
+- [x] Implement and document an ergonomic stable-for-v0.2
       Python embedding surface. `from napflow.core import run_flow` remains
       the functional entry point; `load_workspace(path)` exposes immutable,
       reusable workspace-bound Flow handles through `workspace.flow(identity)`,
@@ -733,11 +733,12 @@ re-execution, and performs exactly one detail read only after expansion.
       flow/namespace overlap, env/input isolation, cancellation, and installed-
       wheel pytest use. Runtime discovery may improve `dir()` completion but does
       not claim filesystem-derived static typing. (D38, FR-1112, EC42)
-- [ ] Make source/Git installation honest: either a deterministic PEP 517
-      frontend build, committed generated bundle, or removal of the Git
-      install promise in favor of built artifacts. Test a wheel from a
-      clean Git archive/sdist and execute `napf ui`. (FR-1113, EC44)
-- [ ] Bring visual editing to schema parity for safety/template fields:
+- [x] Make installation honest by supporting release-built PyPI/GitHub wheel
+      and sdist artifacts, not direct VCS installs or PEP 517 builds from a raw
+      checkout. The generated UI remains uncommitted. Test the release sdist →
+      no-Node wheel path, install it in isolation, and execute both the public
+      API and `napf ui`. (D40, FR-1113, EC44)
+- [x] Bring visual editing to schema parity for safety/template fields:
       universal `max_seconds`, template-aware number/boolean fields,
       request TLS/timeout, and typed Start defaults. Add schema-to-form
       coverage so drift fails a test. Fix abort-response status handling.
@@ -747,7 +748,7 @@ re-execution, and performs exactly one detail read only after expansion.
       is not a v0.2 deliverable unless implementation proves it necessary.
       **Landed with M5:** one-page store orchestration keeps reducers pure and
       uses generation guards without a global-store rewrite.
-- [ ] Generate/audit third-party notices for bundled frontend code before
+- [x] Generate/audit third-party notices for bundled frontend code before
       public distribution.
 
 M6 DoD: documented installation plus functional and workspace/Flow core
@@ -756,6 +757,14 @@ nested, non-identifier, collision, and flow-plus-namespace identities without
 shared run state; every authoritative editable schema field has a valid UI path
 or an explicit documented YAML-only status; frontend orchestration has direct
 unit coverage for persistence and run transport.
+
+**Met 2026-07-13:** public API tests cover exact/fresh catalog lookup,
+sync/async isolation, cancellation, inputs/envs, and multiple workspaces. A
+release sdist builds a wheel with Node commands blocked; the isolated install
+runs both API forms and serves every packaged/referenced compiled UI asset.
+Pydantic-to-form coverage,
+Vitest, and Playwright pin the editor contract, while the lockfile-derived
+audited notice is present in both sdist and wheel.
 
 ### M7 — release gates, compatibility evidence, and v0.2 promotion
 
@@ -774,9 +783,9 @@ unit coverage for persistence and run transport.
       clean installed-artifact smoke. Do not introduce a separate exhaustive
       adversarial or performance matrix in v0.2.
 - [ ] Update engine/workspace/flow specs to implemented v0.2 behavior,
-      publish format notes, close remaining v0.2-owned EC32/EC42/EC44/EC47/
-      EC49/EC50 only with their tests, preserve
-      M1's tested EC38/EC46/EC51 closures, record EC27's
+      publish format notes, preserve M4–M6's tested EC32/EC42/EC47/EC49/EC50
+      closures, finish EC44 only with its release-gate tests, preserve M1's
+      tested EC38/EC46/EC51 closures, record EC27's
       cooperative-scheduler half precisely, and retain EC10/EC22/EC35
       as named post-v0.2 limitations; then tag `v0.2.0`.
 

@@ -108,6 +108,47 @@ test("config form edits a node's config and autosaves", async ({ page }) => {
   expect(log.config).toEqual({ label: "hello from e2e" });
 });
 
+test("safety and typed request fields preserve native values and templates", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/main");
+  await page.getByTestId("add-node").click();
+  await page.getByTestId("palette-request").click();
+  await page.getByTestId("node-request").click();
+
+  await page.getByTestId("node-max-seconds").fill("2.5");
+  await page.getByTestId("node-max-seconds").blur();
+  await page.getByTestId("config-timeout_s").fill("{{ env.REQUEST_TIMEOUT }}");
+  await page.getByTestId("config-verify_tls").fill("{{ env.VERIFY_TLS }}");
+  await waitSaved(page);
+
+  let model = await flowModel(page, "flows/main");
+  let request = model.flow.nodes.find(
+    (node: { id: string }) => node.id === "request",
+  );
+  expect(request).toMatchObject({
+    max_seconds: 2.5,
+    config: {
+      url: "",
+      timeout_s: "{{ env.REQUEST_TIMEOUT }}",
+      verify_tls: "{{ env.VERIFY_TLS }}",
+    },
+  });
+
+  await page.getByTestId("config-timeout_s").fill("12.5");
+  await page.getByTestId("config-verify_tls").fill("false");
+  await waitSaved(page);
+  model = await flowModel(page, "flows/main");
+  request = model.flow.nodes.find(
+    (node: { id: string }) => node.id === "request",
+  );
+  expect(request.config.timeout_s).toBe(12.5);
+  expect(request.config.verify_tls).toBe(false);
+
+  await page.getByTestId("delete-node").click();
+  await waitSaved(page);
+});
+
 test("connecting onto a wired input replaces the edge (E004)", async ({
   page,
 }) => {
@@ -234,6 +275,24 @@ test("start/end port editors edit flow inputs and outputs (FR-1006)", async ({
   await page.getByTestId("start-port-type-0").selectOption("string");
   await waitSaved(page);
 
+  // A native empty string is distinct from an absent default (required).
+  await page.getByTestId("start-port-default-enabled-0").check();
+  await waitSaved(page);
+  const withEmptyDefault = await flowModel(page, "flows/main");
+  const startWithEmpty = withEmptyDefault.flow.nodes.find(
+    (n: { type: string }) => n.type === "start",
+  );
+  expect(startWithEmpty.config.ports).toEqual([
+    { name: "greeting", type: "string", default: "" },
+  ]);
+  await page.getByTestId("start-port-default-enabled-0").uncheck();
+  await waitSaved(page);
+
+  // Adding a port changes the Start node's measured width. Re-fit before
+  // selecting the other side of the graph; React Flow virtualizes nodes that
+  // move outside the current viewport after a dimension change.
+  await page.getByRole("button", { name: "Fit View" }).click();
+  await expect(page.getByTestId("node-end")).toBeVisible();
   await page.getByTestId("node-end").click();
   await page.getByTestId("end-port-required-0").uncheck();
   await waitSaved(page);
@@ -277,6 +336,17 @@ test("start-port defaults save with the declared type, not as strings", async ({
     type: "number",
     default: 42, // native number in the YAML, not "42"
   });
+
+  // The same typed cell preserves template source for BIND-time rendering;
+  // the engine applies number coercion after evaluating it (D25).
+  await cell.fill("{{ env.RETRIES }}");
+  await cell.blur();
+  await waitSaved(page);
+  const templated = await flowModel(page, "flows/main");
+  const templatedStart = templated.flow.nodes.find(
+    (n: { type: string }) => n.type === "start",
+  );
+  expect(templatedStart.config.ports[1].default).toBe("{{ env.RETRIES }}");
 
   // cleanup for the serial suite
   await page.getByTestId("start-port-remove-1").click();

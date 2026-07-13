@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  abortRun,
   fetchRunEventDetail,
   fetchRunEventPage,
   fetchRunFramePage,
@@ -130,5 +131,36 @@ describe("versioned replay API", () => {
     await expect(
       fetchRunEventDetail("run-1", "flows/smoke", 9),
     ).rejects.toThrow("content blob is missing or corrupt");
+  });
+});
+
+describe("abort API", () => {
+  it("accepts the server's 202 aborting response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ run_id: "run-1", state: "aborting" }, 202),
+      ),
+    );
+
+    await expect(abortRun("run #1")).resolves.toEqual({
+      run_id: "run-1",
+      state: "aborting",
+    });
+    expect(fetch).toHaveBeenCalledWith("/api/runs/run%20%231/abort", {
+      method: "POST",
+    });
+  });
+
+  it("surfaces a non-success response instead of pretending abort worked", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ message: "no run 'gone'" }, 404)),
+    );
+
+    await expect(abortRun("gone")).rejects.toMatchObject({
+      message: "no run 'gone'",
+      status: 404,
+    });
   });
 });

@@ -42,6 +42,43 @@ pass. `workflow_dispatch` is the **dry-run** path: trigger it manually
 gate + UI bundle + build + wheel checks and upload the dist artifact —
 nothing is published. Validate the dry-run green before the first tag.
 
+**Supported artifact boundary (D40).** The supported installation inputs are PyPI
+and the wheel or sdist attached to
+a GitHub Release. Direct VCS (`git+https`) installs and PEP 517 builds from a
+raw checkout are unsupported: `src/napflow/server/static` is generated and
+gitignored. This is intentional; napflow's Git-friendly promise applies to
+user flow workspaces, not to installing napflow itself from arbitrary source
+states.
+
+The release build runs the frontend once, before packaging. Both published
+artifacts contain that exact pre-built bundle, and the published sdist can
+produce its wheel without Node. After building the sdist, the focused boundary
+check is:
+
+```sh
+uv run python tools/smoke_release_artifact.py dist
+```
+
+It verifies bundle membership in the sdist, blocks Node/npm while building a
+wheel from the sdist, installs that wheel into an isolated environment, runs
+both public Python API forms against the scaffold smoke flow, executes the
+installed `napf ui --no-browser`, and fetches the compiled root, JavaScript
+and stylesheet assets (including referenced lazy chunks), and workspace API.
+It also requires the sdist and wheel static trees to match exactly. M7 wires
+this reusable check into the authoritative PR/tag gate.
+
+Frontend license notices are generated from the locked npm dependency tree.
+After `npm ci`—and whenever `ui/package-lock.json` changes—regenerate and audit
+the checked-in notice before packaging:
+
+```sh
+uv run python tools/generate_frontend_notices.py
+```
+
+`THIRD_PARTY_NOTICES` is package license metadata and must be present under the
+wheel's `.dist-info/licenses/` directory. The artifact smoke above checks both
+the notice and the UI bundle survive the release-sdist-to-wheel boundary.
+
 1. **Prepare** (one commit, `chore(release): v0.1.0`):
    - bump `version` in `pyproject.toml` to the final number — the
      workflow hard-fails unless `v<version>` equals the pushed tag
@@ -74,9 +111,8 @@ nothing is published. Validate the dry-run green before the first tag.
    offline, EC34).
 
 A tag is the immutable working checkpoint, not certification that the
-known v0.2 hardening backlog is complete. Do not publicly promise the
-direct Git install path until FR-1113 lands; verify using the built
-release artifact.
+known v0.2 hardening backlog is complete. Do not advertise direct Git or raw
+checkout installation; verify installation using the built release artifact.
 
 ## PyPI one-time setup (before the first tag)
 

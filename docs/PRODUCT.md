@@ -133,15 +133,15 @@ rather than a compatibility promise (D33).
   loader/check → engine/CLI → full nodes/worker → server/UI canvas.
   Released as a developer-preview milestone with known hardening work;
   no public announcement or stability promise is required.
-- **v0.2.0 — usable full-fidelity prototype** (D33–D39, PLAN):
+- **v0.2.0 — usable full-fidelity prototype** (D33–D40, PLAN):
   centralized workspace/durable-save boundaries; fair cancellation-safe
   engine and worker lifecycle; bounded active loop/server/browser state;
   versioned JSONL plus store-once full-fidelity blobs; raw local truth
   using ordinary OS/workspace permissions plus optional terminal/report
   masking; basic paged/lazy replay and child-frame drilldown; functional and
   Workspace/Flow public APIs including the runtime `workspace.flows` catalog;
-  deterministic packaging and a focused release gate. This is the next
-  committed release.
+  release-built artifact distribution (not arbitrary Git/source installs)
+  and a focused release gate. This is the next committed release.
 - **After v0.2 candidates:** pause/resume/step and wire breakpoints (D30),
   pack-selection-to-subflow (D31), `poll`/`duplicate`, inline loop bodies,
   marker-based `collect`, `napf check --write-env-example`, worker-pool

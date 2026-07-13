@@ -2,6 +2,7 @@ import { drillTarget } from "../graph";
 import { useAppStore } from "../store";
 import { flowPath } from "../identity";
 import ConfigForm from "./ConfigForm";
+import NodeSafetyForm from "./NodeSafetyForm";
 import { EndPortEditor, StartPortEditor } from "./PortEditor";
 import SubflowActions from "./SubflowActions";
 
@@ -113,6 +114,7 @@ export default function Inspector() {
               ))}
             </ul>
           )}
+          <NodeSafetyForm nodeId={node.id} />
           {node.type === "start" ? (
             <StartPortEditor nodeId={node.id} />
           ) : node.type === "end" ? (

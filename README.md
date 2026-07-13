@@ -9,7 +9,7 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: v0.1.0 release; v0.2 development through M4 — developer preview.**
+**Status: v0.1.0 release; v0.2 development through M6 — developer preview.**
 The first working milestone:
 file format, validator, CLI, headless engine (full node catalog), and
 the visual canvas (edit, run, inspect, history) work end to end on
@@ -18,7 +18,7 @@ macOS, Windows, and Linux. All `v0.x` formats—including the current
 v1.0. napflow assumes trusted workspaces (flows run real Python on
 your machine) and is localhost-only. The streamlined v0.2
 full-fidelity prototype plan is in [docs/PLAN.md](docs/PLAN.md)
-(D33–D39).
+(D33–D40).
 
 ## Why
 
@@ -66,9 +66,27 @@ napf run flows/smoke   # headless, offline demo flow
 napf ui                # opens the canvas in your browser
 ```
 
-> Install from PyPI (above) or a GitHub release wheel. Direct
-> `git+https` installs serve a placeholder UI — the bundle is build
-> output, not in git; deterministic Git installs are planned (FR-1113).
+> Install from PyPI or a GitHub release artifact (wheel or sdist). Direct
+> VCS (`git+https`) installs and PEP 517 builds from a raw source checkout are
+> unsupported: the generated UI bundle is deliberately not committed. Release
+> artifacts contain the pre-built bundle; users never need Node.
+
+## Use it from pytest
+
+The functional and workspace-bound forms create independent runs through the
+same core path—without importing the CLI or server:
+
+```python
+from pathlib import Path
+
+from napflow.core import load_workspace, run_flow
+
+workspace = load_workspace(Path("."))
+bound_result = workspace.flows.smoke.run(history=False)
+functional_result = run_flow(workspace, "flows/smoke", history=False)
+
+assert bound_result.state == functional_result.state == "passed"
+```
 
 ## What a flow looks like
 
@@ -137,6 +155,11 @@ npm run build          # bundle → src/napflow/server/static (what `napf ui` se
 npm run dev            # Vite dev server, proxies /api + /ws to a running `napf ui`
 npm run e2e            # Playwright against the built bundle (needs npm run build)
 ```
+
+Contributor builds from a checkout must build the UI before packaging. This
+is a development workflow, not a supported installation path; published
+release sdists already contain the generated bundle and build wheels without
+Node.
 
 Conventional commits (`type(scope): subject`) — they feed the
 [git-cliff](https://git-cliff.org) changelog.
