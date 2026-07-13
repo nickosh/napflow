@@ -594,6 +594,18 @@ not retained active state in M3.
       content-addressed blobs with hash, bytes, media type, encoding,
       and explicit reference records. Verify the stored hash round-trip.
       Deduplicate repeated appearances inside a run. (FR-1102, NFR-15)
+  - [x] **Codec/store foundation** (landed 2026-07-13):
+        `core/history_content.py` pins the 64 KiB inclusive threshold,
+        exact UTF-8/JSON/raw-binary bytes, collision-safe literal and
+        explicit omission envelopes, per-run immutable/private hash paths,
+        deduplication, and strict missing/corrupt/hash-verified resolution.
+        Feature activation intentionally remains below; foundation tests do
+        not claim FR-1102/NFR-15/TR-16 completion.
+  - [ ] **Feature activation + event integration:** finalize the exhaustive
+        schema-declared payload-field registry, encode once before the shared
+        JSONL/WebSocket fan-out, and enable `content-blobs/1` for both writer
+        and reader in that same change. Partial field activation would make a
+        later inline `$napflow` user value ambiguous and is forbidden.
 - [ ] Apply storage policy to every persisted payload path—not only
       `request_finished.body`: message/log values, request bodies,
       response bodies, error payloads, and `run_finished.end_outputs`.

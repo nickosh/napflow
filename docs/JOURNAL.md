@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M4 content-store foundation
+
+- Done: added the strict D34 persisted-value codec and per-run immutable,
+  private, content-addressed store; `content-blobs/1` remains disabled.
+- Hardened: exact JSON/binary fidelity, literal/omission envelopes, dedupe,
+  directory/reparse defenses, size-before-read, hash checks, and typed failures.
+- Verified: 502 pytest passed (3 skipped, 4 expected xfails), including 39
+  focused cases; Ruff and both import-direction contracts passed.
+- Next: finalize the exhaustive event payload registry and protocol-safe
+  redaction boundary, then encode before fan-out and activate the feature once.
+
 ## 2026-07-13 — v0.2 M3 bounded execution + history complete
 
 - Done: fixed loop workers/frame summaries, bounded live/durable WS catch-up,

@@ -827,9 +827,13 @@ This section pins the run-history on-disk format **before** v0.2 changes
 storage, so every run written from M0 on is self-identifying and later
 readers can gate cleanly. The format-version marker landed in M0
 (`core/events.py`); the blob/index machinery it describes lands in
-M3–M5. Until then a `napflow-run/1` log declares `features: []` and is a
-pure inline JSONL stream — the blob-reference and index shapes below are
-the reserved contract those milestones fill in, not yet-emitted records.
+M3–M5. M4's byte codec and immutable per-run store foundation live in
+`core/history_content.py`, but event integration is deliberately not active
+yet: a current `napflow-run/1` log still declares `features: []` and is a
+pure inline JSONL stream. The blob-reference and index shapes below remain
+reserved on the wire until the exhaustive schema-declared payload registry,
+redaction boundary, and shared JSONL/WebSocket encoding step activate them
+together.
 
 **Envelope + version.** `run_started` is the envelope header: it is
 always `seq` 1 and carries `format: "napflow-run/<major>"`
@@ -907,15 +911,51 @@ the bytes that would be stored, before deciding inline versus blob:
 - `binary`: the exact raw bytes (not their base64 text); replay reconstructs
   napflow's JSON binary envelope at the presentation/runtime boundary.
 
+“JSON-compatible” means the exact JSON data model: null, booleans, finite
+numbers, strings, lists, and objects with string keys. Python-only containers
+and keys (including tuples and non-string mapping keys) are rejected before
+serialization; they are never silently normalized into a different replayed
+value or allowed to collapse duplicate stringified keys.
+
 `hash` is `sha256:` over exactly those stored bytes and `bytes` is their
 length. A reader verifies both before decoding. Repeated identical stored
 bytes within a run resolve to one blob path; logical JSON equality with a
 different byte serialization is not promised to deduplicate. The
-threshold is a soft local default (measured in M0, tuned in M4), never a
-correctness boundary: moving a value to a blob must not change the runtime
-value. An explicit hard-limit omission uses the `kind: omitted` envelope
-with the would-be bytes' hash/size and a stable reason; it never stores a
-plausible-looking prefix.
+initial internal threshold is **65,536 bytes**: values of exactly that size
+remain inline and only larger values become blobs. It is not a manifest
+setting or a correctness boundary; it may be retuned before v0.2's measured
+release gate without changing how a reader reconstructs a value. Moving a
+value to a blob must not change the runtime value. Default descriptor media
+types are `text/plain; charset=utf-8`, `application/json`, or the exact
+binary envelope `content_type`; an explicit non-empty media type may override
+them. The default binary media type preserves the envelope string exactly.
+A binary value is recognized only from the exact three-field napflow
+envelope (`__binary__: true`, non-empty `content_type`, canonical base64);
+other JSON objects use the JSON codec. Omission `reason` values are stable
+lowercase snake-case codes; readers surface even an unfamiliar code rather
+than guessing content. An explicit hard-limit omission uses the
+`kind: omitted` envelope with the would-be bytes' hash/size and never stores
+a plausible-looking prefix.
+
+**Blob layout, durability, and verification.** One run stores blobs at
+`<run-id>.blobs/<64-lowercase-sha256-hex>` beside its JSONL. The directory is
+created lazily with private permissions (POSIX `0700`; blob files `0600`),
+and non-directory/symlink/Windows-reparse or non-private replacements are
+rejected. A writer creates each digest exclusively, flushes and fsyncs its
+bytes before it may
+return a descriptor, and never overwrites an existing digest; an existing
+regular file must already contain the identical bytes. Where directory-fd
+APIs exist, reads/writes pin a verified blob-directory handle and use relative
+no-follow opens; other platforms revalidate the directory identity before and
+after access under D37's trusted-local-filesystem race limitation. Readers
+require a stable private regular file, reject a declared/filesystem size
+mismatch before allocating the body, bound the read to that declared size,
+then verify SHA-256 before UTF-8/JSON/binary decode. Expected filesystem and
+codec failures remain in the typed content-error family. Missing, malformed,
+omitted, and corrupt content are distinct explicit errors, never partial
+fallbacks. A crash may leave an unreachable partial blob before any descriptor
+was appended; it is non-authoritative run-unit debris and is removed with that
+whole unit rather than inferred as history.
 
 **Retention unit.** A run is one atomic retention unit: its JSONL, blobs,
 indexes, and reports are created and deleted together. Retention operates
