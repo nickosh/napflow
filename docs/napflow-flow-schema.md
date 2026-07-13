@@ -13,6 +13,10 @@ Compatibility note (D33, 2026-07-11): `schema: napflow/v1` remains an
 changes are expected before package v1.0 and v0.x migration support is
 best-effort. The marker becomes a stability/migration promise only when
 the package reaches v1.0.
+Amended 2026-07-13 for v0.2/M4: full message/request/response event values,
+store-once `content-blobs/1` persistence, and prepared-wire request capture
+replace the historical preview/capture-valve behavior; the flow YAML shape is
+unchanged except that removed manifest settings are no longer accepted.
 
 Changes from v0.3: End ports gain `required:` (default `true` — an
 unreached required port fails the run, **D18**); guard `exhausted`/`expired`
@@ -390,11 +394,14 @@ as everywhere else.
   OS/workspace permissions (POSIX umask and inherited Windows ACLs); napflow
   applies no custom owner, DACL, or forced-mode contract (D39).
   Terminal and JSON/JUnit reports apply D35's schema-aware declared-secret
-  view; dictionary keys and protocol structure never change. The M4 target is
-  full prepared-request/response detail (URL/query, effective headers/cookies,
-  bodies, status, timing, retries); the current request event remains a
-  pre-transport preview and response capture still has v0.1 valves (EC32/EC50).
-  Replay-on-canvas = re-reading the file.
+  view; dictionary keys and protocol structure never change. Production logs
+  declare `content-blobs/1`: small values stay inline, while repeated large
+  request/response/message/Log/End values share immutable hash-verified blob
+  references. Request history contains effective prepared URL/query,
+  library/session headers and cookies, exact body/no-body, final redirect
+  request, status, timing, retries, and redirects. Runtime port values remain
+  complete and independent of persistence (EC32/EC50). Replay = re-reading the
+  recording, never re-execution; M5 adds paged/on-demand browser resolution.
 - Platforms: macOS, Windows, and Linux from day one (D26; pathlib
   discipline, no shell-isms); all three in the CI matrix.
 
@@ -533,8 +540,9 @@ pass-through outputs** carrying the triggering message, not error ports —
 unconnected, their message is dropped (W106 lints this); whether a
 tripped guard is a failure is decided by what you wire to it (D19).
 **Binary payloads** (e.g. non-text response bodies) are represented as
-`{"__binary__": true, "content_type": "...", "base64": "..."}` — the
-body-capture size cap applies to the encoded form. An inbound request-body
+`{"__binary__": true, "content_type": "...", "base64": "..."}`. Blob
+hash/byte metadata is computed from the exact decoded bytes, and resolution
+reconstructs the canonical envelope without truncation. An inbound request-body
 envelope must have exactly those three fields, a non-empty string
 `content_type`, and canonical standard base64. A malformed envelope is a
 non-retryable `request_encoding` error on the request node's `error` port,

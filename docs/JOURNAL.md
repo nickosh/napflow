@@ -4,6 +4,18 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M4 full-fidelity history complete
+
+- Done: scaffold masking is opt-in; `content-blobs/1` now covers every
+  persisted value path; capture valves/previews are removed; prepared-wire
+  request/final-redirect detail is recorded.
+- Proved: a 200 KB Request→Log→End→JSON-report path keeps complete runtime data
+  and one hash-verified blob; lazy report/server/UI boundaries preserve refs.
+- Verified: 551 pytest, 50 Vitest, and 40 Playwright tests pass (1 pytest
+  skipped, 1 expected xfail); Ruff, both import contracts, and the UI build pass.
+- Next: M5 versioned paging, on-demand browser blob reads, bounded replay, and
+  reconstructable frame drilldown.
+
 ## 2026-07-13 — v0.2 M4 ordinary-permission local history
 
 - Done: removed custom Windows DACL/SID ownership, forced POSIX modes, and

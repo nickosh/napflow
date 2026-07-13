@@ -59,8 +59,6 @@ class RunDefaults(FrozenModel):
     # Wall-clock run deadline; None = off. Expiry ⇒ run `error`, exit 2,
     # report still written (D24).
     run_timeout_s: Annotated[float, Field(gt=0)] | None = None
-    body_capture_mb: Annotated[float, Field(gt=0)] = 10  # per-body valve
-    run_capture_mb: Annotated[float, Field(gt=0)] = 500  # per-run valve (EC32)
 
 
 class Defaults(FrozenModel):

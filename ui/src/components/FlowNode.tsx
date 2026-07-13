@@ -41,7 +41,8 @@ function PortRow({
 }) {
   const isInput = side === "input";
   // M5.5 port traffic painting: a handle that carried data glows and
-  // its tooltip shows the last value that crossed (value_preview)
+  // its tooltip shows the last complete value that crossed (with the
+  // legacy preview fallback already folded into PortTraffic)
   const title =
     traffic != null
       ? `${port.name} — last: ${preview(traffic.lastValue, 200)}${

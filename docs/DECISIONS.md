@@ -593,10 +593,10 @@ full-fidelity history model:
 - Runtime execution values and persisted observation are separate.
   Moving persisted content into a blob must never silently truncate or
   change the value delivered through a flow.
-- Local limits are soft by default: warn and expose size, do not silently
-  destroy information. Explicit hard limits remain available for CI or
-  constrained machines, and any omitted content is an explicit event
-  with reason/size/hash—not a plausible-looking prefix.
+- Local defaults have no destructive content limit: expose size and preserve
+  the value rather than silently destroying information. The codec reserves an
+  explicit omission record with reason/size/hash, but D39 defers any
+  user-facing hard-limit policy until after v0.2.
 - Replay is streamed/paged, blobs load on demand, and disposable offset
   indexes/summaries may accelerate seeking. JSONL plus blobs remain the
   source of truth; derived indexes are rebuildable.
@@ -616,21 +616,29 @@ references, deduplication, and lazy loading remain v0.2 commitments.
 Self-contained export/import, explicit hard-limit omission policy, advanced
 seek indexes, and the 100k-event replay gate move to the future ledger.
 
+**Implemented 2026-07-13 (M4):** production streams advertise
+`content-blobs/1` and apply the exhaustive field policy before the shared
+JSONL/WebSocket fan-out. The same structured HTTP response is hashed once
+across request, message, Log, End, and blob-aware JSON report records; public
+feature-gated resolution verifies size/hash and preserves marker-shaped user
+data. Destructive capture settings and previews are removed. M5 still owns
+paged REST and on-demand browser blob fetch.
+
 ## D35 — Preserve raw local truth; redact presentation and exports, never protocol structure
 
 (2026-07-11, owner decision: observability first, masking only where it
 is concretely useful for CI/CD.)
 
-The canonical local history preserves real values and is stored with
-restrictive permissions. Redaction is a view/export concern:
+The canonical local history preserves real values using ordinary inherited
+OS/workspace permissions. Redaction is a presentation/future-export concern:
 
 - Event names, schema keys, enums, identifiers, frame/node metadata,
   and control fields are never rewritten.
 - The local UI may display complete values, with hide/reveal affordances
   as convenience rather than destructive storage behavior.
-- Terminal presentation, reports, and exported run bundles support a
-  declared-secret redaction policy. CI-oriented output defaults to the
-  safe declared-secret policy; raw export requires an explicit choice.
+- Terminal presentation and JSON/JUnit reports apply the configured
+  declared-secret policy; an empty pattern list is a raw no-op. Any future
+  export surface must make its raw/redacted choice explicit.
 - Runtime-acquired secrets may later be registered or selected by field
   path. Until then, documentation must not claim absolute shareability.
 - Policy is explicit in configuration/CLI, not inferred only from a
@@ -802,14 +810,15 @@ continuing a partial filesystem security boundary that adds platform risk
 without securing every raw-data path; silently dropping the timeline or scale
 ideas instead of preserving them as future candidates.
 
-Implementation status: the permission-specific storage layer was removed on
-2026-07-13 with inherited-permission, no-overwrite, and blob-verification
-regressions. Scaffold opt-in examples remain the next small cleanup, followed
-by full-value event schemas, blob feature activation, and prepared-request
-capture.
+Implementation status: M4 completed on 2026-07-13. New scaffolds default to an
+empty secret-pattern list; production history activates the full-value blob
+schema; reports resolve only consumed records and retain large JSON values by
+reference; and request events carry initial/final prepared-wire snapshots.
+Inherited permissions, no-overwrite creation, containment, and blob
+verification remain as decided. M5 paging and browser fetch are next.
 
 ## Known open risks (watch during implementation)
-- EC10/EC22/EC27/EC32/EC35, EC42/EC44/EC47/EC49/EC50 are open—not
+- EC10/EC22/EC27/EC35, EC42/EC44/EC47/EC49 are open—not
   “resolved by documentation.” Their ledger rows name v0.2 or
   post-v0.2 closure conditions; close them only with the stated tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —

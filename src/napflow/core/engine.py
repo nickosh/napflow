@@ -31,7 +31,7 @@ import re
 import time
 from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -40,7 +40,6 @@ from napflow import __version__
 from napflow.core.events import (
     AssertResult,
     BudgetWarning,
-    CaptureWarning,
     EventStream,
     FrameFinished,
     GuardTripped,
@@ -59,7 +58,6 @@ from napflow.core.httpclient import (
     HttpClient,
     RequestEncodingError,
     TransportError,
-    WireResponse,
 )
 from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import FlowFile
@@ -93,7 +91,6 @@ from napflow.core.templating import (
     TemplateEvaluationError,
     TypeCoercionError,
     coerce_value,
-    stringify_native,
 )
 from napflow.core.worker import (
     WorkerCrash,
@@ -113,8 +110,6 @@ EXIT_CODES: dict[RunState, int] = {
     "aborted": 130,
 }
 
-_MB = 1024 * 1024
-
 # Node-error OUTLETS: where a failed firing routes (D24, EC24). Distinct
 # from error-CLASS ports (below): assert.failed carries check failures,
 # never node errors.
@@ -132,8 +127,6 @@ _ERROR_CLASS_PORTS = {
 # The manifest node_timeout_s default auto-applies to these only —
 # the potentially-unbounded leaf firings (D24).
 _DEFAULT_CEILING_TYPES = ("request", "python")
-
-_PREVIEW_LIMIT = 512  # chars of compact JSON in message_emitted previews
 
 # Inline merge/guard deliveries can keep the ready queue perpetually
 # non-empty, so Queue.get() alone is not a cooperative scheduling point.
@@ -366,9 +359,6 @@ class FlowRun:
         self._flow_cache: dict[str, tuple[_Graph, Path, Any]] = {}
         self._frame_seq = 0
         self._request_defaults: RequestDefaults = manifest.defaults.request
-        self._body_cap = int(self._defaults.body_capture_mb * _MB)
-        self._capture_remaining = int(self._defaults.run_capture_mb * _MB)
-        self._capture_warned = False
 
     # -- public ------------------------------------------------------------
 
@@ -824,7 +814,7 @@ class FlowRun:
                     to_node=to_node,
                     to_port=to_port,
                     msg_id=message.msg_id,
-                    value_preview=_preview(value),
+                    value=value,
                 )
             )
 
@@ -1434,17 +1424,20 @@ class FlowRun:
         cfg = self._effective_request_config(node, context)
         attempts: int = cfg["retry_attempts"]
         for attempt in range(1, attempts + 1):
-            self._stream.emit(
-                RequestStarted(
-                    frame=frame.id,
-                    node=node.id,
-                    method=cfg["method"],
-                    url=cfg["url"],
-                    headers=cfg["headers"],
-                    body_preview=_preview(cfg["body"]),
-                    attempt=attempt,
+
+            def on_prepared(prepared: Any, current_attempt: int = attempt) -> None:
+                request = asdict(prepared)
+                self._stream.emit(
+                    RequestStarted(
+                        frame=frame.id,
+                        node=node.id,
+                        method=request["method"],
+                        url=request["url"],
+                        attempt=current_attempt,
+                        request=request,
+                    )
                 )
-            )
+
             try:
                 wire = await http.request(
                     method=cfg["method"],
@@ -1455,16 +1448,20 @@ class FlowRun:
                     timeout_s=cfg["timeout_s"],
                     verify_tls=cfg["verify_tls"],
                     http_version=node.config.http_version,
+                    on_prepared=on_prepared,
                 )
             except RequestEncodingError as e:
                 self._stream.emit(
                     RequestFailed(
                         frame=frame.id,
                         node=node.id,
+                        method=cfg["method"],
+                        url=cfg["url"],
                         error_kind="request_encoding",
                         message=str(e),
                         attempt=attempt,
                         will_retry=False,
+                        redirects_total=0,
                     )
                 )
                 raise _NodeError(
@@ -1472,14 +1469,21 @@ class FlowRun:
                 ) from e
             except TransportError as e:
                 will_retry = attempt < attempts
+                request = asdict(e.request) if e.request is not None else None
                 self._stream.emit(
                     RequestFailed(
                         frame=frame.id,
                         node=node.id,
+                        method=(
+                            request["method"] if request is not None else cfg["method"]
+                        ),
+                        url=request["url"] if request is not None else cfg["url"],
                         error_kind=e.kind,
                         message=str(e),
                         attempt=attempt,
                         will_retry=will_retry,
+                        redirects_total=e.redirects_total,
+                        request=request,
                     )
                 )
                 if not will_retry:
@@ -1487,20 +1491,7 @@ class FlowRun:
                         e.kind, f"transport failure after {attempt} attempt(s): {e}"
                     ) from e
                 continue
-            self._stream.emit(
-                RequestFinished(
-                    frame=frame.id,
-                    node=node.id,
-                    status=wire.status,
-                    http_version=wire.http_version,
-                    headers=wire.headers,
-                    body=self._capture_body(wire),
-                    size_bytes=wire.size_bytes,
-                    timing=wire.timing,
-                    attempt=attempt,
-                    retries_total=attempt - 1,
-                )
-            )
+            request = asdict(wire.request)
             value = {
                 "status": wire.status,
                 "headers": wire.headers,
@@ -1509,7 +1500,28 @@ class FlowRun:
                 "url": wire.url,
                 "http_version": wire.http_version,
                 "attempt": attempt,
+                "size_bytes": wire.size_bytes,
+                "timing": wire.timing,
+                "retries_total": attempt - 1,
+                "redirects_total": wire.redirects_total,
             }
+            self._stream.emit(
+                RequestFinished(
+                    frame=frame.id,
+                    node=node.id,
+                    method=request["method"],
+                    url=request["url"],
+                    status=wire.status,
+                    http_version=wire.http_version,
+                    size_bytes=wire.size_bytes,
+                    timing=wire.timing,
+                    attempt=attempt,
+                    retries_total=attempt - 1,
+                    redirects_total=wire.redirects_total,
+                    request=request,
+                    response=value,
+                )
+            )
             return [("response", value)]
         raise AssertionError("unreachable: retry loop returns or raises")
 
@@ -1558,32 +1570,6 @@ class FlowRun:
             "timeout_s": coerce_value(render(timeout_raw, timeout_default), "number"),
             "verify_tls": coerce_value(render(verify_raw, verify_default), "boolean"),
             "retry_attempts": retry.max_attempts,
-        }
-
-    def _capture_body(self, wire: WireResponse) -> Any:
-        """Capture valves (FR-703/706): the EVENT copy of a body is
-        capped per body and per run; the port value always carries the
-        full body. Truncation is a marked wrapper, never a silent cut."""
-        size = wire.size_bytes
-        self._capture_remaining -= size
-        run_cap = int(self._defaults.run_capture_mb * _MB)
-        if not self._capture_warned and self._capture_remaining <= run_cap // 10:
-            self._capture_warned = True
-            remaining_mb = max(self._capture_remaining, 0) / _MB
-            self._stream.emit(CaptureWarning(remaining_mb=round(remaining_mb, 3)))
-        if size <= self._body_cap and self._capture_remaining >= 0:
-            return wire.body
-        body = wire.body
-        if isinstance(body, dict) and body.get("__binary__") is True:
-            return body | {
-                "base64": body["base64"][: self._body_cap],
-                "truncated": True,
-            }
-        text = body if isinstance(body, str) else stringify_native(body)
-        return {
-            "__truncated__": True,
-            "size_bytes": size,
-            "prefix": text[: self._body_cap],
         }
 
     def _run_assert(
@@ -1795,19 +1781,6 @@ class FlowRun:
         if frame.loop_binding is not None:  # loop bodies (EN §6, FR-602)
             context["item"], context["index"] = frame.loop_binding
         return context
-
-
-def _preview(value: Any) -> Any:
-    """`value_preview` for stream events: the value itself when small,
-    a truncated compact-JSON string when large (EN §7 — full bodies
-    live in request_* events, previews stay light)."""
-    try:
-        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    except (TypeError, ValueError):
-        text = repr(value)
-    if len(text) <= _PREVIEW_LIMIT:
-        return value
-    return text[:_PREVIEW_LIMIT] + "…(truncated)"
 
 
 async def execute_flow(

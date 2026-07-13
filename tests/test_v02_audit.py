@@ -27,7 +27,10 @@ from napflow.core.events import (
     JsonlSink,
     SecretMasker,
     apply_retention,
+    persist_record_content,
+    resolve_record_content,
 )
+from napflow.core.history_content import RunContentStore
 from napflow.core.models.manifest import Manifest
 from napflow.core.runprep import RunPrepError, prepare_run
 from napflow.core.workspace import load_workspace
@@ -226,16 +229,10 @@ def test_external_cancellation_kills_workers(tmp_path):
 # TR-16 — large non-body payloads are bounded on disk (EC32; owner: M4)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="EC32/M4: large Log values are still persisted inline",
-)
 def test_large_log_value_uses_typed_reference_without_changing_runtime(tmp_path):
     """D34 moves persisted large values to typed content references without
     changing the value delivered through the flow. This probe validates the
-    collision-safe reference shape; the M4-owned round-trip integration test
-    remains an explicit placeholder below until a blob reader exists."""
+    collision-safe reference shape and feature-gated round trip."""
     big = "z" * 200_000
     f = flow(
         start({"name": "p", "type": "any"}),
@@ -244,7 +241,13 @@ def test_large_log_value_uses_typed_reference_without_changing_runtime(tmp_path)
         edges=[("start.p", "lg.in"), ("lg.out", "end.out")],
     )
     log_path = tmp_path / "run.jsonl"
-    stream = EventStream("test-run", SecretMasker([], {}), [JsonlSink(log_path)])
+    store = RunContentStore(log_path)
+    stream = EventStream(
+        "test-run",
+        SecretMasker([], {}),
+        [JsonlSink(log_path)],
+        content_store=store,
+    )
     try:
         result = asyncio.run(
             execute_flow(
@@ -288,6 +291,7 @@ def test_large_log_value_uses_typed_reference_without_changing_runtime(tmp_path)
         "hash"
     ].removeprefix("sha256:")
     assert HISTORY_FEATURE_CONTENT_BLOBS in records[0]["features"]
+    assert resolve_record_content(logrec, records[0]["features"], store)["value"] == big
 
 
 # --------------------------------------------------------------------------
@@ -358,12 +362,8 @@ def test_retention_keeps_newest_within_same_second(tmp_path):
     d.mkdir()
     older = d / "20260712-100000-ffffff.jsonl"  # created first, hex sorts last
     newer = d / "20260712-100000-000000.jsonl"  # created second, hex sorts first
-    older.write_text(
-        json.dumps({"event": "run_finished", "run_id": older.stem}) + "\n"
-    )
-    newer.write_text(
-        json.dumps({"event": "run_finished", "run_id": newer.stem}) + "\n"
-    )
+    older.write_text(json.dumps({"event": "run_finished", "run_id": older.stem}) + "\n")
+    newer.write_text(json.dumps({"event": "run_finished", "run_id": newer.stem}) + "\n")
     # make creation order unambiguous to the filesystem
     os.utime(older, (1_000_000, 1_000_000))
     os.utime(newer, (2_000_000, 2_000_000))
@@ -553,19 +553,36 @@ def test_timed_out_worker_no_late_side_effect_or_replacement_overlap(tmp_path):
     assert not overlap.exists(), "replacement started while the old worker was live"
 
 
-@pytest.mark.skip(
-    reason="TR-16/FR-1102 owner M4: replace with a persisted blob-store "
-    "write/read/hash verification once the content-store API exists"
-)
-def test_large_log_blob_round_trip(): ...
+def test_large_log_blob_round_trip(tmp_path):
+    value = "full value" * 20_000
+    store = RunContentStore(tmp_path / "run.jsonl", inline_threshold_bytes=1024)
+    record = persist_record_content({"event": "log", "value": value}, store)
+
+    assert record["value"]["$napflow"]["kind"] == "blob"
+    assert resolve_record_content(record, [HISTORY_FEATURE_CONTENT_BLOBS], store) == {
+        "event": "log",
+        "value": value,
+    }
 
 
-@pytest.mark.skip(
-    reason="TR-16/FR-1102 owner M4: collision-shaped user objects must use "
-    "the $napflow literal escape and round-trip byte-for-byte once the "
-    "persisted-value codec exists"
-)
-def test_blob_marker_shaped_user_payload_round_trips_as_literal(): ...
+def test_blob_marker_shaped_user_payload_round_trips_as_literal(tmp_path):
+    value = {
+        "$napflow": {
+            "kind": "blob",
+            "hash": f"sha256:{'0' * 64}",
+            "bytes": 0,
+            "media_type": "text/plain",
+            "codec": "utf-8",
+        }
+    }
+    store = RunContentStore(tmp_path / "run.jsonl", inline_threshold_bytes=10_000)
+    record = persist_record_content({"event": "log", "value": value}, store)
+
+    assert record["value"] == {"$napflow": {"kind": "literal", "value": value}}
+    assert (
+        resolve_record_content(record, [HISTORY_FEATURE_CONTENT_BLOBS], store)["value"]
+        == value
+    )
 
 
 @pytest.mark.skip(

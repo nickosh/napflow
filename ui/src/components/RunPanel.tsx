@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ROOT_FRAME,
   matchesTraffic,
+  messageValue,
   preview,
   summarize,
   trafficLabel,
@@ -83,9 +84,9 @@ function EventRow({ record }: { record: RunRecord }) {
         </span>
       </div>
       {open && (
-        // the full record IS the full wire detail (headers, complete
-        // bodies, timing, retries — D13; capture valves mark truncation
-        // inside the body envelope, they never elide the event)
+        // The expanded row preserves the complete persisted event shape.
+        // Large content may be represented by a typed blob reference for
+        // lazy consumers rather than duplicated inline.
         <pre
           data-testid="run-event-detail"
           style={{
@@ -106,8 +107,8 @@ function EventRow({ record }: { record: RunRecord }) {
   );
 }
 
-/** One crossed message on the selected wire/port (M5.5): value, ts,
- * msg_id — expandable to the full record like the event stream. */
+/** One crossed message on the selected wire/port (M5.5): complete value,
+ * ts, msg_id — with value_preview fallback for featureless legacy replay. */
 function MessageRow({ record }: { record: RunRecord }) {
   const [open, setOpen] = useState(false);
   return (
@@ -140,7 +141,7 @@ function MessageRow({ record }: { record: RunRecord }) {
             fontFamily: "ui-monospace, monospace",
           }}
         >
-          {preview(record.value_preview, 200)}
+          {preview(messageValue(record), 200)}
         </span>
       </div>
       {open && (

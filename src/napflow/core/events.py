@@ -1,6 +1,6 @@
 """Event vocabulary, canonical JSONL, and redacted views (EN §7, D35).
 
-One JSON object per line/frame; the JSONL file and the future WebSocket
+One JSON object per line/frame; the JSONL file and the local WebSocket
 stream carry IDENTICAL records (D13) — both are fed by `EventStream`,
 which stamps `run_id`/`ts`/`seq` and fans out the raw canonical record.
 Terminal/report sinks receive a separate schema-aware redacted projection;
@@ -28,6 +28,7 @@ import stat
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
+from copy import deepcopy
 from dataclasses import asdict as _asdict
 from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
@@ -38,6 +39,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from napflow.core.files import atomic_write_text
+from napflow.core.history_content import RunContentStore
 from napflow.core.workspace import WorkspaceResolver
 
 MASK = "***"
@@ -63,13 +65,12 @@ HISTORY_FORMAT = "napflow-run/1"
 HISTORY_FORMAT_MAJOR = 1
 
 # Optional format capabilities are declared separately from the event-format
-# major. This M0 build writes/reads pure inline JSONL only. M4 will declare
-# `content-blobs/1` only after full-value event encoding and lazy consumers can
-# both resolve and verify `$napflow` persisted-value envelopes; older readers
-# then reject the feature instead of silently exposing descriptors as user data.
+# major. A stream advertises ``content-blobs/1`` only when it has an explicit
+# RunContentStore and therefore encodes every schema-declared content field.
+# Featureless/legacy records never interpret ``$napflow`` as protocol data.
 HISTORY_FEATURE_CONTENT_BLOBS = "content-blobs/1"
-HISTORY_WRITE_FEATURES: tuple[str, ...] = ()
-HISTORY_SUPPORTED_FEATURES: frozenset[str] = frozenset()
+HISTORY_WRITE_FEATURES: tuple[str, ...] = (HISTORY_FEATURE_CONTENT_BLOBS,)
+HISTORY_SUPPORTED_FEATURES: frozenset[str] = frozenset(HISTORY_WRITE_FEATURES)
 
 
 class HistoryFormatError(ValueError):
@@ -168,7 +169,9 @@ class RunStarted(Event):
     env_name: str | None
     inputs: dict[str, Any]
     engine_version: str
-    features: list[str] = field(default_factory=lambda: list(HISTORY_WRITE_FEATURES))
+    # EventStream owns this envelope field: store-backed streams replace it
+    # with HISTORY_WRITE_FEATURES; featureless streams replace it with [].
+    features: list[str] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)
@@ -182,35 +185,39 @@ class RequestStarted(Event):
     event: ClassVar[str] = "request_started"
     method: str
     url: str
-    headers: dict[str, Any]
-    body_preview: Any
     attempt: int
+    request: dict[str, Any]
 
 
 @dataclass(kw_only=True)
 class RequestFinished(Event):
-    """`body` is COMPLETE (full wire detail, D13) — capture valves mark
-    `truncated: true` inside the body envelope, they never elide the
-    event. `timing` carries only the fields niquests exposes."""
+    """Full logical response plus cheap replay/list summaries (D34)."""
 
     event: ClassVar[str] = "request_finished"
+    method: str
+    url: str
     status: int
     http_version: str | None
-    headers: dict[str, Any]
-    body: Any
     size_bytes: int
     timing: dict[str, float]
     attempt: int
     retries_total: int
+    redirects_total: int
+    request: dict[str, Any]
+    response: dict[str, Any]
 
 
 @dataclass(kw_only=True)
 class RequestFailed(Event):
     event: ClassVar[str] = "request_failed"
+    method: str
+    url: str
     error_kind: str
     message: str
     attempt: int
     will_retry: bool
+    redirects_total: int
+    request: dict[str, Any] | None = None
 
 
 @dataclass(kw_only=True)
@@ -220,7 +227,7 @@ class MessageEmitted(Event):
     to_node: str
     to_port: str
     msg_id: str
-    value_preview: Any
+    value: Any
 
 
 @dataclass(kw_only=True)
@@ -330,29 +337,31 @@ class EventFieldPolicy(Enum):
     ``STRUCTURE`` is copied exactly. ``CONTENT`` is one logical value;
     ``CONTENT_MAP_VALUES`` keeps the mapping keys structural and treats each
     value independently; ``ERROR_MESSAGES`` keeps error records structural
-    and treats only their ``message`` as content. ``DERIVED_PREVIEW`` marks
-    today's lossy fields which must become full values before
-    ``content-blobs/1`` can be activated.
+    and treats only their ``message`` as content. ``PREPARED_REQUEST`` and
+    ``HTTP_RESPONSE`` are persisted as one logical value while presentation
+    redaction preserves their nested protocol vocabulary.
     """
 
     STRUCTURE = "structure"
     CONTENT = "content"
     CONTENT_MAP_VALUES = "content_map_values"
     ERROR_MESSAGES = "error_messages"
-    DERIVED_PREVIEW = "derived_preview"
+    PREPARED_REQUEST = "prepared_request"
+    HTTP_RESPONSE = "http_response"
 
 
 _S = EventFieldPolicy.STRUCTURE
 _C = EventFieldPolicy.CONTENT
 _M = EventFieldPolicy.CONTENT_MAP_VALUES
 _E = EventFieldPolicy.ERROR_MESSAGES
-_P = EventFieldPolicy.DERIVED_PREVIEW
+_Q = EventFieldPolicy.PREPARED_REQUEST
+_R = EventFieldPolicy.HTTP_RESPONSE
 
 # Exhaustive event-specific field classification. This is deliberately a
 # registry of *every* dataclass field, not a content-only allowlist: adding a
-# field without deciding whether it is structure, complete content, or a
-# lossy preview is a protocol error. The future content encoder and current
-# presentation redactor share this boundary.
+# field without deciding whether it is structure or complete content is a
+# protocol error. The content encoder/resolver and presentation redactor share
+# this boundary.
 EVENT_FIELD_POLICIES: dict[type[Event], dict[str, EventFieldPolicy]] = {
     RunStarted: {
         "format": _S,
@@ -366,32 +375,38 @@ EVENT_FIELD_POLICIES: dict[type[Event], dict[str, EventFieldPolicy]] = {
     RequestStarted: {
         "method": _S,
         "url": _C,
-        "headers": _M,
-        "body_preview": _P,
         "attempt": _S,
+        "request": _Q,
     },
     RequestFinished: {
+        "method": _S,
+        "url": _C,
         "status": _S,
         "http_version": _S,
-        "headers": _M,
-        "body": _C,
         "size_bytes": _S,
         "timing": _S,
         "attempt": _S,
         "retries_total": _S,
+        "redirects_total": _S,
+        "request": _Q,
+        "response": _R,
     },
     RequestFailed: {
+        "method": _S,
+        "url": _C,
         "error_kind": _S,
         "message": _C,
         "attempt": _S,
         "will_retry": _S,
+        "redirects_total": _S,
+        "request": _Q,
     },
     MessageEmitted: {
         "from_port": _S,
         "to_node": _S,
         "to_port": _S,
         "msg_id": _S,
-        "value_preview": _P,
+        "value": _C,
     },
     AssertResult: {
         "check": _C,
@@ -436,6 +451,22 @@ EVENT_FIELD_POLICIES: dict[type[Event], dict[str, EventFieldPolicy]] = {
 _DATACLASS_COMMON_FIELDS = frozenset({"frame", "node"})
 _WIRE_COMMON_FIELDS = frozenset({"event", "run_id", "frame", "node", "ts", "seq"})
 _ERROR_RECORD_FIELDS = frozenset({"frame", "node", "port", "kind", "message"})
+_PREPARED_REQUEST_FIELDS = frozenset({"method", "url", "headers", "body", "size_bytes"})
+_HTTP_RESPONSE_FIELDS = frozenset(
+    {
+        "status",
+        "headers",
+        "body",
+        "size_bytes",
+        "timing",
+        "elapsed_ms",
+        "url",
+        "http_version",
+        "attempt",
+        "retries_total",
+        "redirects_total",
+    }
+)
 
 
 def _validate_event_field_policies() -> None:
@@ -454,6 +485,156 @@ def _validate_event_field_policies() -> None:
 
 
 _validate_event_field_policies()
+
+
+def _policies_for_record(
+    record: Mapping[str, Any],
+) -> tuple[str, dict[str, EventFieldPolicy]]:
+    """Return the exhaustive field policy for one logical/canonical record."""
+    event_name = record.get("event")
+    event_type = EVENT_TYPES.get(event_name) if isinstance(event_name, str) else None
+    if event_type is None:
+        raise HistoryFormatError(
+            f"no content policy for event {_marker_repr(event_name)}"
+        )
+    policies = EVENT_FIELD_POLICIES[event_type]
+    unknown = set(record) - _WIRE_COMMON_FIELDS - set(policies)
+    if unknown:
+        raise HistoryFormatError(
+            f"no content policy for {event_name} fields {sorted(unknown)!r}"
+        )
+    return event_name, policies
+
+
+def _require_string_map(value: Any, *, field_name: str) -> dict[str, Any]:
+    if type(value) is not dict or any(type(key) is not str for key in value):
+        raise HistoryFormatError(f"{field_name} must be an object with string keys")
+    return value
+
+
+def _require_exact_object(
+    value: Any,
+    expected: frozenset[str],
+    *,
+    field_name: str,
+) -> dict[str, Any]:
+    value = _require_string_map(value, field_name=field_name)
+    if set(value) != expected:
+        missing = sorted(expected - set(value))
+        extra = sorted(set(value) - expected)
+        raise HistoryFormatError(
+            f"{field_name} fields mismatch: missing={missing}, extra={extra}"
+        )
+    _require_string_map(value["headers"], field_name=f"{field_name}.headers")
+    return value
+
+
+def _transform_error_messages(
+    value: Any,
+    event_name: str,
+    transform: Callable[[Any], Any],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise HistoryFormatError(
+            f"{event_name}.unhandled_errors must be an array for content processing"
+        )
+    transformed: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) - _ERROR_RECORD_FIELDS:
+            raise HistoryFormatError(
+                f"{event_name}.unhandled_errors has an unclassified record"
+            )
+        shown = deepcopy(item)
+        if "message" in shown:
+            shown["message"] = transform(shown["message"])
+        transformed.append(shown)
+    return transformed
+
+
+def _transform_record_content(
+    record: Mapping[str, Any],
+    store: RunContentStore,
+    *,
+    resolve: bool,
+) -> dict[str, Any]:
+    event_name, policies = _policies_for_record(record)
+    transformed = deepcopy(dict(record))
+    transform = store.resolve if resolve else store.persist
+
+    for name, policy in policies.items():
+        if name not in record or policy is EventFieldPolicy.STRUCTURE:
+            continue
+        value = record[name]
+        if policy is EventFieldPolicy.CONTENT:
+            transformed[name] = transform(value)
+        elif policy is EventFieldPolicy.CONTENT_MAP_VALUES:
+            values = _require_string_map(value, field_name=f"{event_name}.{name}")
+            transformed[name] = {key: transform(item) for key, item in values.items()}
+        elif policy is EventFieldPolicy.ERROR_MESSAGES:
+            transformed[name] = _transform_error_messages(value, event_name, transform)
+        elif policy in {
+            EventFieldPolicy.PREPARED_REQUEST,
+            EventFieldPolicy.HTTP_RESPONSE,
+        }:
+            expected = (
+                _PREPARED_REQUEST_FIELDS
+                if policy is EventFieldPolicy.PREPARED_REQUEST
+                else _HTTP_RESPONSE_FIELDS
+            )
+            field_name = f"{event_name}.{name}"
+            if resolve:
+                logical = transform(value)
+                _require_exact_object(logical, expected, field_name=field_name)
+                transformed[name] = logical
+            else:
+                _require_exact_object(value, expected, field_name=field_name)
+                transformed[name] = transform(value)
+        else:  # pragma: no cover - enum/registry exhaustiveness guard
+            raise AssertionError(f"unhandled event field policy: {policy}")
+    return transformed
+
+
+def persist_record_content(
+    record: Mapping[str, Any], store: RunContentStore
+) -> dict[str, Any]:
+    """Persist every schema-declared content value in one event record.
+
+    The returned record is a canonical copy; ``record`` and its runtime values
+    are not mutated. The caller must advertise ``content-blobs/1`` on the
+    enclosing run before exposing the returned descriptors to readers.
+    """
+    return _transform_record_content(record, store, resolve=False)
+
+
+def _supported_feature_set(features: Iterable[str]) -> frozenset[str]:
+    if isinstance(features, str | bytes):
+        raise HistoryFormatError("run-history features must be an array")
+    try:
+        parsed = parse_history_features(list(features))
+    except TypeError as error:
+        raise HistoryFormatError("run-history features must be an array") from error
+    unsupported = parsed - HISTORY_SUPPORTED_FEATURES
+    if unsupported:
+        raise HistoryFormatError(
+            f"unsupported run-history features: {sorted(unsupported)!r}"
+        )
+    return parsed
+
+
+def resolve_record_content(
+    record: Mapping[str, Any],
+    features: Iterable[str],
+    store: RunContentStore,
+) -> dict[str, Any]:
+    """Resolve one canonical record under its declared feature envelope.
+
+    Featureless history is copied through without interpreting marker-shaped
+    user data. Unknown features fail before any content field is inspected.
+    """
+    active = _supported_feature_set(features)
+    if HISTORY_FEATURE_CONTENT_BLOBS not in active:
+        return deepcopy(dict(record))
+    return _transform_record_content(record, store, resolve=True)
 
 
 @lru_cache
@@ -512,20 +693,12 @@ class SecretMasker:
         events or fields fail closed rather than leaking an unclassified value
         into a nominally safe report.
         """
-        event_name = record.get("event")
-        event_type = (
-            EVENT_TYPES.get(event_name) if isinstance(event_name, str) else None
-        )
-        if event_type is None:
+        try:
+            event_name, policies = _policies_for_record(record)
+        except HistoryFormatError as error:
             raise HistoryFormatError(
-                f"no redaction policy for event {_marker_repr(event_name)}"
-            )
-        policies = EVENT_FIELD_POLICIES[event_type]
-        unknown = set(record) - _WIRE_COMMON_FIELDS - set(policies)
-        if unknown:
-            raise HistoryFormatError(
-                f"no redaction policy for {event_name} fields {sorted(unknown)!r}"
-            )
+                str(error).replace("content policy", "redaction policy")
+            ) from error
 
         redacted = dict(record)
         for name, policy in policies.items():
@@ -533,9 +706,43 @@ class SecretMasker:
                 continue
             if policy is EventFieldPolicy.ERROR_MESSAGES:
                 redacted[name] = self._redact_error_messages(record[name], event_name)
+            elif policy is EventFieldPolicy.PREPARED_REQUEST:
+                redacted[name] = self._redact_prepared_request(
+                    record[name], f"{event_name}.{name}"
+                )
+            elif policy is EventFieldPolicy.HTTP_RESPONSE:
+                redacted[name] = self._redact_http_response(
+                    record[name], f"{event_name}.{name}"
+                )
             else:
                 redacted[name] = self.mask(record[name])
         return redacted
+
+    def _redact_prepared_request(self, value: Any, field_name: str) -> dict[str, Any]:
+        request = _require_exact_object(
+            value, _PREPARED_REQUEST_FIELDS, field_name=field_name
+        )
+        return {
+            "method": request["method"],
+            "url": self.mask(request["url"]),
+            "headers": {
+                key: self.mask(item) for key, item in request["headers"].items()
+            },
+            "body": self.mask(request["body"]),
+            "size_bytes": request["size_bytes"],
+        }
+
+    def _redact_http_response(self, value: Any, field_name: str) -> dict[str, Any]:
+        response = _require_exact_object(
+            value, _HTTP_RESPONSE_FIELDS, field_name=field_name
+        )
+        shown = deepcopy(response)
+        shown["headers"] = {
+            key: self.mask(item) for key, item in response["headers"].items()
+        }
+        shown["body"] = self.mask(response["body"])
+        shown["url"] = self.mask(response["url"])
+        return shown
 
     def _redact_error_messages(
         self, value: Any, event_name: str
@@ -748,8 +955,7 @@ def _next_history_order(runs_dir: Path) -> int:
         order = max(counter_order, marker_order) + 1
         atomic_write_text(
             counter_path,
-            json.dumps({"version": 1, "order": order}, separators=(",", ":"))
-            + "\n",
+            json.dumps({"version": 1, "order": order}, separators=(",", ":")) + "\n",
         )
         return order
 
@@ -1170,8 +1376,10 @@ class EventStream:
     """Stamps common fields and fans out canonical/presentation records.
 
     A sink is anything with `write(record: dict)` and `close()`. Canonical
-    sinks (JSONL and local WebSocket) receive raw records; presentation sinks
-    (terminal today) receive one schema-aware redacted copy.
+    sinks (JSONL and local WebSocket) receive the same persisted record;
+    presentation sinks receive one schema-aware redacted logical copy. With
+    no content store, the stream is featureless and canonical sinks receive
+    the complete logical values unchanged.
 
     `FlowRun.execute()` owns the stream once execution starts and closes
     it on every exit path. Close side effects are deliberately idempotent so
@@ -1188,18 +1396,23 @@ class EventStream:
         clock: Callable[[], datetime] | None = None,
         *,
         presentation_sinks: Iterable[Any] = (),
+        content_store: RunContentStore | None = None,
     ):
         self.run_id = run_id
         self._masker = masker
         self._sinks = list(sinks)
         self._presentation_sinks = list(presentation_sinks)
+        self._content_store = content_store
+        self._active_features = (
+            list(HISTORY_WRITE_FEATURES) if content_store is not None else []
+        )
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._seq = 0
         self._closed = False
         self._close_error: BaseException | None = None
 
     def emit(self, event: Event) -> dict[str, Any]:
-        """Serialize and fan out; return the raw canonical wire record."""
+        """Serialize and fan out; return the canonical wire record."""
         self._seq += 1
         data = _asdict(event)
         record: dict[str, Any] = {"event": type(event).event, "run_id": self.run_id}
@@ -1212,19 +1425,31 @@ class EventStream:
         # `format`/`features` are part of the run_started envelope.
         if isinstance(event, RunStarted):
             record["format"] = data.pop("format")
-            record["features"] = data.pop("features")
+            data.pop("features")
+            record["features"] = list(self._active_features)
         omittable = _omit_if_none(type(event))
         for key, value in data.items():
             if value is None and key in omittable:
                 continue
             record[key] = value
+        # Redaction sees complete logical values. Persistence then happens
+        # exactly once before the same descriptor-bearing record fans out to
+        # JSONL and live canonical sinks; a blob is durable before persist()
+        # can return its descriptor.
+        redacted = (
+            self._masker.redact_record(record) if self._presentation_sinks else None
+        )
+        canonical = (
+            persist_record_content(record, self._content_store)
+            if self._content_store is not None
+            else record
+        )
         for sink in self._sinks:
-            sink.write(record)
-        if self._presentation_sinks:
-            redacted = self._masker.redact_record(record)
+            sink.write(canonical)
+        if redacted is not None:
             for sink in self._presentation_sinks:
                 sink.write(redacted)
-        return record
+        return canonical
 
     def close(self) -> None:
         if self._closed:

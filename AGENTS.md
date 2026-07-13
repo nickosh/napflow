@@ -128,18 +128,17 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
   default (300) auto-applies to request/python ONLY, delay/loop/flow are
   exempt from the default (D24); timeouts route to ERROR ports, never
   data ports; optional run deadline (`run_timeout_s`/`--timeout` ⇒ run
-  `error`, report still written); body capture valves (10MB/body +
-  500MB/run, truncated markers); secrets masked AT EMISSION (events
-  born masked).
+  `error`, report still written); store-once full-fidelity content blobs
+  across every persisted payload path; raw canonical local history using
+  ordinary OS/workspace permissions; optional schema-aware declared-secret
+  terminal/report presentation.
 
-The final sentence describes **v0.1 current behavior**, not the v0.2
-target. D34–D36/D39 + PLAN v0.2 replace destructive/local safeguards with:
-store-once full-fidelity blobs and basic lazy replay; raw local truth using
-ordinary OS/workspace permissions plus optional declared-secret
-terminal/report presentation; bounded cooperative lifecycle, cleanup,
-tasks/frames, and subscriber windows. Never extend the v0.1
-valves/mask-everywhere approach or rebuild ACL/export hardening as if either
-were the accepted v0.2 design.
+Current v0.2 development behavior under D34–D36/D39 has no destructive body/
+run valves and never masks canonical events. It includes hash-verified lazy
+resolution, prepared-wire request capture, bounded cooperative lifecycle,
+cleanup, tasks/frames, and subscriber windows. M5 still owns paged REST and
+on-demand browser blob fetch. Never rebuild the v0.1 valves/mask-everywhere
+approach or ACL/export hardening as if either were the accepted v0.2 design.
 
 ## Version and compatibility policy
 
@@ -181,10 +180,9 @@ were the accepted v0.2 design.
    durable saves → lifecycle/worker → bounded execution/history →
    full-fidelity blobs/prepared requests → basic paged/lazy replay →
    public Workspace/Flow catalog, packaging, and UI contracts → focused
-   release gate. M0/M1 completed
-   2026-07-12 and M2/M3 completed 2026-07-13; M4's permission-specific
-   storage layer is removed; next make scaffold secret patterns opt-in, then
-   land the full-value schema, blob activation, and prepared requests.
+   release gate. M0/M1 completed 2026-07-12 and M2/M3/M4 completed
+   2026-07-13. Next is M5's versioned paging, on-demand blob reads, bounded
+   replay window, and reconstructable frame drilldown.
    Timeline playback, 100k-event replay performance, run bundles, and
    security-grade history are future work (D39).
 

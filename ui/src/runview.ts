@@ -5,8 +5,8 @@
 // ROOT frame's perspective. Container nodes (flow/loop) pulse from
 // their own node_fired until their outputs emit back in the root
 // frame; child-frame events still appear in the event stream (labeled
-// with their frame path) but don't paint inner nodes — that belongs
-// to M6's drill-in.
+// with their frame path) but don't paint inner nodes — v0.2 M5 owns
+// replay-time frame drill-in.
 
 export type RunRecord = {
   event: string;
@@ -28,13 +28,20 @@ export type NodeOutcome = "none" | "ok" | "failed" | "error" | "skipped";
 
 /** What crossed a port (M5.5): message_emitted names both ends, so
  * every emission paints the source's output AND the target's input.
- * `lastValue` is the event's value_preview — the NATIVE value up to
- * 512 chars of compact JSON, truncated marker beyond (engine spec §7). */
+ * Current records carry the complete `value`; featureless legacy
+ * histories fall back to their lossy `value_preview`. */
 export type PortTraffic = {
   count: number;
   lastValue: unknown;
   lastTs: string | null;
 };
+
+/** Read the complete M4 message value without breaking v0.1/featureless
+ * histories. Presence, rather than nullishness, matters: null is a valid
+ * complete message value and must not fall back to a legacy preview. */
+export function messageValue(record: RunRecord): unknown {
+  return Object.hasOwn(record, "value") ? record.value : record.value_preview;
+}
 
 /** Last request exchange on a node (run-mode inspector summary). */
 export type RequestSummary = {
@@ -266,7 +273,7 @@ export function applyRecord(view: RunView, record: RunRecord): void {
           ports: withTraffic(
             prevNode?.ports ?? {},
             `out:${port}`,
-            record.value_preview,
+            messageValue(record),
             ts,
           ),
         });
@@ -282,7 +289,7 @@ export function applyRecord(view: RunView, record: RunRecord): void {
           ports: withTraffic(
             prevTo.ports,
             `in:${toPort}`,
-            record.value_preview,
+            messageValue(record),
             ts,
           ),
         };

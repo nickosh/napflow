@@ -594,9 +594,9 @@ filesystem-reader-leased whole-unit retention, and the TR-19 100k/abort
 evidence are green. Full REST paging/lazy replay remains its planned M5 owner,
 not retained active state in M3.
 
-### M4 — full-fidelity history and prepared requests
+### M4 — full-fidelity history and prepared requests ✅ done 2026-07-13
 
-- [ ] Implement the D34 store: small JSON-compatible values inline;
+- [x] Implement the D34 store: small JSON-compatible values inline;
       large text/binary/structured content stored once in immutable
       content-addressed blobs with hash, bytes, media type, encoding,
       and explicit reference records. Verify the stored hash round-trip.
@@ -606,39 +606,49 @@ not retained active state in M3.
         exact UTF-8/JSON/raw-binary bytes, collision-safe literal and
         explicit omission envelopes, per-run immutable hash paths,
         deduplication, and strict missing/corrupt/hash-verified resolution.
-        Feature activation intentionally remains below; foundation tests do
-        not claim FR-1102/NFR-15/TR-16 completion.
+        At that foundation slice, feature activation intentionally remained
+        below and its tests did not claim FR-1102/NFR-15/TR-16 completion.
         D39 keeps the codec, hashes, and deduplication; the permission/owner
         hardening was removed in the focused slice below.
-  - [ ] **Feature activation + event integration:** encode once before the
+  - [x] **Feature activation + event integration:** encode once before the
         shared JSONL/WebSocket fan-out, and enable `content-blobs/1` for both
         writer and reader in that same change. Partial field activation would
         make a later inline `$napflow` user value ambiguous and is forbidden.
-    - [x] **Field-policy/redaction seam** (landed 2026-07-13): every current
-          event dataclass field is classified as structure, complete content,
-          keyed content, error-message content, or derived preview. Canonical
+    - [x] **Field-policy/redaction seam** (landed 2026-07-13): every
+          then-current event dataclass field was classified as structure,
+          complete content, keyed content, error-message content, or derived preview. Canonical
           sinks receive raw records; JSONL uses ordinary OS/workspace
           permissions and the WebSocket is a trusted loopback-local surface.
           Terminal delivery and post-close JSON/JUnit rendering use the same
-          schema-aware value-only redactor. `body_preview` and `value_preview`
-          are explicit activation blockers, not silently accepted content
-          fields. D39 retains this field registry and raw/presentation split.
-    - [ ] **Full-value schema + activation:** replace the two derived previews
-          with the prepared request/full message contracts, apply the store
+          schema-aware value-only redactor. At this intermediate seam,
+          `body_preview` and `value_preview` were explicit activation blockers,
+          not silently accepted content fields; the completed slice below
+          removes them. D39 retains the field registry and raw/presentation
+          split.
+    - [x] **Full-value schema + activation** (landed 2026-07-13): replace the
+          two derived previews with prepared-request/full-message contracts, apply the store
           through the registry, add lazy consumer resolution, then activate
-          the writer/reader feature together.
-- [ ] Apply storage policy to every persisted payload path—not only
+          the writer/reader feature together. Store-backed production streams
+          now advertise `content-blobs/1`; featureless legacy values remain
+          literal, and report/server/UI consumers resolve or retain references
+          only at their actual presentation boundary.
+- [x] Apply storage policy to every persisted payload path—not only
       `request_finished.body`: message/log values, request bodies,
       response bodies, error payloads, and `run_finished.end_outputs`.
       Execution values remain complete and independent of their persisted
       representation. Remove misleading run/body valves once migration
-      is complete. (EC32)
-- [ ] Capture the prepared request rather than a 512-character preflight
+      is complete. (EC32) The full response object is reused across request,
+      message, Log, and End records so one canonical JSON blob/hash serves all
+      appearances; the old manifest valves and engine truncation path are gone.
+- [x] Capture the prepared request rather than a 512-character preflight
       preview: final URL/query, effective headers/cookies, body reference,
       timing/retry metadata, and response detail. Library-generated sensitive
       headers remain raw local observations; optional declared-secret masking
-      affects presentation values only. (FR-1103, EC50)
-- [ ] Simplify local-history storage to the trusted local prototype model:
+      affects presentation values only. (FR-1103, EC50) The adapter snapshots
+      initial and final redirect-aware niquests requests, including encoded
+      query, defaults, cookies, exact body bytes, retry/redirect totals, and
+      response timing.
+- [x] Simplify local-history storage to the trusted local prototype model:
       raw JSONL and blobs use normal inherited OS permissions. Remove custom
       Windows DACL/SID ownership handling, forced POSIX private modes, and
       permission-based blob rejection while retaining exclusive creation,
@@ -662,14 +672,20 @@ not retained active state in M3.
         An ordinary sink I/O close failure preserves the run result but
         publishes history only as an incomplete prefix; control-flow
         exceptions still propagate.
-  - [ ] **Scaffold opt-in examples:** stop activating example secret patterns
-        by default while retaining explicit empty-list no-redaction behavior.
+  - [x] **Scaffold opt-in examples** (landed 2026-07-13): new manifests write
+        `secrets: []` and retain commented pattern examples plus the raw-history
+        warning; no presentation masking is active until the user opts in.
 
 M4 DoD: a large response routed through Log and End is stored in full
 once, inspected byte-for-byte, and replayed without duplicated bodies;
 no silent truncation remains; prepared request detail reflects the effective
 wire request; a secret named/value-shaped like an event field cannot corrupt
 replay; local history works without a custom OS permission contract.
+**Met 2026-07-13:** `test_large_response_is_stored_once_through_request_log_end_and_report`
+proves the 200 KB Request → Log → End → JSON-report round trip uses one
+hash-verified blob while runtime data remains complete. Adapter regressions pin
+effective prepared requests and redirects; schema/redaction/replay tests pin
+feature gating, lazy consumers, marker collisions, and structural integrity.
 
 ### M5 — usable paged replay and frame drilldown
 

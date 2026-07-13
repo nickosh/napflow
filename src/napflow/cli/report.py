@@ -20,22 +20,77 @@ from typing import Any, TextIO
 from xml.sax.saxutils import quoteattr
 
 from napflow.core.engine import RunResult
-from napflow.core.events import SecretMasker
+from napflow.core.events import (
+    HISTORY_FEATURE_CONTENT_BLOBS,
+    HISTORY_FORMAT,
+    HISTORY_FORMAT_MAJOR,
+    HISTORY_SUPPORTED_FEATURES,
+    HistoryFormatError,
+    SecretMasker,
+    parse_history_features,
+    parse_history_format,
+    persist_record_content,
+    resolve_record_content,
+)
+from napflow.core.history_content import RunContentStore
 
 
 def _iter_records(
-    log_path: Path, masker: SecretMasker
-) -> Iterator[dict[str, Any]]:
-    """Read and redact one canonical record at a time from a closed log."""
+    log_path: Path,
+) -> Iterator[tuple[dict[str, Any], frozenset[str]]]:
+    """Read one record at a time after gating a present feature envelope.
+
+    Older focused fixtures and v0.1 logs may begin without ``run_started``;
+    those remain best-effort featureless input.  A current envelope is parsed
+    before any later record can be interpreted as descriptor-bearing content.
+    """
+    features: frozenset[str] = frozenset()
+    first_record = True
     with log_path.open(encoding="utf-8") as log:
         for line in log:
-            if line.strip():
-                yield masker.redact_record(json.loads(line))
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if first_record and record.get("event") == "run_started":
+                if "format" not in record and "features" in record:
+                    raise HistoryFormatError(
+                        "legacy run history cannot declare storage features"
+                    )
+                major = parse_history_format(record.get("format"))
+                if major > HISTORY_FORMAT_MAJOR:
+                    raise HistoryFormatError(
+                        f"unsupported run-history format major {major}"
+                    )
+                features = (
+                    parse_history_features(record["features"])
+                    if "features" in record
+                    else frozenset()
+                )
+                unsupported = features - HISTORY_SUPPORTED_FEATURES
+                if unsupported:
+                    raise HistoryFormatError(
+                        f"unsupported run-history features: {sorted(unsupported)!r}"
+                    )
+            first_record = False
+            yield record, features
+
+
+def _iter_presented_records(
+    log_path: Path,
+    masker: SecretMasker,
+    store: RunContentStore,
+    *,
+    events: frozenset[str],
+) -> Iterator[dict[str, Any]]:
+    """Resolve and redact only event kinds consumed by a report pass."""
+    for record, features in _iter_records(log_path):
+        if record.get("event") in events:
+            yield masker.redact_record(resolve_record_content(record, features, store))
 
 
 def _report_facts(
-    log_path: Path, masker: SecretMasker
-) -> tuple[dict[str, Any], int, int]:
+    log_path: Path, masker: SecretMasker, store: RunContentStore
+) -> tuple[dict[str, Any], int, int, frozenset[str]]:
     """Return the final summary and bounded JUnit counters.
 
     The report path is reached only after ``FlowRun`` has closed the JSONL,
@@ -46,16 +101,20 @@ def _report_facts(
     finished: dict[str, Any] = {}
     assertions = 0
     failures = 0
-    for record in _iter_records(log_path, masker):
+    finished_features: frozenset[str] = frozenset()
+    for record, features in _iter_records(log_path):
         event = record.get("event")
         if event == "assert_result":
             assertions += 1
             failures += not record["passed"]
         elif event == "run_finished":
-            finished = record
+            finished = masker.redact_record(
+                resolve_record_content(record, features, store)
+            )
+            finished_features = features
     if not finished:
         raise ValueError(f"completed run log has no run_finished record: {log_path}")
-    return finished, assertions, failures
+    return finished, assertions, failures, finished_features
 
 
 def write_report(
@@ -68,20 +127,39 @@ def write_report(
 ) -> Path | None:
     if kind == "none":
         return None
-    finished, assertions, failures = _report_facts(log_path, masker)
+    store = RunContentStore(log_path)
+    finished, assertions, failures, features = _report_facts(log_path, masker, store)
     directory = log_path.parent
     run_id = log_path.stem
     if kind == "json":
         path = directory / f"{run_id}.report.json"
-        payload = {
-            "flow": flow_identity,
-            "run_id": run_id,
-            "exit_code": result.exit_code,
-        } | {
-            key: value
-            for key, value in finished.items()
-            if key not in ("event", "run_id", "ts", "seq")
-        }
+        # A blob-aware report remains part of the run retention unit rather
+        # than expanding a large End value back into a second full copy.  The
+        # post-redaction logical record is persisted through the same store:
+        # unchanged values deduplicate to the canonical blob; masking may
+        # intentionally create a separate redacted blob.  Featureless legacy
+        # reports retain their original standalone JSON shape.
+        report_finished = finished
+        report_features: dict[str, Any] = {}
+        if HISTORY_FEATURE_CONTENT_BLOBS in features:
+            report_finished = persist_record_content(finished, store)
+            report_features = {
+                "format": HISTORY_FORMAT,
+                "features": sorted(features),
+            }
+        payload = (
+            {
+                "flow": flow_identity,
+                "run_id": run_id,
+                "exit_code": result.exit_code,
+            }
+            | report_features
+            | {
+                key: value
+                for key, value in report_finished.items()
+                if key not in ("event", "run_id", "ts", "seq")
+            }
+        )
         with _atomic_report_writer(path) as report:
             json.dump(payload, report, indent=2, ensure_ascii=False)
             report.write("\n")
@@ -93,7 +171,12 @@ def write_report(
         finished,
         assertions=assertions,
         failures=failures,
-        records=_iter_records(log_path, masker),
+        records=_iter_presented_records(
+            log_path,
+            masker,
+            store,
+            events=frozenset({"assert_result"}),
+        ),
     )
     return path
 
@@ -180,8 +263,7 @@ def _write_junit(
                 report.write(f"\n  <testcase{case} />")
                 continue
             message = (
-                f"expected {record.get('expected')!r}, "
-                f"actual {record.get('actual')!r}"
+                f"expected {record.get('expected')!r}, actual {record.get('actual')!r}"
             )
             failure = _xml_attributes({"message": message})
             report.write(

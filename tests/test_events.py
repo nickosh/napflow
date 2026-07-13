@@ -27,7 +27,10 @@ from napflow.core.events import (
     HistoryFormatError,
     JsonlSink,
     LogEvent,
+    MessageEmitted,
     NodeFired,
+    RequestFailed,
+    RequestFinished,
     RunFinished,
     RunStarted,
     SecretMasker,
@@ -41,9 +44,12 @@ from napflow.core.events import (
     new_run_id,
     parse_history_features,
     parse_history_format,
+    persist_record_content,
+    resolve_record_content,
     run_history_sort_key,
     run_log_path,
 )
+from napflow.core.history_content import RunContentStore
 from napflow.core.workspace import WorkspaceBoundaryError
 
 NO_SECRETS = SecretMasker([], {})
@@ -92,19 +98,24 @@ def test_vocabulary_is_exactly_en7():
     }
 
 
-def test_event_field_policy_registry_is_exhaustive_and_marks_fidelity_gaps():
+def test_event_field_policy_registry_is_exhaustive_without_fidelity_gaps():
     assert set(EVENT_FIELD_POLICIES) == set(EVENT_TYPES.values())
     for event_type, policies in EVENT_FIELD_POLICIES.items():
         declared = {item.name for item in fields(event_type)} - {"frame", "node"}
         assert set(policies) == declared
 
-    assert (
-        EVENT_FIELD_POLICIES[EVENT_TYPES["request_started"]]["body_preview"]
-        is EventFieldPolicy.DERIVED_PREVIEW
-    )
-    assert (
-        EVENT_FIELD_POLICIES[EVENT_TYPES["message_emitted"]]["value_preview"]
-        is EventFieldPolicy.DERIVED_PREVIEW
+    assert all(
+        policy
+        in {
+            EventFieldPolicy.STRUCTURE,
+            EventFieldPolicy.CONTENT,
+            EventFieldPolicy.CONTENT_MAP_VALUES,
+            EventFieldPolicy.ERROR_MESSAGES,
+            EventFieldPolicy.PREPARED_REQUEST,
+            EventFieldPolicy.HTTP_RESPONSE,
+        }
+        for policies in EVENT_FIELD_POLICIES.values()
+        for policy in policies.values()
     )
 
 
@@ -113,17 +124,19 @@ def test_event_field_policy_content_boundary_is_exact():
         "run_started": {"inputs": EventFieldPolicy.CONTENT_MAP_VALUES},
         "request_started": {
             "url": EventFieldPolicy.CONTENT,
-            "headers": EventFieldPolicy.CONTENT_MAP_VALUES,
-            "body_preview": EventFieldPolicy.DERIVED_PREVIEW,
+            "request": EventFieldPolicy.PREPARED_REQUEST,
         },
         "request_finished": {
-            "headers": EventFieldPolicy.CONTENT_MAP_VALUES,
-            "body": EventFieldPolicy.CONTENT,
+            "url": EventFieldPolicy.CONTENT,
+            "request": EventFieldPolicy.PREPARED_REQUEST,
+            "response": EventFieldPolicy.HTTP_RESPONSE,
         },
-        "request_failed": {"message": EventFieldPolicy.CONTENT},
-        "message_emitted": {
-            "value_preview": EventFieldPolicy.DERIVED_PREVIEW
+        "request_failed": {
+            "url": EventFieldPolicy.CONTENT,
+            "message": EventFieldPolicy.CONTENT,
+            "request": EventFieldPolicy.PREPARED_REQUEST,
         },
+        "message_emitted": {"value": EventFieldPolicy.CONTENT},
         "assert_result": {
             "check": EventFieldPolicy.CONTENT,
             "expected": EventFieldPolicy.CONTENT,
@@ -187,7 +200,8 @@ def test_run_started_carries_history_format_marker():
     record = sink.records[0]
     assert record["seq"] == 1
     assert record["format"] == HISTORY_FORMAT == "napflow-run/1"
-    assert record["features"] == list(HISTORY_WRITE_FEATURES) == []
+    assert record["features"] == []  # helper streams are deliberately ephemeral
+    assert list(HISTORY_WRITE_FEATURES) == [HISTORY_FEATURE_CONTENT_BLOBS]
 
 
 def test_history_format_reader_gate():
@@ -223,7 +237,10 @@ def test_history_format_reader_gate_rejects_arbitrary_json(value):
 
 
 def test_history_feature_reader_gate():
-    assert parse_history_features([]) == HISTORY_SUPPORTED_FEATURES == frozenset()
+    assert parse_history_features([]) == frozenset()
+    assert parse_history_features([HISTORY_FEATURE_CONTENT_BLOBS]) == (
+        HISTORY_SUPPORTED_FEATURES
+    )
     with pytest.raises(HistoryFormatError):
         parse_history_features(None)
     with pytest.raises(HistoryFormatError):
@@ -268,9 +285,21 @@ def test_optional_payload_fields_omitted_when_unset():
     s.emit(
         AssertResult(node="a", check="status", expected=200, actual=200, passed=True)
     )
+    s.emit(
+        RequestFailed(
+            method="GET",
+            url="https://example.test",
+            error_kind="connection",
+            message="unreachable",
+            attempt=1,
+            will_retry=False,
+            redirects_total=0,
+        )
+    )
     assert "error_reason" not in sink.records[0]
     assert sink.records[1]["error_reason"] == "run_timeout"
     assert "op" not in sink.records[2]  # status checks carry no op
+    assert "request" not in sink.records[3]
 
 
 def test_frame_finished_is_a_reconstructable_child_summary():
@@ -386,9 +415,7 @@ def test_run_started_envelope_is_never_masked(secret):
     m = SecretMasker(["TOKEN"], {"TOKEN": secret})
     raw = CaptureSink()
     shown = CaptureSink()
-    s = EventStream(
-        "r", m, [raw], FIXED_CLOCK, presentation_sinks=[shown]
-    )
+    s = EventStream("r", m, [raw], FIXED_CLOCK, presentation_sinks=[shown])
     record = s.emit(
         RunStarted(
             flow="flows/demo",
@@ -448,6 +475,76 @@ def test_record_redaction_preserves_protocol_values_and_error_shape():
     assert raw["unhandled_errors"][0]["message"] == "request returned error"
 
 
+def test_http_record_redaction_preserves_nested_protocol_structure():
+    secret = "s3cr3t-value"
+    request = {
+        "method": "POST",
+        "url": f"https://example.test/?token={secret}",
+        "headers": {"Authorization": f"Bearer {secret}"},
+        "body": {"token": secret},
+        "size_bytes": 24,
+    }
+    response = {
+        "status": 201,
+        "headers": {"Set-Cookie": f"session={secret}"},
+        "body": {"token": secret},
+        "elapsed_ms": 12.5,
+        "url": f"https://example.test/?token={secret}",
+        "http_version": "HTTP/2",
+        "attempt": 2,
+        "size_bytes": 24,
+        "timing": {"total_ms": 12.5},
+        "retries_total": 1,
+        "redirects_total": 0,
+    }
+    raw = {
+        "event": "request_finished",
+        "method": "POST",
+        "url": request["url"],
+        "status": 201,
+        "http_version": "HTTP/2",
+        "size_bytes": 24,
+        "timing": {"total_ms": 12.5},
+        "attempt": 2,
+        "retries_total": 1,
+        "redirects_total": 0,
+        "request": request,
+        "response": response,
+    }
+
+    shown = masker(API_TOKEN=secret).redact_record(raw)
+
+    assert shown["method"] == "POST"
+    assert shown["status"] == 201
+    assert shown["timing"] == {"total_ms": 12.5}
+    assert shown["request"] == {
+        "method": "POST",
+        "url": "https://example.test/?token=***",
+        "headers": {"Authorization": "Bearer ***"},
+        "body": {"token": MASK},
+        "size_bytes": 24,
+    }
+    assert shown["response"]["status"] == 201
+    assert shown["response"]["headers"] == {"Set-Cookie": "session=***"}
+    assert shown["response"]["body"] == {"token": MASK}
+    assert shown["response"]["url"] == "https://example.test/?token=***"
+    assert response["body"] == {"token": secret}
+
+
+def test_http_record_redaction_fails_closed_for_unknown_nested_field():
+    request = {
+        "method": "GET",
+        "url": "https://example.test",
+        "headers": {},
+        "body": None,
+        "size_bytes": 0,
+        "future": "unclassified",
+    }
+
+    with pytest.raises(HistoryFormatError, match="fields mismatch"):
+        NO_SECRETS.redact_record({"event": "request_started", "request": request})
+
+
 @pytest.mark.parametrize(
     "record",
     [
@@ -476,19 +573,180 @@ def test_redacted_view_fails_closed_for_unclassified_error_shapes(
         )
 
 
-def test_run_started_feature_names_are_never_masked():
+def test_store_backed_stream_owns_feature_and_never_masks_it(tmp_path):
     feature = HISTORY_FEATURE_CONTENT_BLOBS
-    s = EventStream("r", SecretMasker(["TOKEN"], {"TOKEN": feature}), [], FIXED_CLOCK)
+    shown = CaptureSink()
+    s = EventStream(
+        "r",
+        SecretMasker(["TOKEN"], {"TOKEN": feature}),
+        [],
+        FIXED_CLOCK,
+        presentation_sinks=[shown],
+        content_store=RunContentStore(tmp_path / "r.jsonl"),
+    )
     record = s.emit(
         RunStarted(
             flow="flows/demo",
             env_name=None,
             inputs={},
             engine_version="0.2",
-            features=[feature],
         )
     )
     assert record["features"] == [feature]
+    assert shown.records[0]["features"] == [feature]
+
+
+def test_featureless_stream_does_not_honor_caller_claimed_blob_feature():
+    s, sink = stream()
+    s.emit(
+        RunStarted(
+            flow="flows/demo",
+            env_name=None,
+            inputs={},
+            engine_version="0.2",
+            features=[HISTORY_FEATURE_CONTENT_BLOBS],
+        )
+    )
+    assert sink.records[0]["features"] == []
+
+
+def test_record_content_resolution_is_feature_gated_and_collision_safe(tmp_path):
+    store = RunContentStore(tmp_path / "r.jsonl", inline_threshold_bytes=10_000)
+    user_value = {"$napflow": {"kind": "literal", "value": "user data"}}
+    logical = {"event": "log", "value": user_value}
+
+    persisted = persist_record_content(logical, store)
+
+    assert persisted["value"] == {"$napflow": {"kind": "literal", "value": user_value}}
+    assert resolve_record_content(persisted, [], store) == persisted
+    assert (
+        resolve_record_content(persisted, [HISTORY_FEATURE_CONTENT_BLOBS], store)
+        == logical
+    )
+    with pytest.raises(HistoryFormatError, match="unsupported"):
+        resolve_record_content(persisted, ["future-content/1"], store)
+
+
+def test_store_backed_stream_deduplicates_one_response_across_events(tmp_path):
+    store = RunContentStore(tmp_path / "r.jsonl", inline_threshold_bytes=1024)
+    canonical_a = CaptureSink()
+    canonical_b = CaptureSink()
+    presentation = CaptureSink()
+    stream = EventStream(
+        "r",
+        NO_SECRETS,
+        [canonical_a, canonical_b],
+        FIXED_CLOCK,
+        presentation_sinks=[presentation],
+        content_store=store,
+    )
+    request = {
+        "method": "GET",
+        "url": "https://example.test/data",
+        "headers": {"Accept": "text/plain"},
+        "body": None,
+        "size_bytes": 0,
+    }
+    body = "z" * 200_000
+    response = {
+        "status": 200,
+        "headers": {"Content-Type": "text/plain"},
+        "body": body,
+        "elapsed_ms": 12.5,
+        "url": "https://example.test/data",
+        "http_version": "HTTP/2",
+        "attempt": 1,
+        "size_bytes": len(body),
+        "timing": {"total_ms": 12.5},
+        "retries_total": 0,
+        "redirects_total": 0,
+    }
+    header = stream.emit(
+        RunStarted(
+            flow="flows/demo",
+            env_name=None,
+            inputs={},
+            engine_version="0.2",
+        )
+    )
+    finished = stream.emit(
+        RequestFinished(
+            method="GET",
+            url=request["url"],
+            status=200,
+            http_version="HTTP/2",
+            size_bytes=len(body),
+            timing={"total_ms": 12.5},
+            attempt=1,
+            retries_total=0,
+            redirects_total=0,
+            request=request,
+            response=response,
+        )
+    )
+    message = stream.emit(
+        MessageEmitted(
+            from_port="req.response",
+            to_node="log",
+            to_port="in",
+            msg_id="m-000001",
+            value=response,
+        )
+    )
+    ended = stream.emit(
+        RunFinished(
+            state="passed",
+            duration_ms=20.0,
+            asserts={"passed": 0, "failed": 0},
+            unhandled_errors=[],
+            end_outputs={"out": response},
+            nodes_never_fired=[],
+        )
+    )
+
+    assert header["features"] == [HISTORY_FEATURE_CONTENT_BLOBS]
+    assert canonical_a.records == canonical_b.records
+    assert finished["response"] == message["value"] == ended["end_outputs"]["out"]
+    assert finished["response"]["$napflow"]["kind"] == "blob"
+    assert len(list(store.blob_dir.iterdir())) == 1
+    assert (
+        resolve_record_content(finished, header["features"], store)["response"]
+        == response
+    )
+    shown_finished = next(
+        record
+        for record in presentation.records
+        if record["event"] == "request_finished"
+    )
+    assert shown_finished["response"] == response
+
+
+def test_store_backed_stream_redacts_logical_value_before_blob_fanout(tmp_path):
+    secret = "s3cr3t-value"
+    value = secret * 100
+    store = RunContentStore(tmp_path / "r.jsonl", inline_threshold_bytes=32)
+    canonical = CaptureSink()
+    presentation = CaptureSink()
+    stream = EventStream(
+        "r",
+        SecretMasker(["TOKEN"], {"TOKEN": secret}),
+        [canonical],
+        FIXED_CLOCK,
+        presentation_sinks=[presentation],
+        content_store=store,
+    )
+
+    persisted = stream.emit(LogEvent(value=value))
+
+    assert persisted["value"]["$napflow"]["kind"] == "blob"
+    assert canonical.records == [persisted]
+    assert presentation.records[0]["value"] == MASK * 100
+    assert (
+        resolve_record_content(persisted, [HISTORY_FEATURE_CONTENT_BLOBS], store)[
+            "value"
+        ]
+        == value
+    )
 
 
 # --------------------------------------------------------------------------
@@ -639,8 +897,7 @@ def test_retention_under_cap_deletes_nothing(tmp_path):
 
 def _write_finished_log(path, run_id, *, state="passed"):
     path.write_text(
-        json.dumps({"event": "run_finished", "run_id": run_id, "state": state})
-        + "\n",
+        json.dumps({"event": "run_finished", "run_id": run_id, "state": state}) + "\n",
         encoding="utf-8",
     )
 
@@ -856,9 +1113,7 @@ def test_retention_resumes_an_interrupted_claim(tmp_path):
     assert not (runs / f"{run_id}.deleting").exists()
 
 
-def test_deletion_claim_is_durable_metadata_before_unit_removal(
-    tmp_path, monkeypatch
-):
+def test_deletion_claim_is_durable_metadata_before_unit_removal(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     runs.mkdir()
     old_id = "20260712-100000-000001"

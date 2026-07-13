@@ -9,7 +9,8 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: v0.1.0 — developer preview.** The first working milestone:
+**Status: v0.1.0 release; v0.2 development through M4 — developer preview.**
+The first working milestone:
 file format, validator, CLI, headless engine (full node catalog), and
 the visual canvas (edit, run, inspect, history) work end to end on
 macOS, Windows, and Linux. All `v0.x` formats—including the current
@@ -32,8 +33,9 @@ full-fidelity prototype plan is in [docs/PLAN.md](docs/PLAN.md)
 4. **CI-first** — headless `napf run` with assert-driven exit codes is a
    first-class citizen, not an afterthought.
 5. **Full observability** — request/response detail (headers, bodies,
-   timing, retries) captured in run history; v0.2 removes the remaining
-   destructive capture limits with store-once full-fidelity content.
+   timing, retries) captured in run history; current v0.2 development stores
+   repeated large values once in hash-verified blobs with no destructive
+   capture limits and records the effective prepared request.
 
 ## What works today
 
@@ -42,7 +44,7 @@ full-fidelity prototype plan is in [docs/PLAN.md](docs/PLAN.md)
 | `napf init`  | ✅     | scaffold a workspace (demo + offline smoke flow included) |
 | `napf list`  | ✅     | discovered flows with their input/output ports |
 | `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with `file:line` diagnostics and CI exit codes |
-| `napf run`   | ✅     | headless engine — full node catalog incl. python worker, JSONL run history, exit codes 0/1/2/130 |
+| `napf run`   | ✅     | headless engine — full node catalog incl. python worker, full-value JSONL/blob history, prepared requests, exit codes 0/1/2/130 |
 | `napf ui`    | ✅     | visual canvas on localhost — edit flows (autosaved through the canonical serializer, clean diffs), edit `nodes.py` in-browser, run with live animated events + full request/response detail, replay any run from history, drill into subflows, clone shared flows |
 
 > **Raw history warning:** `.napflow/runs/` may contain complete request and

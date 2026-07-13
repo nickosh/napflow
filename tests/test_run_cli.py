@@ -14,7 +14,15 @@ import napflow.cli.main as cli_main
 import napflow.cli.report as cli_report
 from napflow.cli.main import app
 from napflow.core.engine import RunResult
-from napflow.core.events import EventStream, SecretMasker
+from napflow.core.events import (
+    HISTORY_FEATURE_CONTENT_BLOBS,
+    HISTORY_FORMAT,
+    EventStream,
+    HistoryFormatError,
+    SecretMasker,
+    persist_record_content,
+)
+from napflow.core.history_content import RunContentStore
 
 runner = CliRunner()
 
@@ -206,10 +214,7 @@ def report_manifest(kind: str) -> str:
 
 
 def retained_report_manifest(kind: str) -> str:
-    return (
-        MANIFEST
-        + f'defaults:\n  run:\n    report: "{kind}"\n    history: 1\n'
-    )
+    return MANIFEST + f'defaults:\n  run:\n    report: "{kind}"\n    history: 1\n'
 
 
 UNSET_SECRET_FLOW = """\
@@ -251,9 +256,7 @@ def test_error_terminal_and_report_redact_while_history_stays_raw(
     assert "variable '***' was never set" in result.stderr
     finished = jsonl_records(ws)[-1]
     assert "supersecret-token" in finished["unhandled_errors"][0]["message"]
-    report = next(
-        (ws / ".napflow" / "runs" / "flows" / "hello").glob("*.report.json")
-    )
+    report = next((ws / ".napflow" / "runs" / "flows" / "hello").glob("*.report.json"))
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["state"] == "failed"
     assert "supersecret-token" not in payload["unhandled_errors"][0]["message"]
@@ -262,16 +265,12 @@ def test_error_terminal_and_report_redact_while_history_stays_raw(
 
 def test_json_report(tmp_path, monkeypatch):
     leaky = HELLO_FLOW.replace("{{ env.GREETING }}", "{{ env.API_TOKEN }}")
-    ws = make_workspace(
-        tmp_path, flow_yaml=leaky, manifest=report_manifest("json")
-    )
+    ws = make_workspace(tmp_path, flow_yaml=leaky, manifest=report_manifest("json"))
     monkeypatch.chdir(ws)
     seen_presentation_sinks = []
     real_open = cli_main.open_run_stream
 
-    def observed_open(
-        workspace, prepared, *, extra_sinks=(), presentation_sinks=()
-    ):
+    def observed_open(workspace, prepared, *, extra_sinks=(), presentation_sinks=()):
         presentation_sinks_seen = list(presentation_sinks)
         seen_presentation_sinks.extend(presentation_sinks_seen)
         return real_open(
@@ -297,9 +296,7 @@ def test_json_report(tmp_path, monkeypatch):
     assert payload["asserts"] == {"passed": 1, "failed": 0}
     assert payload["end_outputs"] == {"result": {"msg": "***"}}
     finished = jsonl_records(ws)[-1]
-    assert finished["end_outputs"] == {
-        "result": {"msg": "supersecret-token"}
-    }
+    assert finished["end_outputs"] == {"result": {"msg": "supersecret-token"}}
 
 
 def test_junit_report_counts_match(tmp_path, monkeypatch):
@@ -358,9 +355,7 @@ def test_report_publication_does_not_follow_target_symlink(
     real_open = cli_main.open_run_stream
     planted = None
 
-    def planted_open(
-        workspace, prepared, *, extra_sinks=(), presentation_sinks=()
-    ):
+    def planted_open(workspace, prepared, *, extra_sinks=(), presentation_sinks=()):
         nonlocal planted
         opened = real_open(
             workspace,
@@ -399,9 +394,7 @@ def test_history_finalization_failure_does_not_replace_run_result(
     assert "warning: run history finalization failed" in result.stderr
 
 
-def test_stream_close_failure_preserves_result_and_abandons_history(
-    ws, monkeypatch
-):
+def test_stream_close_failure_preserves_result_and_abandons_history(ws, monkeypatch):
     def fail_close(_self):
         raise OSError("close failed")
 
@@ -436,9 +429,7 @@ def test_keyboard_interrupt_during_stream_close_exits_130_and_abandons_history(
     assert list(runs.glob("*.complete.json")) == []
 
 
-def test_fresh_keyboard_interrupt_during_adapter_reclose_exits_130(
-    ws, monkeypatch
-):
+def test_fresh_keyboard_interrupt_during_adapter_reclose_exits_130(ws, monkeypatch):
     original_close = EventStream.close
     close_calls = 0
 
@@ -459,6 +450,286 @@ def test_fresh_keyboard_interrupt_during_adapter_reclose_exits_130(
     assert list(runs.glob("*.active")) == []
     assert len(list(runs.glob("*.incomplete"))) == 1
     assert list(runs.glob("*.complete.json")) == []
+
+
+def _write_report_log(log_path: Path, records: list[dict]) -> None:
+    log_path.write_text(
+        "".join(f"{json.dumps(record, ensure_ascii=True)}\n" for record in records),
+        encoding="utf-8",
+    )
+
+
+def test_reports_resolve_blob_values_before_masking(tmp_path):
+    log_path = tmp_path / "blob-values.jsonl"
+    secret = "supersecret-token"
+    value = {"token": secret, "padding": "x" * 256}
+    store = RunContentStore(log_path, inline_threshold_bytes=32)
+    assertion = persist_record_content(
+        {
+            "event": "assert_result",
+            "node": "check",
+            "check": "equals",
+            "expected": value,
+            "actual": value,
+            "passed": False,
+        },
+        store,
+    )
+    finished = persist_record_content(
+        {
+            "event": "run_finished",
+            "state": "failed",
+            "duration_ms": 1.0,
+            "asserts": {"passed": 0, "failed": 1},
+            "unhandled_errors": [],
+            "end_outputs": {"result": value},
+            "nodes_never_fired": [],
+        },
+        store,
+    )
+    assert assertion["actual"]["$napflow"]["kind"] == "blob"
+    assert finished["end_outputs"]["result"]["$napflow"]["kind"] == "blob"
+    _write_report_log(
+        log_path,
+        [
+            {
+                "event": "run_started",
+                "seq": 1,
+                "format": HISTORY_FORMAT,
+                "features": [HISTORY_FEATURE_CONTENT_BLOBS],
+            },
+            assertion,
+            finished,
+        ],
+    )
+    result = RunResult(
+        state="failed",
+        end_outputs={"result": value},
+        asserts_passed=0,
+        asserts_failed=1,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=1.0,
+    )
+    masker = SecretMasker(["*TOKEN*"], {"API_TOKEN": secret})
+
+    json_path = cli_report.write_report(
+        "json", log_path, "flows/blob-values", result, masker=masker
+    )
+    junit_path = cli_report.write_report(
+        "junit", log_path, "flows/blob-values", result, masker=masker
+    )
+
+    assert json_path is not None
+    assert junit_path is not None
+    json_payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert json_payload["format"] == HISTORY_FORMAT
+    assert json_payload["features"] == [HISTORY_FEATURE_CONTENT_BLOBS]
+    assert store.resolve(json_payload["end_outputs"]["result"]) == {
+        "token": "***",
+        "padding": "x" * 256,
+    }
+    failure = ElementTree.parse(junit_path).getroot().find("testcase/failure")
+    assert failure is not None
+    assert "***" in failure.get("message")
+    assert secret not in json_path.read_text(encoding="utf-8")
+    assert secret not in junit_path.read_text(encoding="utf-8")
+
+
+def test_featureless_report_preserves_legacy_marker_shaped_literal(tmp_path):
+    log_path = tmp_path / "legacy-marker.jsonl"
+    marker_literal = {
+        "$napflow": {
+            "kind": "blob",
+            "hash": "sha256:" + "0" * 64,
+            "bytes": 999,
+            "media_type": "application/json",
+            "codec": "json",
+        }
+    }
+    _write_report_log(
+        log_path,
+        [
+            {"event": "run_started", "seq": 1},
+            {
+                "event": "run_finished",
+                "state": "passed",
+                "duration_ms": 1.0,
+                "asserts": {"passed": 0, "failed": 0},
+                "unhandled_errors": [],
+                "end_outputs": {"result": marker_literal},
+                "nodes_never_fired": [],
+            },
+        ],
+    )
+    result = RunResult(
+        state="passed",
+        end_outputs={"result": marker_literal},
+        asserts_passed=0,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=1.0,
+    )
+
+    report_path = cli_report.write_report(
+        "json",
+        log_path,
+        "flows/legacy-marker",
+        result,
+        masker=SecretMasker([], {}),
+    )
+
+    assert report_path is not None
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["end_outputs"] == {"result": marker_literal}
+
+
+def test_reports_skip_unrelated_missing_request_blob(tmp_path):
+    log_path = tmp_path / "lazy-report.jsonl"
+    store = RunContentStore(log_path, inline_threshold_bytes=64)
+    response = {
+        "status": 200,
+        "headers": {"content-type": "text/plain"},
+        "body": "unrelated" * 128,
+        "size_bytes": 1_152,
+        "timing": {},
+        "elapsed_ms": 1.0,
+        "url": "https://example.test/final",
+        "http_version": "HTTP/1.1",
+        "attempt": 1,
+        "retries_total": 0,
+        "redirects_total": 0,
+    }
+    request_record = persist_record_content(
+        {"event": "request_finished", "response": response}, store
+    )
+    descriptor = request_record["response"]["$napflow"]
+    assert descriptor["kind"] == "blob"
+    digest = descriptor["hash"].removeprefix("sha256:")
+    (store.blob_dir / digest).unlink()
+    _write_report_log(
+        log_path,
+        [
+            {
+                "event": "run_started",
+                "seq": 1,
+                "format": HISTORY_FORMAT,
+                "features": [HISTORY_FEATURE_CONTENT_BLOBS],
+            },
+            request_record,
+            {
+                "event": "assert_result",
+                "node": "check",
+                "check": "present",
+                "expected": None,
+                "actual": "ok",
+                "passed": True,
+            },
+            {
+                "event": "run_finished",
+                "state": "passed",
+                "duration_ms": 1.0,
+                "asserts": {"passed": 1, "failed": 0},
+                "unhandled_errors": [],
+                "end_outputs": {"result": "ok"},
+                "nodes_never_fired": [],
+            },
+        ],
+    )
+    result = RunResult(
+        state="passed",
+        end_outputs={"result": "ok"},
+        asserts_passed=1,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=1.0,
+    )
+
+    json_path = cli_report.write_report(
+        "json", log_path, "flows/lazy", result, masker=SecretMasker([], {})
+    )
+    junit_path = cli_report.write_report(
+        "junit", log_path, "flows/lazy", result, masker=SecretMasker([], {})
+    )
+
+    assert json_path is not None
+    assert json.loads(json_path.read_text(encoding="utf-8"))["end_outputs"] == {
+        "result": "ok"
+    }
+    assert junit_path is not None
+    assert ElementTree.parse(junit_path).getroot().get("tests") == "1"
+
+
+def test_report_rejects_unknown_history_feature_before_records(tmp_path):
+    log_path = tmp_path / "unknown-feature.jsonl"
+    _write_report_log(
+        log_path,
+        [
+            {
+                "event": "run_started",
+                "seq": 1,
+                "format": HISTORY_FORMAT,
+                "features": ["future/1"],
+            },
+            {"event": "run_finished", "duration_ms": 1.0},
+        ],
+    )
+    result = RunResult(
+        state="passed",
+        end_outputs={},
+        asserts_passed=0,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=1.0,
+    )
+
+    with pytest.raises(HistoryFormatError, match="unsupported run-history features"):
+        cli_report.write_report(
+            "json",
+            log_path,
+            "flows/unknown",
+            result,
+            masker=SecretMasker([], {}),
+        )
+
+
+@pytest.mark.parametrize(
+    ("header", "message"),
+    [
+        (
+            {"event": "run_started", "seq": 1, "format": "napflow-run/2"},
+            "unsupported run-history format major",
+        ),
+        (
+            {"event": "run_started", "seq": 1, "features": []},
+            "legacy run history cannot declare storage features",
+        ),
+    ],
+)
+def test_report_rejects_incompatible_history_envelope(tmp_path, header, message):
+    log_path = tmp_path / "incompatible.jsonl"
+    _write_report_log(log_path, [header])
+    result = RunResult(
+        state="passed",
+        end_outputs={},
+        asserts_passed=0,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=0,
+    )
+
+    with pytest.raises(HistoryFormatError, match=message):
+        cli_report.write_report(
+            "json",
+            log_path,
+            "flows/incompatible",
+            result,
+            masker=SecretMasker([], {}),
+        )
 
 
 def test_junit_report_sanitizes_xml_attributes(tmp_path):

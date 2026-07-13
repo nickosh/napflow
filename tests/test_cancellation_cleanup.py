@@ -17,6 +17,7 @@ import pytest
 import napflow.core.engine as engine_module
 from napflow.core.engine import FlowRun
 from napflow.core.events import EventStream, JsonlSink, SecretMasker
+from napflow.core.httpclient import WireRequest
 from napflow.core.models.manifest import Manifest
 from napflow.core.runprep import prepare_run
 from napflow.core.workspace import load_workspace
@@ -89,9 +90,20 @@ class _BlockingHttpClient:
         self.closed = False
         type(self).instances.append(self)
 
-    async def request(self, **_kwargs: Any) -> Any:
+    async def request(self, **kwargs: Any) -> Any:
         self.active_requests += 1
         self.entered.set()
+        on_prepared = kwargs.get("on_prepared")
+        if on_prepared is not None:
+            on_prepared(
+                WireRequest(
+                    method=kwargs["method"],
+                    url=kwargs["url"],
+                    headers=dict(kwargs.get("headers") or {}),
+                    body=None,
+                    size_bytes=0,
+                )
+            )
         try:
             await self._never.wait()
         finally:

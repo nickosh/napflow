@@ -27,6 +27,7 @@ from napflow.core.events import (
     complete_run_history,
     new_run_id,
 )
+from napflow.core.history_content import RunContentStore
 from napflow.core.loader import LoadedFlow, LoadError, load_flow
 from napflow.core.workspace import (
     EnvFileError,
@@ -142,6 +143,7 @@ class OpenedRun:
     log_path: Path
     stream: EventStream
     masker: SecretMasker
+    content_store: RunContentStore
     history_unit: RunHistoryUnit
     history_limit: int
 
@@ -181,17 +183,20 @@ def open_run_stream(
             log_path.unlink(missing_ok=True)
         raise
     masker = SecretMasker(manifest.environments.secrets, prepared.env)
+    content_store = RunContentStore(log_path)
     stream = EventStream(
         run_id,
         masker,
         [jsonl, *extra_sinks],
         presentation_sinks=presentation_sinks,
+        content_store=content_store,
     )
     return OpenedRun(
         run_id=run_id,
         log_path=log_path,
         stream=stream,
         masker=masker,
+        content_store=content_store,
         history_unit=history_unit,
         history_limit=manifest.defaults.run.history,
     )

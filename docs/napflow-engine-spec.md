@@ -8,18 +8,16 @@ senior review: worker stdout protocol integrity, loader write path +
 diagnostics, native-value templating (**D25**), budget default, run
 capture valve, Windows loop policy, trust model (EC28–EC37).
 
-Compatibility/current-state note (D33–D39): this document
-describes the v0.1 engine unless a section says otherwise. Event/history
-formats are experimental during package v0.x. The accepted v0.2 redesign
-(fair lifecycle, full-fidelity blob-backed history, raw local truth plus
-optional terminal/report masking, and basic paged/lazy replay) is sequenced in
-`PLAN.md` and must
-be folded into this spec in the same PRs that implement it.
-Amended 2026-07-13 for v0.2/M4: the content-store codec foundation and
-exhaustive raw/redacted event-field seam are implemented, and D39's custom
-permission/owner layer has been removed. Blob feature activation, prepared
-requests, and lazy replay remain sequenced below; exports and advanced replay
-remain deferred.
+Compatibility/current-state note (D33–D39): this document describes current
+implemented behavior; superseded v0.1 behavior is labeled historical.
+Event/history formats remain experimental during package v0.x. Fair lifecycle,
+full-fidelity blob-backed history, raw local truth, and optional
+terminal/report masking are implemented. Amended 2026-07-13 for v0.2/M4:
+production streams activate `content-blobs/1`, full messages and prepared-wire
+HTTP records replace previews, destructive capture valves are removed, and
+core/report/server/UI consumers preserve lazy descriptor boundaries. Basic
+paged REST/browser blob fetch remains M5; exports and advanced replay remain
+deferred.
 
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
@@ -219,9 +217,9 @@ Pins made at S2/M3 (2026-07-05, `core/engine.py`):
   rule 5) and `note`; `start` counts as fired via seeding.
 - **`run_started.inputs`** = caller-supplied bindings, pre-coercion
   (BIND may still fail; effective inputs appear as `start.out`).
-- **`value_preview`** (message_emitted): the native value when its
-  compact JSON is ≤ 512 chars, else the truncated JSON string marked
-  `…(truncated)`.
+- **`message_emitted.value` (v0.2/M4):** the complete logical message value.
+  Store-backed streams keep it inline or substitute a typed blob reference;
+  featureless legacy readers may still consume historical `value_preview`.
 - **`delay` runs in S2** — pulled forward from the S3 node set because
   TR-2's sentinel-race tests need an async node. Other S3/S4 node
   types in a flow ⇒ run `error` (`unsupported_node_type`), never a
@@ -458,8 +456,9 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     attempts performed − 1.
   - **Body decode**: JSON mime → native value; `text/*` and XML/form
     mimes → text; anything else → the binary envelope (FR-207); empty
-    body → null. Capture accounting uses the encoded form (base64
-    length for binary). **Body encode**: dict/list → JSON; str → UTF-8
+    body → null. `size_bytes` is the exact received body byte count; a
+    binary envelope's base64 display length does not replace wire size.
+    **Body encode**: dict/list → JSON; str → UTF-8
     raw with no implicit content-type; other scalars →
     `stringify_native`; an inbound envelope sends its decoded bytes
     (its `content_type` applies when no header is set). The envelope is
@@ -469,10 +468,14 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     port and is not retried (EC48).
   - **Header/query values stringify post-render** (D25 Scalar pin) —
     `n: 3` arrives as `"3"`.
-  - **Capture valves cap the EVENT copy only**; the `response` port
-    value always carries the full body in memory. Truncation wrappers:
-    text → `{"__truncated__": true, "size_bytes", "prefix"}`; binary →
-    the envelope with sliced base64 + `"truncated": true`.
+  - **Prepared/full-fidelity observation (v0.2/M4):** niquests' pre-request
+    hook snapshots the effective method, encoded URL/query, library/session
+    headers and cookies, exact body/no-body distinction, and byte size before
+    I/O. A redirect-aware final snapshot is attached to finish/failure.
+    Request output and history share one complete response object containing
+    status, headers, decoded body, size, URL/version, elapsed/timing, attempt,
+    retry count, and redirect count. Persistence never changes that runtime
+    value and no request/run capture valve remains.
   - **Timing** best-effort per §7: `total_ms` always; dns/connect/tls/
     ttfb only where `conn_info` exposes the latency.
 - **set/get** — frame variable map; set forwards written value.
@@ -757,18 +760,24 @@ One JSON object per line/frame. Common fields:
 ```
 run_started      {format, features, flow, env_name, inputs, engine_version}
 node_fired       {firing_no}
-request_started  {method, url, headers, body_preview, attempt}
-request_finished {status, http_version, headers, body, size_bytes,
+request_started  {method, url, attempt,
+                  request: {method, url, headers, body, size_bytes}}
+request_finished {method, url, status, http_version, size_bytes,
                   timing: {dns_ms?, connect_ms?, tls_ms?, ttfb_ms, total_ms},
-                  attempt, retries_total}
-request_failed   {error_kind, message, attempt, will_retry}
-message_emitted  {from_port, to_node, to_port, msg_id, value_preview}
+                  attempt, retries_total, redirects_total,
+                  request: {method, url, headers, body, size_bytes},
+                  response: {status, headers, body, size_bytes, timing,
+                             elapsed_ms, url, http_version, attempt,
+                             retries_total, redirects_total}}
+request_failed   {method, url, error_kind, message, attempt, will_retry,
+                  redirects_total, request?}
+message_emitted  {from_port, to_node, to_port, msg_id, value}
 assert_result    {check, op, expected, actual, passed}
 python_error     {function, error_type, message, traceback}
 log              {label, level, value}
 guard_tripped    {kind: counter|timeout, port: exhausted|expired}
 budget_warning   {remaining}            # at 10% left
-capture_warning  {remaining_mb}         # run capture budget at 10% left
+capture_warning  {remaining_mb}         # legacy-readable; no longer emitted
 frame_finished   {parent_frame, parent_node, flow, kind: flow|loop,
                   loop_index, duration_ms, state,
                   asserts: {passed, failed}, unhandled_errors, end_outputs}
@@ -782,12 +791,11 @@ run_finished     {state, duration_ms, asserts: {passed, failed},
 
 Rules:
 
-> **Known v0.1 capture gaps, reopened for v0.2:** capture can be bypassed
-> through Log/message/End output paths and can keep writing prefixes after
-> its run budget (EC32); request history is a pre-transport preview rather
-> than the final prepared request (EC50). D34 + PLAN M4 are the accepted
-> target. EC45's raw/redacted boundary has landed; D39 defers export rather
-> than leaving it as open M4 work.
+> **v0.2/M4 current:** every schema-declared content path uses the same
+> store-once policy, including prepared requests, complete HTTP responses,
+> messages, Log/error values, and child/root End outputs. The old previews,
+> destructive body/run valves, and new `capture_warning` emission are removed
+> (EC32/EC50). The legacy event type remains readable under v0.x best effort.
 
 - **Raw local truth + redacted presentation (D35)**: `EventStream` stamps one
   raw canonical record and sends it unchanged to JSONL and the local
@@ -804,12 +812,20 @@ Rules:
   identifiers, enums, state/error vocabulary, control metadata, and error
   record structure are never rewritten. Unknown fields fail closed when a
   redacted view is requested. Runtime-acquired tokens remain EC10.
-- `message_emitted.value_preview` and `request_started.body_preview` are
-  explicitly classified as **derived previews**, not full-fidelity content;
-  both must be replaced by the full message/prepared-request contract before
-  `content-blobs/1` activates. `request_finished.body` still uses the v0.1
-  body/run capture ceilings and truncated marker. Those destructive valves
-  remain EC32 work and are not represented as D34-complete storage.
+- `message_emitted.value` is complete. Prepared requests and HTTP responses
+  are each classified as one logical aggregate: storing the response object as
+  a unit lets the identical value on request/message/Log/End paths resolve to
+  one blob/hash rather than nested duplicate body blobs. Cheap status, URL,
+  size, timing, attempt, retry, and redirect summaries remain structural on
+  the request event so history lists need not fetch the aggregate.
+- `request_started.request` is the effective initial prepared request.
+  `request_finished.request` is the final redirect-aware request;
+  `request_failed.request`, when preparation occurred, is the last effective
+  request. Thus a redirect may legitimately make start and finish URLs differ.
+- Feature-aware consumers call the schema-gated resolver only when they need a
+  content field. Reports skip unrelated events (and therefore unrelated
+  missing blobs); REST/finished WebSocket replay passes canonical descriptors
+  unchanged. Browser on-demand blob fetch is the next M5 boundary.
 - Timing fields included where niquests exposes them, else omitted.
 - On abort, an in-flight request leaves a `request_started` with no
   matching `request_finished`; replay tolerates a dangling start (EC20).
@@ -841,7 +857,7 @@ Pins made at S2/M2 (2026-07-05, `core/events.py`):
   Windows ACLs), with no napflow-specific owner or private-mode contract.
 - **Field policy + redaction (v0.2/M4)**: every event dataclass field is
   exhaustively classified as structure, complete content, keyed content,
-  error-message content, or derived preview. Import fails if the registry and
+  error-message content, prepared request, or HTTP response. Import fails if the registry and
   vocabulary diverge. The same registry is the boundary for presentation
   redaction now and content-store substitution later; values are replaced
   longest-first, dictionary/map keys are always preserved, and only
@@ -849,19 +865,14 @@ Pins made at S2/M2 (2026-07-05, `core/events.py`):
 
 ## 7a. Run-history format contract (v0.2 — FR-1101, D34)
 
-This section pins the run-history on-disk format **before** v0.2 changes
-storage, so every run written from M0 on is self-identifying and later
-readers can gate cleanly. The format-version marker landed in M0
-(`core/events.py`); the blob/index machinery it describes lands in
-M3–M5. M4's byte codec and immutable per-run store foundation live in
-`core/history_content.py`; `core/events.py` now owns the exhaustive field
-policy and raw/redacted-view boundary. Event integration is deliberately not
-active yet: a current `napflow-run/1` log still declares `features: []` and is
-a pure inline JSONL stream. `request_started.body_preview` and
-`message_emitted.value_preview` remain registry-marked fidelity blockers. The
-blob-reference and index shapes below remain reserved on the wire until the
-prepared-request/full-message schemas, shared JSONL/WebSocket encoding, and
-lazy consumers activate together.
+This section pins the current run-history on-disk format. The base marker
+landed in M0 and `content-blobs/1` activated in M4 only after the byte codec,
+immutable per-run store, exhaustive event policy, full-value schemas,
+shared JSONL/WebSocket encoding, and lazy consumer resolver were present
+together. Production `napflow-run/1` logs now declare
+`features: ["content-blobs/1"]`; deliberately ephemeral EventStreams remain
+featureless and inline. M5 adds paged REST/browser fetching without changing
+the canonical JSONL or descriptor format below.
 
 **Envelope + version.** `run_started` is the envelope header: it is
 always `seq` 1 and carries `format: "napflow-run/<major>"`
@@ -884,15 +895,13 @@ later record:
 - the major bumps on a breaking change to the base event/envelope rules;
   a feature's version changes when that capability's shape/semantics break.
 
-M0's writer and reader feature sets are empty. M4 activates
-`content-blobs/1` only in the same change that implements hash verification,
-literal escaping, omission handling, and lazy value resolution. Therefore
-this M0 reader rejects a correctly declared blob-bearing future history
-instead of treating `$napflow` as ordinary replay output. Without that
-declared feature, `$napflow` inside an inline value remains ordinary user
-data; readers never guess capabilities by scanning arbitrary payloads. The
-short-lived pre-registry M0 `napflow-run/1` logs are read with a missing
-`features` field interpreted as `[]`; an explicitly present null is invalid.
+M4's writer and reader support `content-blobs/1` together with hash
+verification, literal escaping, omission errors, and lazy value resolution.
+Unknown features are still refused. Without the declared feature, `$napflow`
+inside an inline value remains ordinary user data; readers never guess
+capabilities by scanning arbitrary payloads. Short-lived M0
+`napflow-run/1` logs are read with a missing `features` field interpreted as
+`[]`; an explicitly present null is invalid.
 
 An empty prefix is valid only while a live run has not flushed its header.
 It is not a readable completed history.
@@ -904,37 +913,37 @@ ordering). Replay is re-reading — never re-execution (D13).
 
 **Schema-declared field policy.** The common envelope plus every field not
 named below is structural and copied exactly. Content-map keys (input/End
-ports and header names) are structural; only their values are content.
-`unhandled_errors` keeps its record keys/IDs/kinds structural and classifies
-only each `message` as content. This registry is exhaustive against the event
-dataclasses and is the only legal dispatch surface for future persistence or
-current redaction:
+ports) are structural; only their values are content. `unhandled_errors`
+keeps record keys/IDs/kinds structural and classifies only each `message` as
+content. Prepared-request and HTTP-response objects are one logical content
+value for persistence, with exact nested schemas for fail-closed presentation
+redaction. This registry is exhaustive against the event dataclasses and is
+the only legal persistence/redaction dispatch surface:
 
-| Event | complete content | keyed content | derived preview |
-|---|---|---|---|
-| `run_started` | — | `inputs` values | — |
-| `request_started` | `url` | `headers` values | `body_preview` |
-| `request_finished` | `body` | `headers` values | — |
-| `request_failed` | `message` | — | — |
-| `message_emitted` | — | — | `value_preview` |
-| `assert_result` | `check`, `expected`, `actual` | — | — |
-| `python_error` | `message`, `traceback` | — | — |
-| `log` | `label`, `value` | — | — |
-| `frame_finished` | `unhandled_errors[*].message` | `end_outputs` values | — |
-| `run_finished` | `unhandled_errors[*].message` | `end_outputs` values | — |
+| Event | complete/aggregate content | keyed content |
+|---|---|---|
+| `run_started` | — | `inputs` values |
+| `request_started` | `url`, prepared `request` | — |
+| `request_finished` | `url`, prepared `request`, full `response` | — |
+| `request_failed` | `url`, `message`, optional prepared `request` | — |
+| `message_emitted` | `value` | — |
+| `assert_result` | `check`, `expected`, `actual` | — |
+| `python_error` | `message`, `traceback` | — |
+| `log` | `label`, `value` | — |
+| `frame_finished` | `unhandled_errors[*].message` | `end_outputs` values |
+| `run_finished` | `unhandled_errors[*].message` | `end_outputs` values |
 
-`node_fired`, `guard_tripped`, `budget_warning`, and `capture_warning` have
-no content fields. Methods, states, operators, error kinds/reasons,
-timing/retry data, and every identifier remain structural. The prepared
-request work may add fields only by updating this table/registry in the same
-change; derived previews cannot be passed to the content store as if they were
-complete observations.
+`node_fired`, `guard_tripped`, `budget_warning`, and legacy
+`capture_warning` have no content fields. Methods, states, operators, error
+kinds/reasons, timing/retry/redirect summaries, and every identifier remain
+structural. Any new field must update the dataclass, table, and executable
+registry together or import/processing fails closed.
 
 **Persisted-value envelope and collision rule.** Storage substitution is
-performed only at schema-declared payload fields (request/response body,
-message/log value, error payload, and End outputs), never by recursively
-guessing that an arbitrary object inside user data is protocol. A tagged
-value requires the declared `content-blobs/1` feature, has one reserved
+performed only at schema-declared payload fields (including prepared-request
+and full-response aggregates, message/Log/error values, and End outputs),
+never by recursively guessing that an arbitrary object inside user data is
+protocol. A tagged value requires the declared `content-blobs/1` feature, has one reserved
 outer key, `$napflow`, and uses one of these exact descriptor shapes:
 
 ```
@@ -967,11 +976,14 @@ the bytes that would be stored, before deciding inline versus blob:
 - `binary`: the exact raw bytes (not their base64 text); replay reconstructs
   napflow's JSON binary envelope at the presentation/runtime boundary.
 
-“JSON-compatible” means the exact JSON data model: null, booleans, finite
-numbers, strings, lists, and objects with string keys. Python-only containers
-and keys (including tuples and non-string mapping keys) are rejected before
-serialization; they are never silently normalized into a different replayed
-value or allowed to collapse duplicate stringified keys.
+“JSON-compatible” means the exact logical JSON data model: null, booleans,
+finite numbers, strings, lists, and objects with string keys. Round-trip YAML
+loader wrappers such as `ScalarInt`, quoted-string subclasses,
+`CommentedSeq`, and `CommentedMap` normalize to those corresponding built-in
+logical values before hashing; their spelling/comment metadata is not runtime
+data. Python-only containers and keys (including tuples and non-string mapping
+keys) are rejected before serialization; they are never silently reshaped or
+allowed to collapse duplicate stringified keys.
 
 `hash` is `sha256:` over exactly those stored bytes and `bytes` is their
 length. A reader verifies both before decoding. Repeated identical stored
@@ -1014,6 +1026,18 @@ omitted, and corrupt content are distinct explicit errors, never partial
 fallbacks. A crash may leave an unreachable partial blob before any descriptor
 was appended; it is non-authoritative run-unit debris and is removed with that
 whole unit rather than inferred as history.
+
+**Resolution and report consumers.** `persist_record_content(record, store)`
+and `resolve_record_content(record, features, store)` are the core
+schema-aware boundaries. Featureless records are copied without interpreting
+marker-shaped user data; unknown features fail before content inspection.
+JSON/JUnit reporting first gates the header and then resolves only event kinds
+it renders. JSON reports for blob-aware runs carry the same `format`/`features`
+metadata and re-persist the redacted final summary through the run store, so an
+unchanged large End value retains the canonical descriptor/hash instead of
+being duplicated inline. JUnit materializes only rendered assertion/error
+values. An unrelated missing request blob therefore does not block a report
+that never reads it.
 
 **Retention unit.** A run is one atomic retention unit: its JSONL, blobs,
 indexes, and reports are created and deleted together. Retention operates
@@ -1128,11 +1152,11 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
 
 ## 9. Resolved (was: open questions)
 
-- **Body capture (v0.1 intended behavior, EC32 reopened):** the current
-  10MB-per-body/run valves emit `truncated: true`, but do not reliably
-  bound all persisted payload paths and conflict with complete local
-  observability. D34's store-once full-fidelity model replaces them in
-  v0.2; do not treat this item as resolved.
+- **Body/content capture (resolved v0.2/M4):** the historical
+  10MB-per-body and 500MB-per-run valves, preview fields, and truncation
+  wrappers are removed. All persisted content paths use D34's store-once
+  full-fidelity descriptors while runtime values stay complete (EC32,
+  FR-1102/TR-16).
 - **Per-node execution timeout: IN v0.1**, enforced via the worker
   subprocess model (§5a) for python nodes and task cancellation for all
   others. Per-node `max_seconds`, global default

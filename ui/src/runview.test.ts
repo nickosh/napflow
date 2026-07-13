@@ -133,7 +133,7 @@ describe("applyRecord", () => {
         to_node: "b",
         to_port: "in",
         msg_id: "m-1",
-        value_preview: { hello: 1 },
+        value: { hello: 1 },
       }),
     );
     expect(view.nodes.a.ports["out:out"]).toMatchObject({
@@ -155,7 +155,7 @@ describe("applyRecord", () => {
         to_node: "b",
         to_port: "in",
         msg_id: "m-2",
-        value_preview: "next",
+        value: "next",
       }),
     );
     expect(view.nodes.a.ports["out:out"]).toMatchObject({
@@ -164,9 +164,32 @@ describe("applyRecord", () => {
     });
   });
 
+  it("prefers a complete null value over a legacy preview", () => {
+    const view = emptyRunView();
+    applyRecord(
+      view,
+      root("message_emitted", "a", {
+        from_port: "a.out",
+        to_node: "b",
+        to_port: "in",
+        msg_id: "m-1",
+        value: null,
+        value_preview: "stale preview",
+      }),
+    );
+
+    expect(view.nodes.a.ports["out:out"].lastValue).toBeNull();
+    expect(view.nodes.b.ports["in:in"].lastValue).toBeNull();
+  });
+
   it("summarizes the request exchange for the inspector (M5.5)", () => {
     const view = emptyRunView();
-    applyRecord(view, root("request_started", "req", { method: "GET", url: "http://x", headers: {}, body_preview: null, attempt: 1 }));
+    applyRecord(view, root("request_started", "req", {
+      method: "GET",
+      url: "http://x",
+      attempt: 1,
+      request: { method: "GET", url: "http://x", headers: {}, body: null, size_bytes: 0 },
+    }));
     expect(view.nodes.req.request).toMatchObject({ method: "GET", url: "http://x", status: null });
     applyRecord(view, root("request_finished", "req", { status: 200, size_bytes: 12, timing: { total_ms: 34.2 }, attempt: 1, retries_total: 3 }));
     expect(view.nodes.req.request).toMatchObject({
@@ -180,7 +203,12 @@ describe("applyRecord", () => {
 
   it("keeps the retry error visible on the request summary", () => {
     const view = emptyRunView();
-    applyRecord(view, root("request_started", "req", { method: "GET", url: "http://x", headers: {}, body_preview: null, attempt: 1 }));
+    applyRecord(view, root("request_started", "req", {
+      method: "GET",
+      url: "http://x",
+      attempt: 1,
+      request: { method: "GET", url: "http://x", headers: {}, body: null, size_bytes: 0 },
+    }));
     applyRecord(view, root("request_failed", "req", { error_kind: "timeout", message: "t/o", attempt: 1, will_retry: true }));
     expect(view.nodes.req.request).toMatchObject({
       url: "http://x",
@@ -242,11 +270,45 @@ describe("applyRecord", () => {
 });
 
 describe("reduceRun (history replay)", () => {
+  it("falls back to message previews in featureless legacy history", () => {
+    const view = reduceRun([
+      rec("run_started", {
+        format: "napflow-run/1",
+        features: [],
+        flow: "flows/x",
+        env_name: null,
+      }),
+      root("message_emitted", "a", {
+        from_port: "a.out",
+        to_node: "b",
+        to_port: "in",
+        msg_id: "m-1",
+        value_preview: { legacy: true },
+      }),
+      rec("run_finished", {
+        state: "passed",
+        duration_ms: 1,
+        asserts: { passed: 0, failed: 0 },
+        unhandled_errors: [],
+        end_outputs: {},
+        nodes_never_fired: [],
+      }),
+    ]);
+
+    expect(view.nodes.a.ports["out:out"].lastValue).toEqual({ legacy: true });
+    expect(view.nodes.b.ports["in:in"].lastValue).toEqual({ legacy: true });
+  });
+
   it("tolerates a dangling request_started (EC20) as incomplete", () => {
     const view = reduceRun([
       rec("run_started", { flow: "flows/x", env_name: null }),
       root("node_fired", "req", { firing_no: 1 }),
-      root("request_started", "req", { method: "GET", url: "http://x", headers: {}, body_preview: null, attempt: 1 }),
+      root("request_started", "req", {
+        method: "GET",
+        url: "http://x",
+        attempt: 1,
+        request: { method: "GET", url: "http://x", headers: {}, body: null, size_bytes: 0 },
+      }),
       // aborted mid-request: the JSONL just stops (EC20)
     ]);
     expect(view.state).toBe("incomplete");
@@ -281,7 +343,7 @@ describe("matchesTraffic (wire/port → crossed messages, M5.5)", () => {
       to_node: "b",
       to_port: "in",
       msg_id: "m-1",
-      value_preview: 42,
+      value: 42,
     });
     expect(matchesTraffic(emit, { kind: "edge", from: "a.out", to: "b.in" })).toBe(true);
     expect(matchesTraffic(emit, { kind: "edge", from: "a.out", to: "c.in" })).toBe(false);

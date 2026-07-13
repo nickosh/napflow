@@ -14,7 +14,7 @@ def test_spec_example_parses(load_yaml) -> None:
     assert manifest.workspace.name == "qa-api-flows"
     assert manifest.flows.root == "flows"
     assert manifest.environments.default == "dev"
-    assert manifest.environments.secrets == ["API_TOKEN", "*_PASSWORD"]
+    assert manifest.environments.secrets == []
     assert manifest.defaults.request.headers["User-Agent"].startswith("napflow/0.1")
     assert manifest.defaults.run.report == "junit"
     assert manifest.defaults.run.run_timeout_s is None
@@ -37,8 +37,6 @@ def test_minimal_manifest_gets_documented_defaults() -> None:
     assert manifest.defaults.run.message_budget == 100_000
     assert manifest.defaults.run.node_timeout_s == 300
     assert manifest.defaults.run.run_timeout_s is None
-    assert manifest.defaults.run.body_capture_mb == 10
-    assert manifest.defaults.run.run_capture_mb == 500
     assert manifest.python.interpreter is None
     assert manifest.codegen is None
 
@@ -51,6 +49,8 @@ def test_minimal_manifest_gets_documented_defaults() -> None:
         {"schema": "napflow/v1", "flowz": {}},  # unknown top-level key
         {"schema": "napflow/v1", "defaults": {"run": {"report": "xml"}}},
         {"schema": "napflow/v1", "defaults": {"run": {"message_budget": 0}}},
+        {"schema": "napflow/v1", "defaults": {"run": {"body_capture_mb": 10}}},
+        {"schema": "napflow/v1", "defaults": {"run": {"run_capture_mb": 500}}},
     ],
 )
 def test_rejected(bad: dict) -> None:

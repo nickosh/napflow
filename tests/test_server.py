@@ -72,7 +72,7 @@ def make_retained_scaffold_ws(tmp_path: Path, history: int = 1) -> Workspace:
     manifest = wsdir / "napflow.yaml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8")
-        + f'defaults:\n  run:\n    history: {history}\n',
+        + f"defaults:\n  run:\n    history: {history}\n",
         encoding="utf-8",
     )
     return load_workspace(wsdir)
@@ -267,17 +267,16 @@ edges:
         events = (await replay.json())["events"]
 
         assert events == canonical
-        assert next(event for event in events if event["event"] == "log")[
-            "value"
-        ] == secret
+        assert (
+            next(event for event in events if event["event"] == "log")["value"]
+            == secret
+        )
         assert events[-1]["end_outputs"] == {"result": secret}
 
     with_client(ws, scenario)
 
 
-def test_server_sink_close_failure_still_finishes_lifecycle(
-    tmp_path, monkeypatch
-):
+def test_server_sink_close_failure_still_finishes_lifecycle(tmp_path, monkeypatch):
     ws = make_scaffold_ws(tmp_path)
 
     def fail_close(_self):
@@ -583,7 +582,7 @@ def test_history_replay_validates_envelope_for_rest_and_finished_ws(
         elif case == "wrong-event":
             records[0]["event"] = "node_fired"
         elif case == "unknown-feature":
-            records[0]["features"] = [HISTORY_FEATURE_CONTENT_BLOBS]
+            records[0]["features"] = ["content-blobs/2"]
         elif case == "surrogate-feature":
             records[0]["features"] = ["\ud800"]
         elif case == "null-features":
@@ -621,6 +620,76 @@ def test_history_replay_validates_envelope_for_rest_and_finished_ws(
                     break
                 frames.append(json.loads(message["text"]))
         assert frames == (records if accepted else [])
+
+    with_client(ws, scenario)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["supported-content-blob", "featureless-marker-literal"],
+)
+def test_finished_replay_keeps_persisted_message_records_lazy(tmp_path, case):
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        started = await start_run(client, "flows/smoke")
+        await wait_finished(client, started["run_id"])
+        log_path = ws.root / started["log"]
+        records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        message = next(
+            record for record in records if record["event"] == "message_emitted"
+        )
+
+        if case == "supported-content-blob":
+            records[0]["features"] = [HISTORY_FEATURE_CONTENT_BLOBS]
+            value = {
+                "$napflow": {
+                    "kind": "blob",
+                    "hash": f"sha256:{'a' * 64}",
+                    "bytes": 70_000,
+                    "media_type": "application/json",
+                    "codec": "json",
+                }
+            }
+            message["value"] = value
+        else:
+            records[0]["features"] = []
+            value = {"$napflow": {"kind": "blob", "user_note": "literal data"}}
+            message.pop("value", None)
+            message["value_preview"] = value
+
+        log_path.write_text(
+            "".join(f"{json.dumps(record)}\n" for record in records),
+            encoding="utf-8",
+        )
+
+        replay = await client.get(f"/api/runs/{started['run_id']}/events")
+        assert replay.status == 200
+        rest_records = (await replay.json())["events"]
+        assert rest_records == records
+        rest_message = next(
+            record for record in rest_records if record["event"] == "message_emitted"
+        )
+        assert (
+            rest_message[
+                "value" if case == "supported-content-blob" else "value_preview"
+            ]
+            == value
+        )
+
+        async with client.websocket_connect(f"/ws/runs/{started['run_id']}") as sock:
+            frames = []
+            while True:
+                frame = await sock.receive()
+                if frame["type"] == "websocket.close":
+                    assert frame["code"] == 1000
+                    break
+                frames.append(json.loads(frame["text"]))
+        assert frames == records
 
     with_client(ws, scenario)
 
@@ -1694,11 +1763,7 @@ def test_ws_history_range_resumes_without_duplicates(tmp_path):
             "event": "run_started" if seq == 1 else "node_fired",
             "run_id": "range",
             "seq": seq,
-            **(
-                {"format": HISTORY_FORMAT, "features": []}
-                if seq == 1
-                else {}
-            ),
+            **({"format": HISTORY_FORMAT, "features": []} if seq == 1 else {}),
         }
         for seq in range(1, 6)
     ]
@@ -1786,9 +1851,7 @@ def test_ws_overflow_catches_up_exactly_once_on_same_socket(tmp_path):
         return socket, final_seq
 
     socket, final_seq = asyncio.run(scenario())
-    assert [record["seq"] for record in socket.sent] == list(
-        range(1, final_seq + 1)
-    )
+    assert [record["seq"] for record in socket.sent] == list(range(1, final_seq + 1))
     assert socket.closed == (1000, "")
 
 
@@ -1869,9 +1932,7 @@ def test_ws_send_timeout_bounds_blocked_subscriber(monkeypatch):
 
     async def scenario():
         with pytest.raises(app_module._SlowSubscriber):
-            await _send_ws_record(
-                BlockedSocket(), {"event": "node_fired", "seq": 1}
-            )
+            await _send_ws_record(BlockedSocket(), {"event": "node_fired", "seq": 1})
 
     asyncio.run(scenario())
 

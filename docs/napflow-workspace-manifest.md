@@ -10,22 +10,21 @@ safe profile (D23, `yaml-profile.md`); `napf init` also writes
 `defaults.run.run_timeout_s` + `napf run --timeout` (run deadline);
 `node_timeout_s` default scope pinned to request/python (D24). Amended
 2026-07-02 (b), senior review: `message_budget` default 100000,
-`run_capture_mb` valve, `.env` dialect pinned, offline `flows/smoke` as
-the first-touch check (EC28–EC37).
+historical `run_capture_mb` valve, `.env` dialect pinned, offline
+`flows/smoke` as the first-touch check (EC28–EC37).
 
-Compatibility/current-state note (D33–D39): this is the
-v0.1 manifest behavior. Package v0.x and `schema: napflow/v1` remain
-experimental; v0.2 may replace capture/redaction settings as it moves to
-full-fidelity blobs and optional declared-secret terminal/report views.
-Breaking changes are documented rather than prohibited before v1.0.
+Compatibility/current-state note (D33–D39): this is current behavior.
+Package v0.x and `schema: napflow/v1` remain experimental; breaking changes
+are documented rather than prohibited before v1.0.
 Amended 2026-07-12 for v0.2/M1: path resolution, local-request checks,
 source durability, editor persistence, and flow-identity URL transport now
 describe the implemented hardened behavior; subsequent amendments fold in
 D34–D36 storage/lifecycle changes as their milestones land.
-Amended 2026-07-13 for v0.2/M4: raw local run history plus schema-aware
-terminal/report redaction is current behavior, using ordinary OS/workspace
-permissions with no custom owner, DACL, or forced-mode contract. Blob
-activation remains open; D39 defers export and secure-history policy.
+Amended 2026-07-13 for v0.2/M4: raw local full-value history activates
+`content-blobs/1`, uses ordinary OS/workspace permissions, and has no
+body/run capture settings. Schema-aware terminal/report redaction remains
+opt-in through non-empty secret patterns; D39 defers export and secure-history
+policy.
 
 ## Full example
 
@@ -42,9 +41,9 @@ flows:
 
 environments:
   default: dev              # profiles auto-discovered from envs/*.env;
-  secrets:                  # picker shows filename stem (dev, staging, ...)
-    - API_TOKEN
-    - "*_PASSWORD"          # glob patterns; redact terminal/reports, not raw history
+  secrets: []               # built-in/scaffold default: no presentation masking
+  # Opt in by adding env-name globs such as API_TOKEN or "*_PASSWORD".
+  # They redact terminal/reports, never raw history.
 
 defaults:
   request:                  # templating: ONLY {{ env.* }} and {{ run.* }}
@@ -68,10 +67,6 @@ defaults:
     run_timeout_s: null     # wall-clock run deadline; null = off (CI job
                             #   timeout is the outer backstop). Expiry →
                             #   run `error` (exit 2), report still written
-    body_capture_mb: 10     # per-body JSONL disk valve (full detail under cap)
-    run_capture_mb: 500     # per-RUN total body-capture valve — a big loop
-                            #   must not write gigabytes of JSONL; excess
-                            #   bodies truncated with marker (EC32)
 
 python:
   interpreter: null         # path to python executable for the nodes.py
@@ -126,6 +121,8 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    declared secrets are recognized; runtime-acquired tokens (e.g. a bearer
    token in a login response body) are not — see roadmap. The local UI is a
    raw inspection surface; v0.2 makes no safe-export claim (D39).
+   The built-in and scaffolded value is `[]`, so no masking occurs until the
+   user explicitly adds one or more name patterns.
 
    **Raw-history warning:** `.napflow/runs/` may contain complete request and
    response headers/bodies, cookies, credentials, bearer tokens, log values,
@@ -233,8 +230,13 @@ overwrites individual files.
   declared-secret redacted views over the raw local JSONL (junit: testcase
   per assert, errored testcase per unhandled error). `none` installs no report
   collector; JSON retains only the final summary, while JUnit makes bounded
-  streaming passes over the closed durable JSONL. An unclassified event/field
-  fails closed instead of leaking into a nominally safe report. Report
+  streaming passes over the closed durable JSONL. Both gate the history
+  feature envelope and resolve only records they render, so an unrelated
+  missing blob is not fetched. For `content-blobs/1` histories, a JSON report
+  carries `format`/`features` and persists its redacted final values through
+  the same run store; unchanged large content keeps the canonical descriptor
+  rather than being duplicated inline. An unclassified event/field fails
+  closed instead of leaking into a nominally safe report. Report
   closeout precedes complete-history publication and whole-unit retention, so
   a retained JSONL never loses or orphans its configured report companion.
   An ordinary sink-close failure does not replace the run outcome, but forces
@@ -303,10 +305,12 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   scalar endpoint) ·
   `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
   D13; records are the same raw local-inspection view as WebSocket frames;
-  `?flow=` locates runs the server process didn't start; v0.2 M0
-  validates the first `run_started` envelope before replay, accepts an
+  `?flow=` locates runs the server process didn't start; the reader validates
+  the first `run_started` envelope, supports `content-blobs/1`, accepts an
   unmarked v0.1 log best-effort, and returns 422 `history_format` for a
-  malformed/newer format or unsupported declared feature) ·
+  malformed/newer format or unsupported declared feature. Canonical blob
+  descriptors pass through unchanged without eager reads; this response
+  remains a full list until M5 paging) ·
   `POST /api/runs/{run_id}/abort` (202 aborting; on a finished run:
   200 + final state, idempotent no-op).
 - Identity, run-id, or resolved-containment failures on these REST paths are

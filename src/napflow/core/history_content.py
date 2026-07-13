@@ -1,8 +1,9 @@
-"""Content-addressed run-history values (D34, M4 foundation).
+"""Content-addressed run-history values (D34, M4).
 
 This module owns the byte-level persisted-value contract independently of
-event wiring.  ``content-blobs/1`` remains disabled until every declared
-event payload path can be encoded before the shared JSONL/WebSocket fan-out.
+event wiring. ``content-blobs/1`` is activated by store-backed EventStreams,
+which encode every declared event payload path before the shared
+JSONL/WebSocket fan-out.
 
 Blobs are scoped to one run and live beside its JSONL as
 ``<run-id>.blobs/<sha256-hex>``.  A blob is written and fsynced before a
@@ -33,9 +34,7 @@ _BINARY_FIELDS = {"__binary__", "content_type", "base64"}
 _BLOB_FIELDS = {"kind", "hash", "bytes", "media_type", "codec"}
 _OMITTED_FIELDS = _BLOB_FIELDS | {"reason"}
 _LITERAL_FIELDS = {"kind", "value"}
-_FILE_ATTRIBUTE_REPARSE_POINT = getattr(
-    stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400
-)
+_FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
 _HAS_DIRECTORY_FDS = all(
     function in os.supports_dir_fd for function in (os.open, os.stat, os.unlink)
 )
@@ -227,8 +226,7 @@ class RunContentStore:
                 f"cannot inspect run content directory {self.blob_dir}"
             ) from error
         if not stat.S_ISDIR(current.st_mode) or (
-            getattr(current, "st_file_attributes", 0)
-            & _FILE_ATTRIBUTE_REPARSE_POINT
+            getattr(current, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
         ):
             raise ContentCorruptError(
                 f"run content path is not a directory: {self.blob_dir}"
@@ -258,10 +256,14 @@ class RunContentStore:
             raise ContentCorruptError(
                 f"cannot pin run content directory {self.blob_dir}"
             ) from error
-        if not stat.S_ISDIR(opened.st_mode) or (
-            opened.st_dev,
-            opened.st_ino,
-        ) != token:
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or (
+                opened.st_dev,
+                opened.st_ino,
+            )
+            != token
+        ):
             with suppress(OSError):
                 os.close(directory_fd)
             raise ContentCorruptError(
@@ -319,9 +321,7 @@ class RunContentStore:
                     raise ContentCorruptError(
                         f"existing content-addressed blob disappeared: {digest}"
                     ) from error
-                self._require_blob_directory_unchanged(
-                    directory_fd, directory_token
-                )
+                self._require_blob_directory_unchanged(directory_fd, directory_token)
                 if existing != data:
                     raise ContentCorruptError(
                         f"existing content-addressed blob does not match {digest}"
@@ -412,8 +412,7 @@ class RunContentStore:
                 f"cannot inspect run content blob {path}"
             ) from error
         if not stat.S_ISREG(before.st_mode) or (
-            getattr(before, "st_file_attributes", 0)
-            & _FILE_ATTRIBUTE_REPARSE_POINT
+            getattr(before, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
         ):
             raise ContentCorruptError(f"run content blob is not a regular file: {path}")
         flags = os.O_RDONLY
@@ -437,9 +436,9 @@ class RunContentStore:
                 raise ContentCorruptError(
                     f"cannot inspect open run content blob {path}"
                 ) from error
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                before.st_dev,
+                before.st_ino,
             ):
                 raise ContentCorruptError(
                     f"run content blob changed during open: {path}"
@@ -475,9 +474,7 @@ def _validate_external_descriptor(
     expected = _OMITTED_FIELDS if omitted else _BLOB_FIELDS
     if set(descriptor) != expected:
         kind = "omitted" if omitted else "blob"
-        raise ContentStoreError(
-            f"{kind} descriptor has missing or unexpected fields"
-        )
+        raise ContentStoreError(f"{kind} descriptor has missing or unexpected fields")
     content_hash = descriptor["hash"]
     match = _HASH_RE.fullmatch(content_hash) if type(content_hash) is str else None
     if match is None:
@@ -490,12 +487,8 @@ def _validate_external_descriptor(
     if codec not in ("utf-8", "json", "binary"):
         raise ContentStoreError(f"unknown content codec {codec!r}")
     reason = descriptor.get("reason")
-    if omitted and (
-        type(reason) is not str or _REASON_RE.fullmatch(reason) is None
-    ):
-        raise ContentStoreError(
-            "omission reason must be a lowercase snake-case code"
-        )
+    if omitted and (type(reason) is not str or _REASON_RE.fullmatch(reason) is None):
+        raise ContentStoreError("omission reason must be a lowercase snake-case code")
     return _ExternalDescriptor(
         hash=content_hash,
         byte_count=byte_count,
@@ -506,6 +499,19 @@ def _validate_external_descriptor(
 
 
 def _encode_value(value: Any, media_type: str | None) -> _EncodedValue:
+    # ruamel's round-trip loader deliberately preserves scalar/container
+    # subclasses (for example ``ScalarInt`` and ``CommentedMap``).  They are
+    # formatting wrappers around logical JSON values, not Python-only payload
+    # types, so discard that YAML presentation metadata at the persistence
+    # boundary before choosing a codec or hashing bytes.
+    try:
+        value = _normalize_json_model(value)
+    except ContentStoreError:
+        raise
+    except (MemoryError, OverflowError, RecursionError) as error:
+        raise ContentStoreError(
+            "content value is not strict JSON-compatible"
+        ) from error
     if type(value) is str:
         try:
             data = value.encode("utf-8")
@@ -516,9 +522,7 @@ def _encode_value(value: Any, media_type: str | None) -> _EncodedValue:
         return _EncodedValue(
             data=data,
             codec="utf-8",
-            media_type=_selected_media_type(
-                media_type, "text/plain; charset=utf-8"
-            ),
+            media_type=_selected_media_type(media_type, "text/plain; charset=utf-8"),
         )
 
     binary = _binary_bytes(value)
@@ -531,7 +535,6 @@ def _encode_value(value: Any, media_type: str | None) -> _EncodedValue:
         )
 
     try:
-        _validate_json_model(value)
         text = json.dumps(
             value,
             ensure_ascii=False,
@@ -618,15 +621,7 @@ def _decode_value(
 
 def _json_copy(value: Any) -> Any:
     try:
-        _validate_json_model(value)
-        return json.loads(
-            json.dumps(
-                value,
-                ensure_ascii=False,
-                allow_nan=False,
-                separators=(",", ":"),
-            )
-        )
+        return _normalize_json_model(value)
     except ContentStoreError:
         raise
     except (
@@ -660,27 +655,37 @@ def _reject_json_constant(value: str) -> Any:
     raise ValueError(f"non-finite JSON number {value}")
 
 
-def _validate_json_model(value: Any) -> None:
-    """Reject Python shapes that JSON would silently normalize or lose."""
-    if value is None or type(value) in (str, bool, int):
-        return
-    if type(value) is float:
-        if not math.isfinite(value):
+def _normalize_json_model(value: Any) -> Any:
+    """Return built-in JSON values or reject a shape JSON would lose.
+
+    Built-in subclasses are accepted because ruamel uses them to retain YAML
+    spelling/comments.  Their presentation metadata has no runtime meaning;
+    tuples, sets, non-string mapping keys, and unrelated Python objects remain
+    invalid rather than being silently stringified or reshaped.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        normalized = float(value)
+        if not math.isfinite(normalized):
             raise ContentStoreError("content contains a non-finite JSON number")
-        return
-    if type(value) is list:
-        for item in value:
-            _validate_json_model(item)
-        return
-    if type(value) is dict:
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_json_model(item) for item in value]
+    if isinstance(value, dict):
+        normalized: dict[str, Any] = {}
         for key, item in value.items():
-            if type(key) is not str:
+            if not isinstance(key, str):
                 raise ContentStoreError("content object keys must be strings")
-            _validate_json_model(item)
-        return
-    raise ContentStoreError(
-        f"content value has non-JSON type {type(value).__name__}"
-    )
+            normalized[str(key)] = _normalize_json_model(item)
+        return normalized
+    raise ContentStoreError(f"content value has non-JSON type {type(value).__name__}")
 
 
 def _fsync_directory(path: Path) -> None:

@@ -9,6 +9,9 @@ import stat
 import sys
 
 import pytest
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.scalarint import ScalarInt
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from napflow.core.history_content import (
     DEFAULT_INLINE_THRESHOLD_BYTES,
@@ -132,6 +135,21 @@ def test_repeated_content_is_deduplicated(tmp_path):
     assert first == second
     assert len(_blob_files(store)) == 1
     assert store.resolve(first) == value
+
+
+def test_yaml_round_trip_wrappers_normalize_to_logical_json(tmp_path):
+    store = RunContentStore(tmp_path / "run.jsonl", inline_threshold_bytes=1)
+    value = CommentedMap(
+        {
+            DoubleQuotedScalarString("count"): ScalarInt(2),
+            "items": CommentedSeq([DoubleQuotedScalarString("one")]),
+        }
+    )
+
+    persisted = store.persist(value)
+
+    assert store.resolve(persisted) == {"count": 2, "items": ["one"]}
+    assert _descriptor(persisted)["codec"] == "json"
 
 
 def test_existing_digest_is_verified_and_never_overwritten(tmp_path):
@@ -463,8 +481,7 @@ def test_blob_read_io_error_stays_typed(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(
     not all(
-        function in os.supports_dir_fd
-        for function in (os.open, os.stat, os.unlink)
+        function in os.supports_dir_fd for function in (os.open, os.stat, os.unlink)
     ),
     reason="verified directory handles are unavailable",
 )
