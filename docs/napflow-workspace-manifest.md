@@ -22,11 +22,10 @@ Amended 2026-07-12 for v0.2/M1: path resolution, local-request checks,
 source durability, editor persistence, and flow-identity URL transport now
 describe the implemented hardened behavior; subsequent amendments fold in
 D34–D36 storage/lifecycle changes as their milestones land.
-Amended 2026-07-13 for v0.2/M4: private raw local run history plus
-schema-aware terminal/report redaction is current behavior; blob activation
-remains open. D39 defers export policy and schedules removal of the current
-private-permission enforcement next; the behavior below remains current until
-that implementation change lands.
+Amended 2026-07-13 for v0.2/M4: raw local run history plus schema-aware
+terminal/report redaction is current behavior, using ordinary OS/workspace
+permissions with no custom owner, DACL, or forced-mode contract. Blob
+activation remains open; D39 defers export and secure-history policy.
 
 ## Full example
 
@@ -117,7 +116,8 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    are frame-scoped and would be `StrictUndefined` (a node error on every
    inheriting request) (EC23).
 5. **Secret views (D35, v0.2/M4)** preserve raw canonical JSONL and local
-   WebSocket records in private run files, then replace the *values* of env
+   WebSocket records in local run files using ordinary OS/workspace
+   permissions, then replace the *values* of env
    vars matching `environments.secrets` (active profile + process env) in
    terminal and JSON/JUnit report content. Matching uses substring scan with
    a 5-char minimum length and longest value first. One exhaustive event-field
@@ -218,11 +218,9 @@ overwrites individual files.
 - **stdout carries ONLY the End-outputs JSON and is NOT masked** — it
   is the functional output (`napf run flows/login | jq .token` is the
   contract). CLI stderr and reports use the declared-secret redacted view;
-  private local history and the local UI retain exact values (D35). Raw run
-  directories/files force POSIX `0700`/`0600` independently of umask; Windows
-  uses a protected Owner Rights/SYSTEM/Administrators DACL with inheritable
-  directory ACEs; an existing run directory is migrated only when its owner
-  SID matches the current token owner or user SID.
+  raw local history and the local UI retain exact values (D35). Raw run
+  directories/files use ordinary OS/workspace permissions: POSIX umask and
+  inherited Windows ACLs apply, with no custom ownership or mode migration.
 - **Inputs**: `--input-json` (object) is applied first, `-i KEY=VALUE`
   overrides per key; `-i` values arrive as strings and BIND coerces
   them against the port's declared type.
@@ -232,7 +230,7 @@ overwrites individual files.
   note.
 - **Reports** (`defaults.run.report`) are written next to the JSONL:
   `<run-id>.report.json` / `<run-id>.junit.xml`, built as schema-aware
-  declared-secret redacted views over the raw private JSONL (junit: testcase
+  declared-secret redacted views over the raw local JSONL (junit: testcase
   per assert, errored testcase per unhandled error). `none` installs no report
   collector; JSON retains only the final summary, while JUnit makes bounded
   streaming passes over the closed durable JSONL. An unclassified event/field
@@ -296,12 +294,12 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   state, log, warnings, notes}` (gate failures: 404 `flow_not_found`,
   else 400 with `{error, message, diagnostics}`) ·
   `GET /api/runs?flow=` (history from the JSONL dir, ordered by a locked
-  private monotonic lifecycle value with legacy mtime fallback; states from a robust
+  internal monotonic lifecycle value with legacy mtime fallback; states from a robust
   backward scan for the last valid record, including records larger than
   64 KiB; `incomplete` when it isn't `run_finished`) ·
   `GET /api/runs/{run_id}` (status; bounded scalar summary when finished:
   state/duration/assert counts/unhandled-error count/never-fired count —
-  detail and raw End outputs remain in private `run_finished`, NEVER this
+  detail and raw End outputs remain in canonical `run_finished`, NEVER this
   scalar endpoint) ·
   `GET /api/runs/{run_id}/events` (replay = re-read the JSONL,
   D13; records are the same raw local-inspection view as WebSocket frames;

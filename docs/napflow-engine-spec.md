@@ -16,11 +16,10 @@ optional terminal/report masking, and basic paged/lazy replay) is sequenced in
 `PLAN.md` and must
 be folded into this spec in the same PRs that implement it.
 Amended 2026-07-13 for v0.2/M4: the content-store codec foundation and
-exhaustive raw/redacted event-field seam are implemented; blob feature
-activation, prepared requests, and lazy replay remain sequenced below. D39
-defers exports/advanced replay and plans removal of the current private-
-permission layer next; until that code lands, current behavior remains as
-specified below.
+exhaustive raw/redacted event-field seam are implemented, and D39's custom
+permission/owner layer has been removed. Blob feature activation, prepared
+requests, and lazy replay remain sequenced below; exports and advanced replay
+remain deferred.
 
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
@@ -152,7 +151,7 @@ cleanup path. External cancellation is not relabelled as user abort: its
 `CancelledError` escapes only after cleanup, and the closed JSONL may be a
 valid incomplete prefix (EC20) without `run_finished`. CLI report rendering
 is an adapter step after a completed `RunResult`, not an engine-owned file.
-The run stays protected by its private active-history marker until that
+The run stays protected by its internal active-history marker until that
 adapter step finishes; only then is it published complete and whole-unit
 retention applied. A failed/interrupted adapter closeout publishes an
 incomplete marker instead, so retention never guesses that the unit is safe
@@ -792,13 +791,11 @@ Rules:
 
 - **Raw local truth + redacted presentation (D35)**: `EventStream` stamps one
   raw canonical record and sends it unchanged to JSONL and the local
-  WebSocket. On POSIX, JSONL files force `0600` inside a `0700` per-flow run
-  directory even under permissive or fully restrictive umasks. On Windows,
-  the run directory and JSONL file use a protected DACL granting full access
-  only to Owner Rights, SYSTEM, and Administrators; directory ACEs inherit to
-  children. An existing run directory is migrated only after its owner SID
-  matches the current token owner/user SID. Terminal
-  stderr receives a separate declared-secret redacted projection; JSON/JUnit
+  WebSocket. Run directories and JSONL files use the ordinary permissions
+  inherited from the user's OS/workspace: POSIX creation modes are filtered by
+  umask and Windows ACLs inherit normally. Napflow applies no custom DACL,
+  owner validation, chmod, or permission migration. Terminal stderr receives a
+  separate declared-secret redacted projection; JSON/JUnit
   reports apply the same redactor while streaming the closed raw JSONL.
   Functional End-output stdout remains raw. Secret NAME globs match
   case-sensitively and matching values of
@@ -828,7 +825,7 @@ Rules:
 Pins made at S2/M2 (2026-07-05, `core/events.py`):
 - **Run id** = `YYYYmmdd-HHMMSS-xxxxxx` (UTC + 6 hex): Windows-safe
   (no `:`) and suitable as the JSONL filename stem. The random suffix
-  prevents collisions but is not a same-second chronology claim; private
+  prevents collisions but is not a same-second chronology claim; internal
   lifecycle metadata records wall timestamps plus a locked monotonic
   per-flow creation order. The sink
   opens with `x` — a run id collision fails loudly, never overwrites.
@@ -838,11 +835,10 @@ Pins made at S2/M2 (2026-07-05, `core/events.py`):
   required nullable fields (run_started `env_name`) appear as null.
 - **JSONL profile**: compact separators, `ensure_ascii=False`, UTF-8,
   LF; every line flushed as written (abort leaves a replayable prefix).
-  Since v0.2/M4 the file is created exclusive/private from its first write:
-  POSIX forces `0600` after exclusive open and creates each missing directory
-  component as `0700` before descending; Windows validates ownership and
-  applies the protected DACL above to the directory and file before content is
-  written.
+  Since v0.2/M4 the file is created exclusively from its first write, so a run
+  id collision never overwrites history. Missing directory components and the
+  file use ordinary OS/workspace creation permissions (POSIX umask; inherited
+  Windows ACLs), with no napflow-specific owner or private-mode contract.
 - **Field policy + redaction (v0.2/M4)**: every event dataclass field is
   exhaustively classified as structure, complete content, keyed content,
   error-message content, or derived preview. Import fails if the registry and
@@ -1000,16 +996,17 @@ place but defers a user-facing hard-limit policy until after v0.2.
 
 **Blob layout, durability, and verification.** One run stores blobs at
 `<run-id>.blobs/<64-lowercase-sha256-hex>` beside its JSONL. The directory is
-created lazily with private permissions (POSIX `0700`; blob files `0600`),
-and non-directory/symlink/Windows-reparse or non-private replacements are
-rejected. A writer creates each digest exclusively, flushes and fsyncs its
+created lazily using ordinary OS/workspace permissions. Non-directory,
+symlink, and Windows-reparse replacements are rejected; mode bits and inherited
+ACLs are not a content-validity condition. A writer creates each digest
+exclusively, flushes and fsyncs its
 bytes before it may
 return a descriptor, and never overwrites an existing digest; an existing
 regular file must already contain the identical bytes. Where directory-fd
 APIs exist, reads/writes pin a verified blob-directory handle and use relative
 no-follow opens; other platforms revalidate the directory identity before and
 after access under D37's trusted-local-filesystem race limitation. Readers
-require a stable private regular file, reject a declared/filesystem size
+require a stable regular file, reject a declared/filesystem size
 mismatch before allocating the body, bound the read to that declared size,
 then verify SHA-256 before UTF-8/JSON/binary decode. Expected filesystem and
 codec failures remain in the typed content-error family. Missing, malformed,
@@ -1021,9 +1018,9 @@ whole unit rather than inferred as history.
 **Retention unit.** A run is one atomic retention unit: its JSONL, blobs,
 indexes, and reports are created and deleted together. Retention operates
 on completed runs only and never touches an active or known-incomplete run.
-M3 uses private exact-stem companions beside the JSONL:
+M3 uses internal exact-stem companions beside the JSONL:
 
-- `<run-id>.active` records `started_ns` plus the private creation `order`
+- `<run-id>.active` records `started_ns` plus the internal creation `order`
   before the first event and protects execution plus adapter-owned report
   finalization;
 - `<run-id>.complete.json` records `started_ns`, `completed_ns`, and that
@@ -1049,13 +1046,13 @@ replaced `.history-order.json` allocate order and coordinate readers/deleters
 across local processes; allocation recovers from surviving unit markers and
 is immune to equal/backward wall clocks. Retention runs
 after completion, revalidates the canonical JSONL's matching final record,
-orders published units by that private monotonic value, and deletes only exact
+orders published units by that internal monotonic value, and deletes only exact
 allowlisted companions. A
 markerless legacy JSONL is eligible only when a robust backward record scan
 finds `run_finished`; its filesystem modification time supplies best-effort
 chronology. The backward reader scans fixed-size blocks without a fixed tail
 window, tolerates malformed/partial trailing data, and retains at most one
-arbitrarily large record. These lifecycle companions are private housekeeping,
+arbitrarily large record. These lifecycle companions are internal housekeeping,
 not authoritative replay content or a substitute for the versioned
 `napflow-run` envelope.
 
@@ -1199,9 +1196,7 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   mutations/WebSockets (programmatic loopback clients may omit Origin).
   Remote/multi-user operation is out of scope.
 - **Secrets (v0.2/M4 current)**: canonical local JSONL/WebSocket records are
-  raw; JSONL is created private and the loopback UI is a trusted local
-  inspection surface. Declared-secret terminal/report views never rewrite
-  protocol fields or dictionary keys. Runtime-acquired tokens remain EC10;
-  there is no v0.2 safe-export contract. D39 schedules the private-permission
-  implementation for removal next; this paragraph remains current behavior
-  until that change lands and replaces it.
+  raw; JSONL and blobs use ordinary OS/workspace permissions, and the loopback
+  UI is a trusted local inspection surface. Declared-secret terminal/report
+  views never rewrite protocol fields or dictionary keys. Runtime-acquired
+  tokens remain EC10; there is no v0.2 safe-export or secure-history contract.

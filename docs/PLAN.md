@@ -577,7 +577,7 @@ remain explicitly after v0.2.
       JSONL, blobs, indexes, `.report.json`, and `.junit.xml` together.
       Replace the fixed-64KB tail assumption with a summary/index or a
       robust backward record reader. (EC47)
-      **Met 2026-07-13:** private active/complete/incomplete lifecycle
+      **Met 2026-07-13:** internal active/complete/incomplete lifecycle
       metadata now gates post-adapter retention; a locked monotonic order is
       immune to same/equal/backward clocks. Canonical-tail revalidation,
       exact symlink-safe companion cleanup/publication, resumable deletion
@@ -604,12 +604,12 @@ not retained active state in M3.
   - [x] **Codec/store foundation** (landed 2026-07-13):
         `core/history_content.py` pins the 64 KiB inclusive threshold,
         exact UTF-8/JSON/raw-binary bytes, collision-safe literal and
-        explicit omission envelopes, per-run immutable/private hash paths,
+        explicit omission envelopes, per-run immutable hash paths,
         deduplication, and strict missing/corrupt/hash-verified resolution.
         Feature activation intentionally remains below; foundation tests do
         not claim FR-1102/NFR-15/TR-16 completion.
-        D39 keeps the codec, hashes, and deduplication but removes the
-        permission/owner hardening in the next implementation change.
+        D39 keeps the codec, hashes, and deduplication; the permission/owner
+        hardening was removed in the focused slice below.
   - [ ] **Feature activation + event integration:** encode once before the
         shared JSONL/WebSocket fan-out, and enable `content-blobs/1` for both
         writer and reader in that same change. Partial field activation would
@@ -617,13 +617,12 @@ not retained active state in M3.
     - [x] **Field-policy/redaction seam** (landed 2026-07-13): every current
           event dataclass field is classified as structure, complete content,
           keyed content, error-message content, or derived preview. Canonical
-          sinks receive raw records; JSONL is currently permission-protected
-          and the WebSocket is a trusted loopback-local surface. Terminal delivery and
-          post-close JSON/JUnit rendering use the same schema-aware value-only
-          redactor. `body_preview` and `value_preview` are explicit activation
-          blockers, not silently accepted content fields. D39 retains this
-          field registry and raw/presentation split while scheduling removal
-          of the permission machinery next.
+          sinks receive raw records; JSONL uses ordinary OS/workspace
+          permissions and the WebSocket is a trusted loopback-local surface.
+          Terminal delivery and post-close JSON/JUnit rendering use the same
+          schema-aware value-only redactor. `body_preview` and `value_preview`
+          are explicit activation blockers, not silently accepted content
+          fields. D39 retains this field registry and raw/presentation split.
     - [ ] **Full-value schema + activation:** replace the two derived previews
           with the prepared request/full message contracts, apply the store
           through the registry, add lazy consumer resolution, then activate
@@ -647,19 +646,24 @@ not retained active state in M3.
       Terminal/JSON/JUnit masking remains optional through non-empty
       `environments.secrets`; scaffold masking as opt-in examples rather than
       an implied security guarantee. (FR-1104, D39, EC45)
+  - [x] **Permission contract removal** (landed 2026-07-13): JSONL and blob
+        creation now follows POSIX umask/inherited Windows ACLs; custom DACL/
+        SID ownership and chmod/fchmod paths plus permission-only blob
+        rejection are deleted. Focused regressions preserve JSONL/blob
+        exclusivity, workspace containment, exact records/descriptors,
+        no-follow/type checks, existing-digest byte equality, size checks, and
+        SHA-256 verification.
   - [x] **Raw local + terminal/report views** (landed 2026-07-13): JSONL and
-        local WebSocket records preserve exact values; the JSONL is private
-        local storage and the WebSocket stays inside the trusted loopback UI
-        boundary. Dictionary keys, identifiers, enums, and control fields are
-        immutable; CLI stderr and post-close JSON/JUnit reports redact only
-        classified content.
-        Run directories/files force `0700`/`0600` despite the POSIX umask and
-        use a protected owner/SYSTEM/Administrators DACL on Windows; an
-        existing directory must belong to the current token before migration.
+        local WebSocket records preserve exact values; JSONL uses ordinary
+        OS/workspace permissions and the WebSocket stays inside the trusted
+        loopback UI boundary. Dictionary keys, identifiers, enums, and control
+        fields are immutable; CLI stderr and post-close JSON/JUnit reports
+        redact only classified content.
         An ordinary sink I/O close failure preserves the run result but
         publishes history only as an incomplete prefix; control-flow
-        exceptions still propagate. This is historical landed evidence; D39
-        intentionally removes its permission-specific portion next.
+        exceptions still propagate.
+  - [ ] **Scaffold opt-in examples:** stop activating example secret patterns
+        by default while retaining explicit empty-list no-redaction behavior.
 
 M4 DoD: a large response routed through Log and End is stored in full
 once, inspected byte-for-byte, and replayed without duplicated bodies;

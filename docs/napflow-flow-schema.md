@@ -385,12 +385,10 @@ as everywhere else.
 - Edits: last-write-wins; UI watches the filesystem and reloads/prompts
   on external change.
 - Run history: JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`,
-  append-only, private/raw, and identical to the local live WebSocket stream.
-  Privacy means forced `0700` directories/`0600` files on POSIX and a
-  protected Owner Rights/SYSTEM/Administrators DACL on Windows; an existing
-  run directory must match the current token owner/user SID before migration.
-  This is current behavior only: D39 schedules the ACL/forced-mode contract
-  for removal next in favor of ordinary OS/workspace permissions.
+  append-only, raw, and identical to the local live WebSocket stream. JSONL
+  creation is exclusive, while directories/files otherwise use ordinary
+  OS/workspace permissions (POSIX umask and inherited Windows ACLs); napflow
+  applies no custom owner, DACL, or forced-mode contract (D39).
   Terminal and JSON/JUnit reports apply D35's schema-aware declared-secret
   view; dictionary keys and protocol structure never change. The M4 target is
   full prepared-request/response detail (URL/query, effective headers/cookies,
@@ -553,7 +551,7 @@ never an internal engine error (EC48).
 2026-06-11:
 - `run.*` builtins finalized: `run.id`, `run.timestamp`, `run.env_name`.
 - `merge mode: collect` is count-based in v1 (marker-based → roadmap).
-- `log` payloads ARE persisted into private raw JSONL run history; CLI/report
+- `log` payloads ARE persisted into raw local JSONL run history; CLI/report
   presentation is separately redacted — consistent with D34/D35.
 
 2026-06-14 → 2026-07-02 (edge-case review; see `EDGE_CASES.md`):

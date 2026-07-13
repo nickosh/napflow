@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M4 ordinary-permission local history
+
+- Done: removed custom Windows DACL/SID ownership, forced POSIX modes, and
+  permission-only blob rejection; raw JSONL/blobs now inherit OS permissions.
+- Preserved: exclusive/no-follow creation, workspace containment, exact record
+  shapes, existing-digest equality, size checks, and SHA-256 verification.
+- Verified: 525 pytest passed (3 skipped, 2 expected xfails); Ruff and both
+  import-direction contracts pass.
+- Next: make scaffold secret patterns opt-in, then land full-value schemas,
+  blob activation, lazy consumers, and prepared-request capture.
+
 ## 2026-07-13 — raw-history publication warning
 
 - Documented in README + manifest that `.napflow/runs/` may contain raw

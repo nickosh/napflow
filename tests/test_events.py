@@ -364,6 +364,23 @@ def test_canonical_events_stay_raw_and_presentation_sink_is_redacted():
     assert record["value"]["auth"] == "Bearer s3cr3t-value"  # not mutated
 
 
+def test_empty_secret_patterns_make_presentation_a_raw_noop():
+    canonical = CaptureSink()
+    presentation = CaptureSink()
+    stream = EventStream(
+        "r",
+        SecretMasker([], {"API_TOKEN": "s3cr3t-value"}),
+        [canonical],
+        FIXED_CLOCK,
+        presentation_sinks=[presentation],
+    )
+
+    record = stream.emit(LogEvent(node="log1", value={"token": "s3cr3t-value"}))
+
+    assert canonical.records == [record]
+    assert presentation.records == [record]
+
+
 @pytest.mark.parametrize("secret", ["format", "features", HISTORY_FORMAT])
 def test_run_started_envelope_is_never_masked(secret):
     m = SecretMasker(["TOKEN"], {"TOKEN": secret})
@@ -554,186 +571,34 @@ def test_sink_never_overwrites(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
-@pytest.mark.parametrize("requested_umask", [0, 0o777])
-def test_jsonl_and_run_directory_modes_ignore_umask(tmp_path, requested_umask):
-    path = tmp_path / "runs" / "nested" / "private" / "run.jsonl"
+@pytest.mark.parametrize(
+    ("requested_umask", "directory_mode", "file_mode"),
+    [(0, 0o777, 0o666), (0o027, 0o750, 0o640)],
+)
+def test_jsonl_and_run_directory_modes_follow_umask(
+    tmp_path, requested_umask, directory_mode, file_mode
+):
+    path = tmp_path / "runs" / "nested" / "history" / "run.jsonl"
     previous = os.umask(requested_umask)
     try:
         JsonlSink(path).close()
     finally:
         os.umask(previous)
 
-    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == directory_mode
+    assert stat.S_IMODE(path.stat().st_mode) == file_mode
 
 
-def test_sink_rejects_existing_run_directory_not_owned_by_current_user(
-    tmp_path, monkeypatch
-):
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_sink_preserves_existing_run_directory_mode(tmp_path):
     path = tmp_path / "runs" / "run.jsonl"
     path.parent.mkdir()
-    monkeypatch.setattr(
-        events_module, "_path_owned_by_current_user", lambda _path: False
-    )
+    path.parent.chmod(0o777)
 
-    with pytest.raises(PermissionError, match="not owned by this user"):
-        JsonlSink(path)
+    JsonlSink(path).close()
 
-    assert not path.exists()
-
-
-def _windows_dacl(path):
-    """Return (protected, [(type, flags, mask, trustee SID), ...])."""
-    import ctypes
-    from ctypes import wintypes
-
-    class AclSizeInformation(ctypes.Structure):
-        _fields_ = [
-            ("ace_count", wintypes.DWORD),
-            ("acl_bytes_in_use", wintypes.DWORD),
-            ("acl_bytes_free", wintypes.DWORD),
-        ]
-
-    class AceHeader(ctypes.Structure):
-        _fields_ = [
-            ("ace_type", wintypes.BYTE),
-            ("ace_flags", wintypes.BYTE),
-            ("ace_size", wintypes.WORD),
-        ]
-
-    class AccessAllowedAce(ctypes.Structure):
-        _fields_ = [
-            ("header", AceHeader),
-            ("mask", wintypes.DWORD),
-            ("sid_start", wintypes.DWORD),
-        ]
-
-    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    void_pointer = ctypes.c_void_p
-    dacl_security_information = 0x00000004
-
-    advapi.GetNamedSecurityInfoW.argtypes = (
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-    )
-    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
-    advapi.GetSecurityDescriptorControl.argtypes = (
-        void_pointer,
-        ctypes.POINTER(wintypes.WORD),
-        ctypes.POINTER(wintypes.DWORD),
-    )
-    advapi.GetSecurityDescriptorControl.restype = wintypes.BOOL
-    advapi.GetAclInformation.argtypes = (
-        void_pointer,
-        void_pointer,
-        wintypes.DWORD,
-        wintypes.DWORD,
-    )
-    advapi.GetAclInformation.restype = wintypes.BOOL
-    advapi.GetAce.argtypes = (
-        void_pointer,
-        wintypes.DWORD,
-        ctypes.POINTER(void_pointer),
-    )
-    advapi.GetAce.restype = wintypes.BOOL
-    advapi.ConvertSidToStringSidW.argtypes = (
-        void_pointer,
-        ctypes.POINTER(wintypes.LPWSTR),
-    )
-    advapi.ConvertSidToStringSidW.restype = wintypes.BOOL
-    kernel32.LocalFree.argtypes = (void_pointer,)
-    kernel32.LocalFree.restype = void_pointer
-
-    dacl = void_pointer()
-    descriptor = void_pointer()
-    result = advapi.GetNamedSecurityInfoW(
-        ctypes.c_wchar_p(os.fspath(path)),
-        1,
-        dacl_security_information,
-        None,
-        None,
-        ctypes.byref(dacl),
-        None,
-        ctypes.byref(descriptor),
-    )
-    if result:
-        raise ctypes.WinError(result)
-    try:
-        control = wintypes.WORD()
-        revision = wintypes.DWORD()
-        if not advapi.GetSecurityDescriptorControl(
-            descriptor, ctypes.byref(control), ctypes.byref(revision)
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-
-        size = AclSizeInformation()
-        if not advapi.GetAclInformation(
-            dacl, ctypes.byref(size), ctypes.sizeof(size), 2
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-        aces = []
-        for index in range(size.ace_count):
-            ace_pointer = void_pointer()
-            if not advapi.GetAce(dacl, index, ctypes.byref(ace_pointer)):
-                raise ctypes.WinError(ctypes.get_last_error())
-            ace = ctypes.cast(
-                ace_pointer, ctypes.POINTER(AccessAllowedAce)
-            ).contents
-            sid_pointer = void_pointer(
-                ace_pointer.value + AccessAllowedAce.sid_start.offset
-            )
-            sid_text = wintypes.LPWSTR()
-            if not advapi.ConvertSidToStringSidW(
-                sid_pointer, ctypes.byref(sid_text)
-            ):
-                raise ctypes.WinError(ctypes.get_last_error())
-            try:
-                aces.append(
-                    (
-                        ace.header.ace_type,
-                        ace.header.ace_flags,
-                        ace.mask,
-                        sid_text.value,
-                    )
-                )
-            finally:
-                kernel32.LocalFree(ctypes.cast(sid_text, void_pointer))
-        return bool(control.value & 0x1000), aces
-    finally:
-        if descriptor.value:
-            kernel32.LocalFree(descriptor)
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows DACL contract")
-def test_jsonl_and_run_directory_use_protected_owner_dacl(tmp_path):
-    path = tmp_path / "runs" / "nested" / "private" / "run.jsonl"
-    sink = JsonlSink(path)
-    sink.write({"secret": "raw-local-truth"})
-    sink.close()
-    second_path = path.with_name("second.jsonl")
-    JsonlSink(second_path).close()  # validates existing-directory ownership
-
-    assert "raw-local-truth" in path.read_text(encoding="utf-8")
-    expected_sids = {"S-1-3-4", "S-1-5-18", "S-1-5-32-544"}
-    for secured_path, inheritance_flags in (
-        (path.parent, 0x03),
-        (path, 0x00),
-        (second_path, 0x00),
-    ):
-        protected, aces = _windows_dacl(secured_path)
-        assert protected
-        assert len(aces) == 3
-        assert {ace[3] for ace in aces} == expected_sids
-        assert all(ace[0] == 0 for ace in aces)  # ACCESS_ALLOWED_ACE_TYPE
-        assert all(ace[1] == inheritance_flags for ace in aces)
-        assert all(ace[2] == 0x001F01FF for ace in aces)  # FILE_ALL_ACCESS
+    assert path.exists()
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o777
 
 
 def test_run_log_path_uses_workspace_boundary(tmp_path):

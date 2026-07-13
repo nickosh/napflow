@@ -581,7 +581,7 @@ _UNIT_DIRECTORY_SUFFIXES = (".blobs", ".index")
 
 @dataclass(frozen=True)
 class RunHistoryUnit:
-    """Private lifecycle companions for one persisted run.
+    """Lifecycle companions for one persisted run.
 
     ``active`` protects the JSONL while execution/report finalization is in
     progress across CLI/server processes. ``complete`` publishes sortable
@@ -662,7 +662,7 @@ def _history_directory_lock(runs_dir: Path) -> Iterator[None]:
 
 
 def _write_exclusive_marker(path: Path, payload: dict[str, Any]) -> None:
-    """Create one fsynced private marker, removing only our partial on error."""
+    """Create one fsynced marker, removing only our partial on error."""
     marker = None
     try:
         marker = path.open("x", encoding="utf-8", newline="\n")
@@ -719,7 +719,7 @@ def history_reader(log_path: Path) -> Iterator[None]:
         end_history_reader(lease)
 
 
-def _private_order(path: Path) -> int | None:
+def _history_order(path: Path) -> int | None:
     try:
         mode = path.lstat().st_mode
         if not stat.S_ISREG(mode):
@@ -735,13 +735,13 @@ def _next_history_order(runs_dir: Path) -> int:
     """Allocate a durable per-flow creation order immune to wall-clock jumps."""
     with _history_directory_lock(runs_dir):
         counter_path = runs_dir / _ORDER_FILENAME
-        counter_order = _private_order(counter_path) or 0
+        counter_order = _history_order(counter_path) or 0
         marker_order = max(
             (
                 order
                 for suffix in (_ACTIVE_SUFFIX, _INCOMPLETE_SUFFIX, _COMPLETE_SUFFIX)
                 for marker in runs_dir.glob(f"*{suffix}")
-                if (order := _private_order(marker)) is not None
+                if (order := _history_order(marker)) is not None
             ),
             default=0,
         )
@@ -812,7 +812,7 @@ def complete_run_history(unit: RunHistoryUnit, history: int) -> list[Path]:
 def new_run_id(now: datetime | None = None) -> str:
     """Timestamp-prefixed, Windows-safe id: `YYYYmmdd-HHMMSS-xxxxxx`.
 
-    The random suffix prevents collisions; private lifecycle metadata carries
+    The random suffix prevents collisions; internal lifecycle metadata carries
     exact same-second chronology for retention and presentation.
     """
     now = now if now is not None else datetime.now(UTC)
@@ -829,7 +829,7 @@ def run_log_path(workspace_root: Path, flow_identity: str, run_id: str) -> Path:
 def apply_retention(runs_dir: Path, history: int) -> list[Path]:
     """Retain newest completed run units; active/incomplete runs do not count.
 
-    New runs use a private, locked monotonic creation order.
+    New runs use an internal, locked monotonic creation order.
     Markerless legacy runs remain eligible when their robust last record is
     ``run_finished`` and use JSONL mtime. Exact companions are claimed and
     removed together; the JSONL is deleted last, and interrupted deletions
@@ -872,7 +872,7 @@ def apply_retention(runs_dir: Path, history: int) -> list[Path]:
                     run_id,
                 )
             elif _lexists(complete_path):
-                continue  # malformed/private metadata is protected, never guessed
+                continue  # malformed internal metadata is protected, never guessed
             else:
                 try:
                     modified_ns = log.lstat().st_mtime_ns
@@ -1104,240 +1104,11 @@ def last_jsonl_record(path: Path) -> dict[str, Any] | None:
     return None
 
 
-def _apply_private_windows_dacl(path: Path, *, directory: bool) -> None:
-    """Protect one history path with an explicit owner-scoped Windows DACL.
+def _ensure_history_directory(path: Path) -> None:
+    """Create missing components with ordinary inherited OS permissions.
 
-    POSIX mode bits do not constrain NTFS access.  ``OW`` is the Owner Rights
-    SID (the object's current owner), while SYSTEM and Administrators retain
-    recovery access.  Directory ACEs inherit to both child files and child
-    directories, closing the create-then-protect window for descendants.
-    """
-    if os.name != "nt":
-        return
-
-    import ctypes
-    from ctypes import wintypes
-
-    sddl_revision_1 = 1
-    se_file_object = 1
-    dacl_security_information = 0x00000004
-    protected_dacl_security_information = 0x80000000
-    sddl = (
-        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
-        if directory
-        else "D:P(A;;FA;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)"
-    )
-
-    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    void_pointer = ctypes.c_void_p
-    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(wintypes.ULONG),
-    )
-    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = (
-        wintypes.BOOL
-    )
-    advapi.GetSecurityDescriptorDacl.argtypes = (
-        void_pointer,
-        ctypes.POINTER(wintypes.BOOL),
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(wintypes.BOOL),
-    )
-    advapi.GetSecurityDescriptorDacl.restype = wintypes.BOOL
-    advapi.SetNamedSecurityInfoW.argtypes = (
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        void_pointer,
-        void_pointer,
-        void_pointer,
-        void_pointer,
-    )
-    advapi.SetNamedSecurityInfoW.restype = wintypes.DWORD
-    kernel32.LocalFree.argtypes = (void_pointer,)
-    kernel32.LocalFree.restype = void_pointer
-
-    security_descriptor = void_pointer()
-    descriptor_size = wintypes.ULONG()
-    if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        sddl,
-        sddl_revision_1,
-        ctypes.byref(security_descriptor),
-        ctypes.byref(descriptor_size),
-    ):
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        dacl_present = wintypes.BOOL()
-        dacl_defaulted = wintypes.BOOL()
-        dacl = void_pointer()
-        if not advapi.GetSecurityDescriptorDacl(
-            security_descriptor,
-            ctypes.byref(dacl_present),
-            ctypes.byref(dacl),
-            ctypes.byref(dacl_defaulted),
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-        # A present-but-NULL DACL grants access to everyone.  Fail closed
-        # rather than passing such a descriptor to SetNamedSecurityInfoW.
-        if not dacl_present.value or not dacl.value:
-            raise OSError("generated security descriptor has no non-NULL DACL")
-        result = advapi.SetNamedSecurityInfoW(
-            ctypes.c_wchar_p(os.fspath(path)),
-            se_file_object,
-            dacl_security_information | protected_dacl_security_information,
-            None,
-            None,
-            dacl,
-            None,
-        )
-        if result:
-            # SetNamedSecurityInfoW returns a Win32 status directly instead
-            # of setting the calling thread's last-error value.
-            raise ctypes.WinError(result)
-    finally:
-        if security_descriptor.value:
-            kernel32.LocalFree(security_descriptor)
-
-
-def _windows_path_owned_by_current_token(path: Path) -> bool:
-    """Whether ``path`` has the owner SID this process uses for new objects."""
-    if os.name != "nt":
-        return False
-
-    import ctypes
-    from ctypes import wintypes
-
-    se_file_object = 1
-    owner_security_information = 0x00000001
-    token_query = 0x0008
-    token_user_information = 1
-    token_owner_information = 4
-    error_insufficient_buffer = 122
-
-    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    void_pointer = ctypes.c_void_p
-    advapi.GetNamedSecurityInfoW.argtypes = (
-        wintypes.LPWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-        ctypes.POINTER(void_pointer),
-    )
-    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
-    advapi.OpenProcessToken.argtypes = (
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.HANDLE),
-    )
-    advapi.OpenProcessToken.restype = wintypes.BOOL
-    advapi.GetTokenInformation.argtypes = (
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        void_pointer,
-        wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD),
-    )
-    advapi.GetTokenInformation.restype = wintypes.BOOL
-    advapi.EqualSid.argtypes = (void_pointer, void_pointer)
-    advapi.EqualSid.restype = wintypes.BOOL
-    kernel32.GetCurrentProcess.argtypes = ()
-    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    kernel32.LocalFree.argtypes = (void_pointer,)
-    kernel32.LocalFree.restype = void_pointer
-
-    owner = void_pointer()
-    security_descriptor = void_pointer()
-    result = advapi.GetNamedSecurityInfoW(
-        ctypes.c_wchar_p(os.fspath(path)),
-        se_file_object,
-        owner_security_information,
-        ctypes.byref(owner),
-        None,
-        None,
-        None,
-        ctypes.byref(security_descriptor),
-    )
-    if result:
-        raise ctypes.WinError(result)
-    token = wintypes.HANDLE()
-    try:
-        if not owner.value:
-            return False
-        if not advapi.OpenProcessToken(
-            kernel32.GetCurrentProcess(), token_query, ctypes.byref(token)
-        ):
-            raise ctypes.WinError(ctypes.get_last_error())
-
-        def token_sid_matches(information_class: int) -> bool:
-            required = wintypes.DWORD()
-            if advapi.GetTokenInformation(
-                token, information_class, None, 0, ctypes.byref(required)
-            ):
-                raise OSError("token SID size query unexpectedly succeeded")
-            error = ctypes.get_last_error()
-            if error != error_insufficient_buffer or not required.value:
-                raise ctypes.WinError(error)
-            buffer = ctypes.create_string_buffer(required.value)
-            if not advapi.GetTokenInformation(
-                token,
-                information_class,
-                buffer,
-                required.value,
-                ctypes.byref(required),
-            ):
-                raise ctypes.WinError(ctypes.get_last_error())
-            # TOKEN_OWNER and TOKEN_USER both begin with the relevant SID
-            # pointer (TOKEN_USER nests it as SID_AND_ATTRIBUTES first).
-            sid = ctypes.cast(buffer, ctypes.POINTER(void_pointer)).contents
-            return bool(sid.value and advapi.EqualSid(owner, sid))
-
-        return token_sid_matches(token_owner_information) or token_sid_matches(
-            token_user_information
-        )
-    finally:
-        if token.value:
-            kernel32.CloseHandle(token)
-        if security_descriptor.value:
-            kernel32.LocalFree(security_descriptor)
-
-
-def _path_owned_by_current_user(path: Path) -> bool:
-    if os.name == "nt":
-        return _windows_path_owned_by_current_token(path)
-    getuid = getattr(os, "geteuid", None)
-    return getuid is None or path.lstat().st_uid == getuid()
-
-
-def _require_current_owner(path: Path) -> None:
-    if not _path_owned_by_current_user(path):
-        raise PermissionError(
-            f"run-history directory is not owned by this user: {path}"
-        )
-
-
-def _apply_private_permissions(path: Path, *, directory: bool) -> None:
-    if os.name == "nt":
-        _apply_private_windows_dacl(path, directory=directory)
-    else:
-        path.chmod(0o700 if directory else 0o600)
-
-
-def _ensure_private_directory(path: Path) -> None:
-    """Create each missing component and secure it before descending.
-
-    ``mkdir(parents=True, mode=...)`` applies the requested mode only to the
-    leaf and still lets a restrictive umask produce mode ``000``.  Walking
-    outward to the first existing directory lets every new component be
-    corrected immediately, so the next component remains creatable.
+    The component walk retains no-follow/non-directory checks without
+    imposing a napflow-specific owner, DACL, or POSIX mode contract.
     """
     missing: list[Path] = []
     current = path
@@ -1356,24 +1127,10 @@ def _ensure_private_directory(path: Path) -> None:
         break
 
     for directory in reversed(missing):
-        try:
-            directory.mkdir(mode=0o700)
-        except FileExistsError:
-            created = False
-        else:
-            created = True
+        with suppress(FileExistsError):
+            directory.mkdir()
         if not stat.S_ISDIR(directory.lstat().st_mode):
             raise NotADirectoryError(directory)
-        if not created:
-            _require_current_owner(directory)
-        _apply_private_permissions(directory, directory=True)
-
-    # Existing owner-controlled leaves may predate raw canonical history.
-    # Migrate their permissions before creating the first secret-bearing
-    # child, but never grant Owner Rights to a foreign/pre-planted owner.
-    if not missing:
-        _require_current_owner(path)
-        _apply_private_permissions(path, directory=True)
 
 
 class JsonlSink:
@@ -1383,23 +1140,16 @@ class JsonlSink:
     `request_started` is tolerated by replay (EC20)."""
 
     def __init__(self, path: Path):
-        _ensure_private_directory(path.parent)
+        _ensure_history_directory(path.parent)
         self.path = path
-        # Exclusive/private from the first instant: canonical v0.2 history
-        # contains raw declared secrets (D35), so a permissive umask must not
-        # create a briefly world-readable file.
+        # Canonical v0.2 history is created exclusively and keeps the ordinary
+        # permission policy inherited from the user's OS/workspace (D39).
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         flags |= getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
         flags |= getattr(os, "O_BINARY", 0)
-        fd = os.open(path, flags, 0o600)
+        fd = os.open(path, flags, 0o666)
         try:
-            if os.name == "nt":
-                _apply_private_windows_dacl(path, directory=False)
-            else:
-                # Creation mode is still filtered through umask.  Correct the
-                # already-open inode before exposing it to buffered writes.
-                os.fchmod(fd, 0o600)
             self._file = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
         except BaseException:
             with suppress(OSError):

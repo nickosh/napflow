@@ -30,7 +30,7 @@ class FlowsConfig(FrozenModel):
 class EnvironmentsConfig(FrozenModel):
     """Profiles are auto-discovered from envs/*.env (FR-103) — no registry.
     `secrets` are glob patterns over env var NAMES; matching values are
-    redacted from terminal/report views while private local history remains
+    redacted from terminal/report views while raw local history remains
     raw (D35)."""
 
     default: str | None = None

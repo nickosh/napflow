@@ -134,6 +134,23 @@ def test_repeated_content_is_deduplicated(tmp_path):
     assert store.resolve(first) == value
 
 
+def test_existing_digest_is_verified_and_never_overwritten(tmp_path):
+    store = RunContentStore(tmp_path / "run.jsonl", inline_threshold_bytes=1)
+    value = "expected content"
+    digest = hashlib.sha256(value.encode()).hexdigest()
+    store.blob_dir.mkdir(mode=0o700)
+    blob = store.blob_dir / digest
+    planted = b"x" * len(value.encode())
+    blob.write_bytes(planted)
+    if os.name != "nt":
+        blob.chmod(0o600)
+
+    with pytest.raises(ContentCorruptError, match="existing .* does not match"):
+        store.persist(value)
+
+    assert blob.read_bytes() == planted
+
+
 def test_identical_bytes_deduplicate_across_codecs_without_changing_value(tmp_path):
     store = RunContentStore(tmp_path / "run.jsonl", inline_threshold_bytes=1)
 
@@ -313,14 +330,39 @@ def test_existing_blob_symlink_is_never_followed(tmp_path):
     assert outside.read_bytes() == b"safe"
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are not portable")
-def test_blob_directory_and_files_are_private(tmp_path):
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are not portable")
+@pytest.mark.parametrize(
+    ("requested_umask", "directory_mode", "file_mode"),
+    [(0, 0o777, 0o666), (0o027, 0o750, 0o640)],
+)
+def test_blob_directory_and_files_follow_umask(
+    tmp_path, requested_umask, directory_mode, file_mode
+):
     store = RunContentStore(tmp_path / "run.jsonl", inline_threshold_bytes=1)
-    store.persist("private content")
+    previous = os.umask(requested_umask)
+    try:
+        store.persist("ordinary local content")
+    finally:
+        os.umask(previous)
     [blob] = _blob_files(store)
 
-    assert stat.S_IMODE(store.blob_dir.stat().st_mode) == 0o700
-    assert stat.S_IMODE(blob.stat().st_mode) == 0o600
+    assert stat.S_IMODE(store.blob_dir.stat().st_mode) == directory_mode
+    assert stat.S_IMODE(blob.stat().st_mode) == file_mode
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are not portable")
+def test_permissive_blob_permissions_are_accepted(tmp_path):
+    store = RunContentStore(tmp_path / "run.jsonl", inline_threshold_bytes=1)
+    value = "ordinary local content"
+    persisted = store.persist(value)
+    [blob] = _blob_files(store)
+    store.blob_dir.chmod(0o755)
+    blob.chmod(0o644)
+
+    assert store.persist(value) == persisted
+    assert RunContentStore(store.log_path).resolve(persisted) == value
+    assert stat.S_IMODE(store.blob_dir.stat().st_mode) == 0o755
+    assert stat.S_IMODE(blob.stat().st_mode) == 0o644
 
 
 def test_persist_does_not_mutate_runtime_input(tmp_path):

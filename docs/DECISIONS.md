@@ -226,7 +226,7 @@ masked**. stdout carries only the End-outputs JSON and is the
 functional output; `napf run flows/login | jq .token` is the documented
 contract, and masking it would break the pipe use case the CLI exists
 for. Pinned in the WM CLI section with a test
-(`test_stdout_and_private_jsonl_preserve_raw_local_truth` now covers the
+(`test_stdout_and_local_jsonl_preserve_raw_local_truth` now covers the
 superseding D35 boundary).
 
 **Superseded for v0.2 by D35.** This remains the description of v0.1
@@ -643,20 +643,19 @@ often leave the developer's machine); irreversible masking at event
 creation (destroys the only ground truth); encryption/key management in
 v0.2 (overengineering for a local-first developer tool).
 
-Implementation status (2026-07-13): the raw/private canonical JSONL and local
-WebSocket path plus schema-aware terminal/JSON/JUnit redaction are live. One
-exhaustive field-policy registry preserves dictionary keys and all structural
-values; unknown event fields fail closed in a redacted view. Raw history forces
-POSIX private modes independently of umask and a protected owner/SYSTEM/admin
-DACL on Windows. Export policy and blob-aware redacted bundle rewriting remain
-open M4 work, so FR-1104/TR-17 are not yet complete.
+Historical implementation status (2026-07-13): the first raw canonical JSONL
+implementation forced POSIX private modes and a protected owner/SYSTEM/admin
+DACL on Windows. The raw local WebSocket path and schema-aware terminal/JSON/
+JUnit redaction also landed, with one exhaustive field-policy registry that
+preserves dictionary keys and structural values.
 
 **Target amendment (D39, 2026-07-13):** the field-policy registry, raw local
 truth, and optional declared-secret terminal/report views remain. Custom
 ACL/DACL, ownership migration, forced modes, and export policy are no longer
-v0.2 requirements. The permission implementation above remains current until
-the next planned code change removes it; this documentation replan alone does
-not claim that behavior has landed.
+v0.2 requirements. Implemented later on 2026-07-13: the custom permission and
+owner layer was removed; JSONL and blobs now use ordinary OS/workspace
+permissions while exclusive creation, containment, and content verification
+remain. Export policy and secure-history guarantees remain future work.
 
 ## D36 — One run lifecycle owns fairness, cancellation, resources, and frame release
 
@@ -771,10 +770,10 @@ prerequisite:
   persisted payload and captures the effective prepared request. Hash/size
   verification, deduplication, collision-safe descriptors, exclusive
   creation, and clear missing/corrupt errors are content-integrity behavior.
-- Canonical local JSONL and blobs will remain raw and use the ordinary
-  permissions inherited from the user's OS/workspace. The next implementation
-  change removes the custom Windows DACL/SID owner path, forced POSIX private
-  modes, and permission-based content rejection. A secure-history mode,
+- Canonical local JSONL and blobs remain raw and use the ordinary permissions
+  inherited from the user's OS/workspace. M4 removed the custom Windows
+  DACL/SID owner path, forced POSIX private modes, and permission-based content
+  rejection while retaining integrity and containment. A secure-history mode,
   authentication/authorization, or encryption is a separate future design if
   real users require it.
 - The local UI remains a raw inspection surface. Terminal and JSON/JUnit
@@ -803,10 +802,11 @@ continuing a partial filesystem security boundary that adds platform risk
 without securing every raw-data path; silently dropping the timeline or scale
 ideas instead of preserving them as future candidates.
 
-Implementation status: this decision and replan are documentation-only. The
-ACL/private-permission implementation still exists at this point and is the
-next targeted code deletion; behavior specs remain current until that change
-lands with tests.
+Implementation status: the permission-specific storage layer was removed on
+2026-07-13 with inherited-permission, no-overwrite, and blob-verification
+regressions. Scaffold opt-in examples remain the next small cleanup, followed
+by full-value event schemas, blob feature activation, and prepared-request
+capture.
 
 ## Known open risks (watch during implementation)
 - EC10/EC22/EC27/EC32/EC35, EC42/EC44/EC47/EC49/EC50 are open—not

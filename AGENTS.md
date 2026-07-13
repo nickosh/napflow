@@ -182,10 +182,11 @@ were the accepted v0.2 design.
    full-fidelity blobs/prepared requests → basic paged/lazy replay →
    public Workspace/Flow catalog, packaging, and UI contracts → focused
    release gate. M0/M1 completed
-   2026-07-12 and M2/M3 completed 2026-07-13; the next implementation
-   change is M4's ACL/private-permission deletion, followed by full-fidelity
-   activation and prepared requests. Timeline playback, 100k-event replay
-   performance, run bundles, and security-grade history are future work (D39).
+   2026-07-12 and M2/M3 completed 2026-07-13; M4's permission-specific
+   storage layer is removed; next make scaffold secret patterns opt-in, then
+   land the full-value schema, blob activation, and prepared requests.
+   Timeline playback, 100k-event replay performance, run bundles, and
+   security-grade history are future work (D39).
 
 ## Testing priorities (in order of bug-risk)
 

@@ -2,7 +2,7 @@
 written next to the run's JSONL as `<run-id>.report.json` /
 `<run-id>.junit.xml` (pinned at S2/M5).
 
-Reports are explicit redacted views over the raw private JSONL: declared
+Reports are explicit redacted views over the raw local JSONL: declared
 secrets are removed from schema-classified content values while canonical
 local truth and protocol structure remain exact. The junit mapping: one
 testsuite per run; each `assert_result` is a

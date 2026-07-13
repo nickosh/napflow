@@ -196,7 +196,7 @@ class RunContentStore:
     def _ensure_blob_dir(self) -> None:
         created = False
         try:
-            self.blob_dir.mkdir(mode=0o700)
+            self.blob_dir.mkdir()
             created = True
         except FileExistsError:
             pass
@@ -232,10 +232,6 @@ class RunContentStore:
         ):
             raise ContentCorruptError(
                 f"run content path is not a directory: {self.blob_dir}"
-            )
-        if os.name != "nt" and stat.S_IMODE(current.st_mode) & 0o077:
-            raise ContentCorruptError(
-                f"run content directory is not private: {self.blob_dir}"
             )
         return current
 
@@ -306,9 +302,9 @@ class RunContentStore:
         try:
             try:
                 fd = (
-                    os.open(digest, flags, 0o600, dir_fd=directory_fd)
+                    os.open(digest, flags, 0o666, dir_fd=directory_fd)
                     if directory_fd is not None
-                    else os.open(path, flags, 0o600)
+                    else os.open(path, flags, 0o666)
                 )
                 created = True
             except FileExistsError:
@@ -420,9 +416,6 @@ class RunContentStore:
             & _FILE_ATTRIBUTE_REPARSE_POINT
         ):
             raise ContentCorruptError(f"run content blob is not a regular file: {path}")
-        if os.name != "nt" and stat.S_IMODE(before.st_mode) & 0o077:
-            raise ContentCorruptError(f"run content blob is not private: {path}")
-
         flags = os.O_RDONLY
         flags |= getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)

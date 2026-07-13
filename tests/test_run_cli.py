@@ -186,7 +186,7 @@ def test_timeout_flag_exits_2(ws):
 # D35 boundary: stdout/history raw, terminal/reports redacted
 
 
-def test_stdout_and_private_jsonl_preserve_raw_local_truth(ws):
+def test_stdout_and_local_jsonl_preserve_raw_local_truth(ws):
     leaky = HELLO_FLOW.replace("{{ env.GREETING }}", "{{ env.API_TOKEN }}")
     (ws / "flows" / "hello" / "flow.yaml").write_text(leaky, encoding="utf-8")
     result = runner.invoke(app, ["run", "flows/hello"])
