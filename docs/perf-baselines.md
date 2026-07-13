@@ -1,9 +1,10 @@
 # napflow — v0.2 before-change performance baselines
 
-These are the **v0.1 baselines** the v0.2 lifecycle refactor (D34–D36) is
-measured against. They are recorded BEFORE the correctness refactors so
-later milestones can show a deliberate trade-off, not a regression
-(PLAN M0, NFR-08/NFR-18). They are baselines, **not correctness gates**:
+These are the **v0.1 baselines** recorded for the v0.2 lifecycle/history work
+(D34–D36) and retained for the future scale review under D39. They were
+recorded BEFORE the correctness refactors so later work can show a deliberate
+trade-off, not a regression (PLAN M0, NFR-08/future NFR-18). They are
+baselines, **not correctness gates**:
 they inform batch sizing (M2), bounded loop/history design (M3), the
 inline-blob threshold (M4), and paged replay (M5).
 
@@ -43,10 +44,10 @@ npm run perf:history
 | Parallel loop timing, 100,000 items | 3.410s ≈ 29.3k items/s | Uninstrumented timing; compare like-for-like |
 | Parallel loop peak heap, 100,000 items | **485.1 MB** at `max_concurrency: 16`, measured in a separate `tracemalloc` run | M3 bounded producer/fixed task set — heap must become proportional to `max_concurrency`, not item count (NFR-14) |
 | M3 parallel-loop active state, 100,000 items | v0.1 allocated one task + retained Frame per item | **Met:** 2.68s opt-in correctness run; exactly 16 helpers, ≤16 live Frames, 100,000 durable frame summaries (`test_parallel_loop_active_tasks_and_frames_100k`) |
-| History replay read (`_read_records`), 10MB | 10.0MiB / 22,623 records: **0.021s** uninstrumented, **19.5 MB peak heap** | M5 bounded/paged reads + lazy blobs (FR-1106); memory must not track total log size |
-| History replay read (`_read_records`), 100MB | 100.0MiB / 225,739 records: **0.204s** uninstrumented, **194.4 MB peak heap** | M5 must remove the roughly linear retained-memory growth |
-| Browser history first render + retained JS heap, 10MB | **127 ms median; +11.2 MB retained JS heap** | M5 compares bounded/virtualized replay against this built-bundle baseline |
-| Browser history first render + retained JS heap, 100MB | **810 ms median; +99.8 MB retained JS heap** | M5 must remove the roughly linear browser-memory growth |
+| History replay read (`_read_records`), 10MB | 10.0MiB / 22,623 records: **0.021s** uninstrumented, **19.5 MB peak heap** | M5 adds basic paged reads + lazy blobs (FR-1106); this remains a future scale comparison |
+| History replay read (`_read_records`), 100MB | 100.0MiB / 225,739 records: **0.204s** uninstrumented, **194.4 MB peak heap** | Future 100k/large-replay gate under D39; not a v0.2 release target |
+| Browser history first render + retained JS heap, 10MB | **127 ms median; +11.2 MB retained JS heap** | M5 keeps an active window bounded; formal comparison remains future work |
+| Browser history first render + retained JS heap, 100MB | **810 ms median; +99.8 MB retained JS heap** | Future large-replay performance candidate under D39 |
 
 Timing and heap are deliberately separate passes for the loop and history
 measurements. `tracemalloc` changes allocation-heavy timings enough that a

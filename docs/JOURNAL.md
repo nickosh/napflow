@@ -4,6 +4,24 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — raw-history publication warning
+
+- Documented in README + manifest that `.napflow/runs/` may contain raw
+  credentials/content and must not be committed, uploaded, or published blindly.
+- Clarified that gitignore and terminal/report masking do not sanitize JSONL,
+  blobs, or local UI history; next remains ACL/private-permission deletion.
+
+## 2026-07-13 — v0.2 prototype-first replan
+
+- Decided D39: keep full-fidelity blobs/prepared requests and the runtime
+  Workspace/Flow catalog; use ordinary OS permissions with optional masking.
+- Deferred: secure history/export bundles, advanced replay indexes, timeline
+  playback/checkpoints, and the 100k-event replay gate remain future items.
+- Replanned M4–M7 and reconciled product/requirements/spec target notes; this
+  session changes documentation only, not current permission behavior.
+- Next: remove the ACL/DACL, owner, forced-mode, and private-blob checks with
+  focused tests, then update current-behavior specs through closeout.
+
 ## 2026-07-13 — v0.2 M4 raw/redacted event seam
 
 - Done: exhaustive event-field policies now separate immutable structure,

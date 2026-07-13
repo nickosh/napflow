@@ -4,7 +4,7 @@ Why things are the way they are. Date format: 2026-06. D01–D17 decided
 during initial design (June 2026); D18–D22 in the 2026-06-14 edge-case
 review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02; D26–D32
 during v0.1 implementation; D33–D37 from the 2026-07-11 v0.2 design
-review; D38 from the 2026-07-13 Python-integration design. Reversing any
+review; D38–D39 from 2026-07-13 API and scope reviews. Reversing any
 of these requires understanding the rationale first.
 
 ## D01 — Build new instead of adopting existing tools
@@ -611,6 +611,11 @@ value inline; deleting old events from a retained run; UI-only row caps
 that leave server/browser memory unbounded; silent truncation as the
 normal local policy.
 
+**Scope amendment (D39, 2026-07-13):** the full-fidelity store, typed
+references, deduplication, and lazy loading remain v0.2 commitments.
+Self-contained export/import, explicit hard-limit omission policy, advanced
+seek indexes, and the 100k-event replay gate move to the future ledger.
+
 ## D35 — Preserve raw local truth; redact presentation and exports, never protocol structure
 
 (2026-07-11, owner decision: observability first, masking only where it
@@ -645,6 +650,13 @@ values; unknown event fields fail closed in a redacted view. Raw history forces
 POSIX private modes independently of umask and a protected owner/SYSTEM/admin
 DACL on Windows. Export policy and blob-aware redacted bundle rewriting remain
 open M4 work, so FR-1104/TR-17 are not yet complete.
+
+**Target amendment (D39, 2026-07-13):** the field-policy registry, raw local
+truth, and optional declared-secret terminal/report views remain. Custom
+ACL/DACL, ownership migration, forced modes, and export policy are no longer
+v0.2 requirements. The permission implementation above remains current until
+the next planned code change removes it; this documentation replan alone does
+not claim that behavior has landed.
 
 ## D36 — One run lifecycle owns fairness, cancellation, resources, and frame release
 
@@ -746,8 +758,58 @@ tests; magic attribute access without exact lookup; silent identifier
 normalization; an editor-specific type-checker plugin in v0.2; claiming generic
 `__getattr__` can statically validate runtime filesystem contents.
 
+## D39 — v0.2 prioritizes a usable full-fidelity prototype over security-grade storage and advanced replay
+
+(2026-07-13, owner decision after reviewing M4 complexity and the project's
+pre-adoption stage.)
+
+v0.2 keeps the engineering that directly makes napflow work reliably, but
+stops treating speculative high-security or large-scale use as a release
+prerequisite:
+
+- M4 still activates store-once content-addressed blobs across every
+  persisted payload and captures the effective prepared request. Hash/size
+  verification, deduplication, collision-safe descriptors, exclusive
+  creation, and clear missing/corrupt errors are content-integrity behavior.
+- Canonical local JSONL and blobs will remain raw and use the ordinary
+  permissions inherited from the user's OS/workspace. The next implementation
+  change removes the custom Windows DACL/SID owner path, forced POSIX private
+  modes, and permission-based content rejection. A secure-history mode,
+  authentication/authorization, or encryption is a separate future design if
+  real users require it.
+- The local UI remains a raw inspection surface. Terminal and JSON/JUnit
+  reports apply declared-secret masking only when `environments.secrets` is
+  non-empty; an empty list is the explicit no-redaction path. New workspaces
+  present secret patterns as opt-in examples rather than implying a complete
+  security boundary.
+- Self-contained run export/import, raw/redacted bundle rewriting, runtime
+  token registration, and hard-limit omission metadata are deferred. v0.2
+  documents that raw run artifacts may contain secrets and makes no
+  safe-export claim.
+- M5 supplies basic versioned paging, lazy blob reads, bounded active UI
+  windows, and reconstructable frame drilldown. Timeline scrubbing, playback
+  speeds, checkpoints, advanced indexes/filters, and the 100k-event replay
+  performance target stay explicitly in the future ledger for later stages.
+- M6 retains both the functional `run_flow` entry point and the reusable
+  Workspace/Flow object surface, including the runtime nested
+  `workspace.flows` catalog. Only generated static bindings remain deferred.
+- M7 reuses the existing CI/release coverage and adds missing installed-product
+  checks; it does not expand dependency, browser, adversarial, or performance
+  matrices before user demand.
+
+Rejected: deleting the full-fidelity blob design (it fixes real silent data
+loss); deleting the runtime flow catalog (small, useful Python ergonomics);
+continuing a partial filesystem security boundary that adds platform risk
+without securing every raw-data path; silently dropping the timeline or scale
+ideas instead of preserving them as future candidates.
+
+Implementation status: this decision and replan are documentation-only. The
+ACL/private-permission implementation still exists at this point and is the
+next targeted code deletion; behavior specs remain current until that change
+lands with tests.
+
 ## Known open risks (watch during implementation)
-- EC09/EC10/EC22/EC27/EC32/EC35, EC42–EC45, and EC47–EC50 are open—not
+- EC10/EC22/EC27/EC32/EC35, EC42/EC44/EC47/EC49/EC50 are open—not
   “resolved by documentation.” Their ledger rows name v0.2 or
   post-v0.2 closure conditions; close them only with the stated tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —

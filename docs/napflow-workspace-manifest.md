@@ -13,10 +13,10 @@ safe profile (D23, `yaml-profile.md`); `napf init` also writes
 `run_capture_mb` valve, `.env` dialect pinned, offline `flows/smoke` as
 the first-touch check (EC28–EC37).
 
-Compatibility/current-state note (D33–D37, 2026-07-11): this is the
+Compatibility/current-state note (D33–D39): this is the
 v0.1 manifest behavior. Package v0.x and `schema: napflow/v1` remain
 experimental; v0.2 may replace capture/redaction settings as it moves to
-full-fidelity blobs, soft local limits, and explicit CI/export policy.
+full-fidelity blobs and optional declared-secret terminal/report views.
 Breaking changes are documented rather than prohibited before v1.0.
 Amended 2026-07-12 for v0.2/M1: path resolution, local-request checks,
 source durability, editor persistence, and flow-identity URL transport now
@@ -24,7 +24,9 @@ describe the implemented hardened behavior; subsequent amendments fold in
 D34–D36 storage/lifecycle changes as their milestones land.
 Amended 2026-07-13 for v0.2/M4: private raw local run history plus
 schema-aware terminal/report redaction is current behavior; blob activation
-and export policy remain open.
+remains open. D39 defers export policy and schedules removal of the current
+private-permission enforcement next; the behavior below remains current until
+that implementation change lands.
 
 ## Full example
 
@@ -123,7 +125,15 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    enums, state/error vocabulary, and control metadata never change. Only
    declared secrets are recognized; runtime-acquired tokens (e.g. a bearer
    token in a login response body) are not — see roadmap. The local UI is a
-   raw inspection surface; export policy remains open M4 work.
+   raw inspection surface; v0.2 makes no safe-export claim (D39).
+
+   **Raw-history warning:** `.napflow/runs/` may contain complete request and
+   response headers/bodies, cookies, credentials, bearer tokens, log values,
+   Python-node content, and End outputs. The scaffolded `.gitignore` reduces
+   accidental commits but is not sanitization or access control. Do not commit,
+   upload, attach, publish, or otherwise share this directory without inspecting
+   its contents. Terminal/JSON/JUnit masking creates presentation views only;
+   it does not rewrite the canonical JSONL, referenced blobs, or local UI data.
 6. **Workspace identities and containment (D37, v0.2/M1)** — one
    `WorkspaceResolver` owns entry flows, flow/loop references, fixtures,
    histories, source files, and clone destinations. Identities are non-empty
@@ -411,5 +421,6 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   response field-path redaction directive, so login-acquired tokens can
   opt into safe presentation/export. D35 intentionally preserves this raw
   local truth; declared-secret terminal/report views are implemented, but no
-  absolute shareability guarantee is made and export remains M4 work.
+  absolute shareability guarantee is made. Export and runtime-secret policy
+  are future work under D39.
 - `napf check --write-env-example`.

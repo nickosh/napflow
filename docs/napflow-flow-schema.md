@@ -389,6 +389,8 @@ as everywhere else.
   Privacy means forced `0700` directories/`0600` files on POSIX and a
   protected Owner Rights/SYSTEM/Administrators DACL on Windows; an existing
   run directory must match the current token owner/user SID before migration.
+  This is current behavior only: D39 schedules the ACL/forced-mode contract
+  for removal next in favor of ordinary OS/workspace permissions.
   Terminal and JSON/JUnit reports apply D35's schema-aware declared-secret
   view; dictionary keys and protocol structure never change. The M4 target is
   full prepared-request/response detail (URL/query, effective headers/cookies,

@@ -57,8 +57,8 @@ CI** with assert-driven exit codes and full wire-level history.
 5. **Full observability** — complete request/response detail (headers,
    bodies, timing, retries) remains inspectable in run history without
    silent loss. v0.2 stores large content once and loads it lazily
-   (D34); canonical local truth stays exact, while CI/report/export
-   views apply explicit redaction (D35).
+   (D34); canonical local truth stays exact, while terminal/reports may
+   apply configured declared-secret masking (D35/D39).
 6. **Codegen-ready** (future, design-constrained today) — flows →
    standalone Python (niquests clients, Pydantic models), strictly
    one-directional.
@@ -133,24 +133,27 @@ rather than a compatibility promise (D33).
   loader/check → engine/CLI → full nodes/worker → server/UI canvas.
   Released as a developer-preview milestone with known hardening work;
   no public announcement or stability promise is required.
-- **v0.2.0 — full-fidelity hardening and replay** (D33–D37, PLAN):
+- **v0.2.0 — usable full-fidelity prototype** (D33–D39, PLAN):
   centralized workspace/durable-save boundaries; fair cancellation-safe
   engine and worker lifecycle; bounded active loop/server/browser state;
   versioned JSONL plus store-once full-fidelity blobs; raw local truth
-  plus redacted CI/export views; paged/lazy replay, child-frame drilldown,
-  and timeline scrubber; public `run_flow`; deterministic packaging and
-  authoritative release gates. This is the next committed release.
+  using ordinary OS/workspace permissions plus optional terminal/report
+  masking; basic paged/lazy replay and child-frame drilldown; functional and
+  Workspace/Flow public APIs including the runtime `workspace.flows` catalog;
+  deterministic packaging and a focused release gate. This is the next
+  committed release.
 - **After v0.2 candidates:** pause/resume/step and wire breakpoints (D30),
   pack-selection-to-subflow (D31), `poll`/`duplicate`, inline loop bodies,
   marker-based `collect`, `napf check --write-env-example`, worker-pool
   expansion, `napf ui --app` (chromeless Chromium app-mode window via
   `msedge`/`chrome --app=<url>`, falling back to plain
   `webbrowser.open` — app-like feel, zero new deps; today the UI always
-  opens the default browser), fine-grained runtime-token redaction
-  (EC10), descendant process-tree cleanup (EC22), and preemptible
-  template/hard-deadline semantics (EC27/EC35). These stay compatible
-  with the v0.2 lifecycle/replay foundations but do not delay that
-  hardening release.
+  opens the default browser), timeline scrubber/playback/checkpoints,
+  advanced replay indexes/filters, the 100k-event replay performance target,
+  run export/import and redacted bundles, fine-grained runtime-token redaction
+  (EC10), a separate secure-history design if demanded, descendant process-tree
+  cleanup (EC22), and preemptible template/hard-deadline semantics
+  (EC27/EC35). These remain visible without delaying the prototype release.
 - **v1.0 direction:** make selected flow/event/public-API formats stable,
   publish migration policy, and remove the experimental `napflow/v1`
   qualification. Stability is an outcome of real 0.x use, not inferred

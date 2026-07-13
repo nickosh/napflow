@@ -29,7 +29,7 @@ Core promises (never compromise these):
 - `docs/napflow-workspace-manifest.md` — napflow.yaml, CLI surface, env model
 - `docs/napflow-engine-spec.md`     — scheduler, frames, firing rules, events
 - `docs/yaml-profile.md`            — canonical YAML read/emit profile (D23)
-- `docs/DECISIONS.md`               — why each major decision was made (D01–D38)
+- `docs/DECISIONS.md`               — why each major decision was made (D01–D39)
 - `docs/EDGE_CASES.md`              — resolution ledger; append new cases here
 - `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; v0.1 + v0.2 FR/NFR checklist
   (tick requirements in the PR that lands them, with a test)
@@ -133,11 +133,13 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
   born masked).
 
 The final sentence describes **v0.1 current behavior**, not the v0.2
-target. D34–D36 + PLAN v0.2 replace destructive/local safeguards with:
-store-once full-fidelity blobs and lazy replay; private raw local truth
-plus redacted presentation/export; bounded cooperative lifecycle,
-cleanup, tasks/frames, and subscriber windows. Never extend the v0.1
-valves/mask-everywhere approach as if it were the accepted future design.
+target. D34–D36/D39 + PLAN v0.2 replace destructive/local safeguards with:
+store-once full-fidelity blobs and basic lazy replay; raw local truth using
+ordinary OS/workspace permissions plus optional declared-secret
+terminal/report presentation; bounded cooperative lifecycle, cleanup,
+tasks/frames, and subscriber windows. Never extend the v0.1
+valves/mask-everywhere approach or rebuild ACL/export hardening as if either
+were the accepted v0.2 design.
 
 ## Version and compatibility policy
 
@@ -174,14 +176,16 @@ valves/mask-everywhere approach as if it were the accepted future design.
 3. Remaining nodes (python + worker subprocess, merge, guards, loop,
    flow, set/get, switch, delay, log, fixture, note)
 4. server/ + UI canvas (last)
-5. **Current: v0.2 full-fidelity hardening and replay**, sequenced only
+5. **Current: v0.2 usable full-fidelity prototype**, sequenced only
    by `docs/PLAN.md` M0–M7: regression/format baseline → workspace and
    durable saves → lifecycle/worker → bounded execution/history →
-   full-fidelity blobs/redaction → scalable replay/timeline → public,
-   packaging, and UI contracts → measured release gate. M0/M1 completed
+   full-fidelity blobs/prepared requests → basic paged/lazy replay →
+   public Workspace/Flow catalog, packaging, and UI contracts → focused
+   release gate. M0/M1 completed
    2026-07-12 and M2/M3 completed 2026-07-13; the next implementation
-   milestone is M4's full-fidelity history, prepared requests, and redacted
-   presentation/export views.
+   change is M4's ACL/private-permission deletion, followed by full-fidelity
+   activation and prepared requests. Timeline playback, 100k-event replay
+   performance, run bundles, and security-grade history are future work (D39).
 
 ## Testing priorities (in order of bug-risk)
 
@@ -197,10 +201,11 @@ valves/mask-everywhere approach as if it were the accepted future design.
 7. Loader round-trip: load → save preserves comments & key order (ruamel)
 8. Timeout routing across node shapes (D24, TR-8) + native-value
    templating detection & post-eval coercion (D25, TR-10)
-9. v0.2 adversarial priorities (TR-11–22): path/symlink containment;
+9. v0.2 correctness priorities (TR-11–22): path/symlink containment;
    inline-cycle deadline/abort; worker large-line/late-side-effect;
-   cancellation cleanup; full-fidelity hash round-trip; redaction schema
-   integrity; bounded large replay/loops; autosave/atomic durability.
+   cancellation cleanup; full-fidelity hash round-trip; prepared requests;
+   protocol-safe optional redaction; basic paged/lazy replay and bounded
+   loops; autosave/atomic durability.
 
 ## Deferred by decision (do NOT implement, DO keep compatible)
 
@@ -215,8 +220,13 @@ valves/mask-everywhere approach as if it were the accepted future design.
   browser via stdlib `webbrowser`; no pywebview — see PRODUCT.md roadmap)
 - Pause/resume/step and wire breakpoints (D30), extract-to-subflow (D31),
   remote hosting/user authentication, and encryption/key management are
-  explicitly after v0.2. Keep seams compatible; do not add them to the
-  v0.2 hardening release without a new owner decision.
+  explicitly after v0.2. Keep seams compatible; do not add them to v0.2
+  without a new owner decision.
+- Also after v0.2 under D39: timeline scrubber/playback/checkpoints; the
+  100k-event replay performance gate and expanded perf suite; advanced replay
+  indexes/filters; run export/import and redacted bundles; explicit hard-limit
+  omission metadata; and any separate secure-history ACL/DACL/forced-mode
+  implementation. The runtime `workspace.flows` catalog remains in v0.2.
 - Also explicitly after v0.2: fine-grained runtime-token redaction
   (EC10), descendant process-tree cleanup (EC22), and preemptible Jinja
   rendering / a final hard-deadline contract (EC27/EC35). These are OPEN

@@ -8,15 +8,19 @@ senior review: worker stdout protocol integrity, loader write path +
 diagnostics, native-value templating (**D25**), budget default, run
 capture valve, Windows loop policy, trust model (EC28–EC37).
 
-Compatibility/current-state note (D33–D37, 2026-07-11): this document
+Compatibility/current-state note (D33–D39): this document
 describes the v0.1 engine unless a section says otherwise. Event/history
 formats are experimental during package v0.x. The accepted v0.2 redesign
 (fair lifecycle, full-fidelity blob-backed history, raw local truth plus
-redacted exports, bounded/lazy replay) is sequenced in `PLAN.md` and must
+optional terminal/report masking, and basic paged/lazy replay) is sequenced in
+`PLAN.md` and must
 be folded into this spec in the same PRs that implement it.
 Amended 2026-07-13 for v0.2/M4: the content-store codec foundation and
 exhaustive raw/redacted event-field seam are implemented; blob feature
-activation, prepared requests, exports, and lazy replay remain sequenced below.
+activation, prepared requests, and lazy replay remain sequenced below. D39
+defers exports/advanced replay and plans removal of the current private-
+permission layer next; until that code lands, current behavior remains as
+specified below.
 
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
@@ -783,7 +787,8 @@ Rules:
 > through Log/message/End output paths and can keep writing prefixes after
 > its run budget (EC32); request history is a pre-transport preview rather
 > than the final prepared request (EC50). D34 + PLAN M4 are the accepted
-> target. EC45's raw/redacted boundary has landed, while export remains open.
+> target. EC45's raw/redacted boundary has landed; D39 defers export rather
+> than leaving it as open M4 work.
 
 - **Raw local truth + redacted presentation (D35)**: `EventStream` stamps one
   raw canonical record and sends it unchanged to JSONL and the local
@@ -990,7 +995,8 @@ other JSON objects use the JSON codec. Omission `reason` values are stable
 lowercase snake-case codes; readers surface even an unfamiliar code rather
 than guessing content. An explicit hard-limit omission uses the
 `kind: omitted` envelope with the would-be bytes' hash/size and never stores
-a plausible-looking prefix.
+a plausible-looking prefix. D39 leaves this collision-safe reserved codec in
+place but defers a user-facing hard-limit policy until after v0.2.
 
 **Blob layout, durability, and verification.** One run stores blobs at
 `<run-id>.blobs/<64-lowercase-sha256-hex>` beside its JSONL. The directory is
@@ -1153,8 +1159,8 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   if real flows show the workaround is clumsy.
 - Inline loop bodies.
 - Per-module python worker pool (lifts the serial-worker limitation, §5a).
-- Fine-grained runtime-secret registration/field-path rules beyond
-  v0.2's raw-local + redacted-export baseline (D35).
+- Fine-grained runtime-secret registration/field-path rules for optional
+  presentation and any future safe-export feature (D35/D39).
 - Descendant-process cleanup through POSIX process groups / Windows Job
   Objects or equivalent (EC22).
 - Preemptible synchronous template execution, or an explicitly
@@ -1196,4 +1202,6 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   raw; JSONL is created private and the loopback UI is a trusted local
   inspection surface. Declared-secret terminal/report views never rewrite
   protocol fields or dictionary keys. Runtime-acquired tokens remain EC10;
-  redacted/raw export policy remains open M4 work under D35.
+  there is no v0.2 safe-export contract. D39 schedules the private-permission
+  implementation for removal next; this paragraph remains current behavior
+  until that change lands and replaces it.

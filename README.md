@@ -15,9 +15,9 @@ the visual canvas (edit, run, inspect, history) work end to end on
 macOS, Windows, and Linux. All `v0.x` formats—including the current
 `schema: napflow/v1` marker—are experimental and may change before
 v1.0. napflow assumes trusted workspaces (flows run real Python on
-your machine) and is localhost-only. The accepted v0.2
-full-fidelity/hardening plan is in [docs/PLAN.md](docs/PLAN.md)
-(D33–D37).
+your machine) and is localhost-only. The streamlined v0.2
+full-fidelity prototype plan is in [docs/PLAN.md](docs/PLAN.md)
+(D33–D39).
 
 ## Why
 
@@ -44,6 +44,13 @@ full-fidelity/hardening plan is in [docs/PLAN.md](docs/PLAN.md)
 | `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with `file:line` diagnostics and CI exit codes |
 | `napf run`   | ✅     | headless engine — full node catalog incl. python worker, JSONL run history, exit codes 0/1/2/130 |
 | `napf ui`    | ✅     | visual canvas on localhost — edit flows (autosaved through the canonical serializer, clean diffs), edit `nodes.py` in-browser, run with live animated events + full request/response detail, replay any run from history, drill into subflows, clone shared flows |
+
+> **Raw history warning:** `.napflow/runs/` may contain complete request and
+> response headers/bodies, cookies, credentials, bearer tokens, log values,
+> and flow outputs. `napf init` gitignores `.napflow/`, but that is not
+> sanitization or access control. Do not commit, upload, attach, publish, or
+> otherwise share this directory unless you have inspected its contents.
+> Terminal/report masking does not modify the canonical JSONL or blob files.
 
 ## Try it
 

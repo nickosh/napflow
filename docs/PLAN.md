@@ -325,12 +325,15 @@ facto release candidate; only release-prep lands between). From the
 v0.1.0 tag on, work moves to feature branches + PRs (see Working
 agreements).
 
-## v0.2.0 — full-fidelity hardening and replay
+## v0.2.0 — usable full-fidelity prototype
 
 Adopted 2026-07-11 after the first working-version architecture review.
-`v0.1.0` is deliberately allowed to ship first as the working milestone;
-v0.2 is the first deliberate hardening release. Details and rationale:
-D33–D37. Requirements: FR-11xx, NFR-12–18, TR-11–22.
+`v0.1.0` is deliberately allowed to ship first as the working milestone.
+Replanned 2026-07-13 after M4 review: v0.2 remains a correctness-focused,
+full-fidelity prototype release, while security-grade local storage, run
+bundles, advanced replay, and expanded performance gates move to the future
+ledger. Details and rationale: D33–D39. Requirements: the v0.2 subset of
+FR-11xx, NFR-12–17, and TR-11–22 below.
 
 ### Outcome
 
@@ -339,14 +342,15 @@ boundaries honest and composable:
 
 - full request/response fidelity without copying large data through
   every layer or silently truncating it;
-- replay that remains the same durable recording while streaming,
-  seeking, drilling into frames, and scrubbing efficiently;
+- replay that remains the same durable recording while paging, loading
+  content lazily, and drilling into frames;
 - deadlines, aborts, workers, loops, and cleanup that remain correct
   under adversarial inputs;
 - one workspace containment policy and durable, conflict-safe editing;
-- a real public core API and a deterministic install/release surface;
-- local-first clarity, with redaction applied where CI/export needs it;
-- measured performance after correctness, not speculative optimization.
+- local-first clarity: raw local history with optional declared-secret
+  masking for terminal/report presentation;
+- a public functional + Workspace/Flow API and deterministic installable
+  artifact suitable for real prototype use before more hardening is justified.
 
 ### Scope rules
 
@@ -354,15 +358,17 @@ boundaries honest and composable:
    React, xyflow, Zustand, CodeMirror, and the single-wheel product.
    Refactor ownership boundaries, not technology for its own sake.
 2. **No silent data loss.** Execution values stay semantically complete;
-   persisted large content is stored once and referenced. Explicit CI
-   hard limits may omit content only with an unmistakable record.
+   persisted large content is stored once and referenced. The prototype
+   does not add a separate omission/export policy before real demand.
 3. **Replay remains a recording.** Never re-execute a historical run.
    JSONL order is canonical; blobs/indexes are attached/derived data.
 4. **v0.x is experimental.** v0.2 may break v0.1 flow/event/API shapes;
    document the break and prefer a simple read-only adapter where cheap,
    but do not preserve a faulty design at the cost of the next one.
-5. **Every review reproduction becomes a regression test before or with
-   its fix.** No checkbox closes from code inspection alone.
+5. **Every v0.2-owned review reproduction becomes a regression test before
+   or with its fix.** Deferred targets stay named in the future ledger rather
+   than remaining artificial release blockers. No checkbox closes from code
+   inspection alone.
 
 ### Former post-v0.1 backlog disposition — no item dropped
 
@@ -371,12 +377,12 @@ discarded. This mapping is the continuity ledger:
 
 | Former item | v0.2 disposition | Reason |
 |---|---|---|
-| **R1 timeline scrubber replay** | **Included: M5 / FR-1106 / TR-18.** Real `ts` deltas, speed multipliers, prefix folding, and derived checkpoints are retained; the former ~1k-record checkpoint cadence remains the initial candidate, then is measured/tuned. | The new paged/lazy replay foundation makes the original frontend feature viable on full-fidelity large runs. |
+| **R1 timeline scrubber replay** | **After v0.2; retained in the future ledger.** Real `ts` deltas, speed multipliers, deterministic prefix folding, and derived checkpoints remain the intended feature. | Basic paged/lazy replay lands first; the richer playback UX belongs to a later product stage. |
 | **R2 pause/resume + step** | **After v0.2, item 1; D30 remains authoritative.** | The fair M2 dispatch lifecycle is its prerequisite, but control-plane semantics should not expand the hardening release. |
 | **R3 wire breakpoints** | **After v0.2, item 2; D30 remains authoritative.** | It still rides R2's runtime wire-hold gate and never enters `flow.yaml`. |
-| **R4 opt-in full-payload capture** | **Superseded by the stronger M4 / D34 design, not lost.** The 512-character preview limitation is removed through prepared-request capture and store-once full-fidelity blobs; M0 still measures thresholds first. | Owner chose content reliability as the local default. Explicit hard limits remain available for CI instead of making complete capture an exceptional mode. |
+| **R4 opt-in full-payload capture** | **Superseded by the stronger M4 / D34 design, not lost.** The 512-character preview limitation is removed through prepared-request capture and store-once full-fidelity blobs; M0 still measures thresholds first. | Owner chose content reliability as the local default. A general hard-limit/omission policy is future D39 work rather than a v0.2 branch. |
 | **R5 pack selection to new flow** | **After v0.2, item 3; D31 remains authoritative.** | Boundary inference, Python splitting, template refs, and variable rewrites remain a separate refactoring feature. |
-| **R6 performance guard suite** | **Included: M0 baseline + M7 / NFR-18.** It remains opt-in and excluded from ordinary shared-runner CI; event-`ts` measurement where valid and the explicit `max_concurrency` peak assertion are retained. | Correctness refactors land before final measurement; the original scheduler/worker measurements are expanded to storage/replay memory. |
+| **R6 performance guard suite** | **After v0.2; baselines retained.** The 100k-event replay target and expanded storage/replay performance gate remain explicit future candidates. Existing bounded-loop evidence stays valid. | Prototype correctness and a usable installed path matter first; replay scale is re-evaluated when real histories justify the target. |
 
 ### M0 — release boundary, format decisions, and regression harness
 
@@ -425,14 +431,15 @@ discarded. This mapping is the continuity ledger:
       loops at 100/10k/100k with uninstrumented timing separate from peak
       heap; and 10MB/100MB server replay plus built-browser first-render/
       retained memory. Baselines inform batching and inline-blob thresholds;
-      they are not correctness gates. (NFR-08, NFR-18)
+      they are not correctness gates. (NFR-08, future NFR-18 after D39)
       — `tests/test_perf_baselines.py` + `npm run perf:history`, both opt-in
       and ordinary-CI-excluded; full numbers in `docs/perf-baselines.md`.
       Before headlines: ~44.6k guarded laps/s; teardown-inclusive 1KB worker
       21.5ms, with 100KB/10MB reader-limit failure lifecycles at 22.2ms/4.04s;
       100k loop 3.41s and 485.1MB peak; 100MB server replay 0.204s/194.4MB
       peak; 100MB browser first render 810ms median/+99.8MB retained heap. NFR-08/18
-      still tick only at M7 after comparison with the corrected design.
+      remain recorded; D39 moves the expanded comparison and replay-scale
+      target out of the v0.2 release gate.
 
 M0 DoD: v0.1 can be reproduced from its tag; v0.2 formats and invariants
 are written before implementation; every confirmed critical/high audit
@@ -587,7 +594,7 @@ filesystem-reader-leased whole-unit retention, and the TR-19 100k/abort
 evidence are green. Full REST paging/lazy replay remains its planned M5 owner,
 not retained active state in M3.
 
-### M4 — full-fidelity history, prepared requests, and redacted exports
+### M4 — full-fidelity history and prepared requests
 
 - [ ] Implement the D34 store: small JSON-compatible values inline;
       large text/binary/structured content stored once in immutable
@@ -601,6 +608,8 @@ not retained active state in M3.
         deduplication, and strict missing/corrupt/hash-verified resolution.
         Feature activation intentionally remains below; foundation tests do
         not claim FR-1102/NFR-15/TR-16 completion.
+        D39 keeps the codec, hashes, and deduplication but removes the
+        permission/owner hardening in the next implementation change.
   - [ ] **Feature activation + event integration:** encode once before the
         shared JSONL/WebSocket fan-out, and enable `content-blobs/1` for both
         writer and reader in that same change. Partial field activation would
@@ -608,11 +617,13 @@ not retained active state in M3.
     - [x] **Field-policy/redaction seam** (landed 2026-07-13): every current
           event dataclass field is classified as structure, complete content,
           keyed content, error-message content, or derived preview. Canonical
-          sinks receive raw records; JSONL is permission-protected and the
-          WebSocket is a trusted loopback-local surface. Terminal delivery and
+          sinks receive raw records; JSONL is currently permission-protected
+          and the WebSocket is a trusted loopback-local surface. Terminal delivery and
           post-close JSON/JUnit rendering use the same schema-aware value-only
           redactor. `body_preview` and `value_preview` are explicit activation
-          blockers, not silently accepted content fields.
+          blockers, not silently accepted content fields. D39 retains this
+          field registry and raw/presentation split while scheduling removal
+          of the permission machinery next.
     - [ ] **Full-value schema + activation:** replace the two derived previews
           with the prepared request/full message contracts, apply the store
           through the registry, add lazy consumer resolution, then activate
@@ -625,15 +636,17 @@ not retained active state in M3.
       is complete. (EC32)
 - [ ] Capture the prepared request rather than a 512-character preflight
       preview: final URL/query, effective headers/cookies, body reference,
-      timing/retry metadata, and response detail. Preserve explicit
-      privacy policy for library-generated sensitive headers. (FR-1103,
-      EC50)
-- [ ] Store canonical local runs with private permissions and unmodified
-      structural records. Implement explicit redaction views for reports,
-      terminal presentation, and export; never rewrite protocol keys.
-      Declared-secret CI exports default safe, raw export is explicit,
-      and absolute “shareable by construction” language is removed.
-      (FR-1104, D35, EC45)
+      timing/retry metadata, and response detail. Library-generated sensitive
+      headers remain raw local observations; optional declared-secret masking
+      affects presentation values only. (FR-1103, EC50)
+- [ ] Simplify local-history storage to the trusted local prototype model:
+      raw JSONL and blobs use normal inherited OS permissions. Remove custom
+      Windows DACL/SID ownership handling, forced POSIX private modes, and
+      permission-based blob rejection while retaining exclusive creation,
+      workspace containment, exact structural records, and hash verification.
+      Terminal/JSON/JUnit masking remains optional through non-empty
+      `environments.secrets`; scaffold masking as opt-in examples rather than
+      an implied security guarantee. (FR-1104, D39, EC45)
   - [x] **Raw local + terminal/report views** (landed 2026-07-13): JSONL and
         local WebSocket records preserve exact values; the JSONL is private
         local storage and the WebSocket stays inside the trusted loopback UI
@@ -645,43 +658,35 @@ not retained active state in M3.
         existing directory must belong to the current token before migration.
         An ordinary sink I/O close failure preserves the run result but
         publishes history only as an incomplete prefix; control-flow
-        exceptions still propagate.
-  - [ ] **Export views:** add declared-secret-safe and explicit raw bundle
-        policies, including blob resolution/rewrite and no orphan raw content.
-- [ ] Add self-contained run export/import (manifest + JSONL + referenced
-      blobs, archive format provisional). Import verifies hashes and opens
-      read-only; an exported redacted bundle contains no unreachable raw
-      blob. Explicit CI hard limits record omitted hashes/sizes/reasons.
-      (FR-1105)
+        exceptions still propagate. This is historical landed evidence; D39
+        intentionally removes its permission-specific portion next.
 
 M4 DoD: a large response routed through Log and End is stored in full
 once, inspected byte-for-byte, and replayed without duplicated bodies;
-no silent truncation remains; a secret named/value-shaped like an event
-field cannot corrupt replay; redacted and raw export behavior is tested.
+no silent truncation remains; prepared request detail reflects the effective
+wire request; a secret named/value-shaped like an event field cannot corrupt
+replay; local history works without a custom OS permission contract.
 
-### M5 — scalable replay, frame drilldown, and timeline scrubber
+### M5 — usable paged replay and frame drilldown
 
-- [ ] Version replay APIs and stream/page event records rather than
-      returning one unbounded JSON array. Add rebuildable byte-offset or
-      sequence indexes; support seeking by `seq`, frame, node, and event
-      class without changing canonical JSONL. (FR-1106)
+- [ ] Version replay APIs and page event records rather than returning one
+      unbounded JSON array. A simple cursor/sequence contract is sufficient;
+      no derived seek index or advanced filter matrix is required for v0.2.
+      Canonical JSONL remains unchanged. (FR-1106)
 - [ ] Fetch blobs lazily. The browser keeps a bounded/virtualized event
       window plus reduced node/frame summaries, not every full record.
       Opening detail resolves the blob and verifies/handles missing data.
 - [ ] Reconstruct the frame tree from durable events and summaries.
       Root canvas loads first; subflow/loop iteration detail loads when
       expanded. Runtime frame compaction must be invisible to replay.
-- [ ] Land the timeline scrubber (former R1): slider, play/pause, real
-      event-time deltas, speed multipliers, and deterministic prefix fold
-      through `runview`. Add derived checkpoints for seeking large runs;
-      start by measuring the former ~1k-record cadence, then tune;
-      checkpoints are disposable and never replace source events.
 - [ ] Preserve EC20 behavior for genuinely incomplete runs while using a
       durable final summary to distinguish them from one large final line.
 
-M5 DoD: a 100k-event/full-fidelity run opens with bounded server/browser
-memory, first renders without fetching all blobs, scrubs smoothly, and
-drills into completed child frames without re-execution.
+M5 DoD: a representative full-fidelity run opens without returning every
+event or fetching every blob, keeps the active browser window bounded, and
+drills into completed child frames without re-execution. Timeline playback,
+checkpoints, advanced seeking, and the 100k-event replay target remain named
+future work.
 
 ### M6 — public/package/UI contract completion
 
@@ -709,9 +714,9 @@ drills into completed child frames without re-execution.
       request TLS/timeout, and typed Start defaults. Add schema-to-form
       coverage so drift fails a test. Fix abort-response status handling.
       (FR-1114, EC49)
-- [ ] Split live-run transport and history/persistence orchestration from
-      the global Zustand store along the new API boundaries; preserve pure
-      graph/run reducers and avoid a framework rewrite.
+- [ ] Refactor only the live/history orchestration needed by the paged/lazy
+      API. Preserve pure graph/run reducers; a standalone global-store split
+      is not a v0.2 deliverable unless implementation proves it necessary.
 - [ ] Generate/audit third-party notices for bundled frontend code before
       public distribution.
 
@@ -724,43 +729,36 @@ unit coverage for persistence and run transport.
 
 ### M7 — release gates, compatibility evidence, and v0.2 promotion
 
-- [ ] One reusable required workflow gates PRs and tags: Ruff format/lint,
-      import contracts, full pytest, Vitest, production UI build, wheel
-      membership/install smoke, and Playwright. Release refuses tag/package
-      mismatch and `.dev` versions. (NFR-16)
-- [ ] Close the M0 audit ledger before promotion: each of its 9 strict-xfail
-      cases becomes an unmarked passing regression in its M1–M6 owner, and
-      each of its 12 v0.2 placeholder skips is replaced by the executable
-      owner-milestone test. The release gate verifies that no M0 expected
-      failure or placeholder remains.
-- [ ] Add Linux Python 3.12/3.13/current compatibility plus minimum and
-      latest-compatible dependency jobs; retain macOS/Windows/Linux user
-      path coverage without multiplying every browser/dependency axis.
-- [ ] Land the opt-in `perf` suite (former R6), excluded from ordinary CI:
-      scheduler fairness/throughput, worker sizes, bounded loop peak,
-      full-fidelity write/read, and replay memory/first-render. Compare to
-      M0 baselines and document deliberate trade-offs. (NFR-18)
-- [ ] Run adversarial release checks: traversal/symlink, foreign
-      Host/Origin, disk-full/interrupted save, slow subscriber, missing/
-      corrupt blob, incomplete run, worker crash/timeout, abort at each
-      lifecycle phase, and clean-artifact install.
+- [ ] Reuse the existing required CI/release workflows and add only missing
+      v0.2 product checks: Vitest in the authoritative gate, installed-wheel
+      `napf ui`/`run_flow` smoke, production bundle membership, and exact
+      tag/package version refusal. Do not add minimum/latest dependency or
+      expanded OS/browser axes before user demand. (NFR-16)
+- [ ] Close the M0 audit entries still owned by streamlined v0.2. Reassign
+      placeholders for explicitly deferred export, advanced replay, or
+      performance targets to the future ledger instead of treating them as
+      release failures.
+- [ ] Run the focused release checks that exercise current promises: full
+      Python/UI suites, existing cross-platform paths, missing/corrupt blob,
+      incomplete run, prepared-request capture, public API isolation, and
+      clean installed-artifact smoke. Do not introduce a separate exhaustive
+      adversarial or performance matrix in v0.2.
 - [ ] Update engine/workspace/flow specs to implemented v0.2 behavior,
-      publish format notes and any best-effort v0.1 reader/migration, close
-      remaining EC09/EC32/EC42–EC45/EC47–EC50 only with their tests, preserve
+      publish format notes, close remaining v0.2-owned EC32/EC42/EC44/EC47/
+      EC49/EC50 only with their tests, preserve
       M1's tested EC38/EC46/EC51 closures, record EC27's
       cooperative-scheduler half precisely, and retain EC10/EC22/EC35
       as named post-v0.2 limitations; then tag `v0.2.0`.
 
-v0.2 DoD: all FR-11xx/NFR-12–18/TR-11–22 requirements are green; no
-v0.2-targeted critical/high review case remains merely documented;
-post-v0.2 limitations retain explicit scope and closure tests; release
-artifacts are reproducible and their version matches the tag;
-full-fidelity replay is useful on large real runs without sacrificing
-content reliability.
+v0.2 DoD: every requirement still assigned to v0.2 is green; no
+v0.2-targeted correctness case remains merely documented; deferred product,
+security, export, and performance targets remain explicit; release artifacts
+are reproducible and their version matches the tag; full-fidelity history,
+basic lazy replay, the runtime flow catalog, and the installed user path work.
 
 ### Explicitly after v0.2
 
-These remain compatible but are deliberately excluded so the hardening
+These remain compatible but are deliberately excluded so the prototype
 release stays bounded:
 
 1. **Pause/resume + step** (former R2, D30): dispatch gate, paused-time
@@ -769,28 +767,42 @@ release stays bounded:
    pause gate, never flow-file content.
 3. **Pack selection to new flow** (former R5, D31): extract-to-subflow
    refactor with boundary inference and Python/template rewrites.
-4. **Fine-grained runtime-secret redaction** (EC10): register derived
-   values or response field paths and redact referenced export blobs;
-   v0.2 delivers the declared-secret/raw-local policy first.
-5. **Descendant-process cleanup** (EC22): owned POSIX process groups and
+4. **Timeline scrubber and playback** (former R1): slider, play/pause, real
+   event-time deltas, speed multipliers, deterministic prefix folding, and
+   measured/rebuildable checkpoints. Keep this for a later product stage.
+5. **100k-event replay performance target and expanded perf suite** (former
+   R6): bounded server/browser memory, seek/first-render measurements, and
+   storage/replay comparisons against the preserved M0 baselines. Re-evaluate
+   the exact target when real histories exist; it is not a v0.2 gate.
+6. **Run export/import and redacted bundles** (FR-1105): self-contained
+   JSONL+blob archives, read-only import, raw/redacted choice, referenced-blob
+   rewriting, and explicit hard-limit omission metadata.
+7. **Advanced replay indexing and filters**: rebuildable byte/sequence
+   indexes, timeline checkpoints, and broad frame/node/event seek filters.
+8. **Fine-grained runtime-secret redaction** (EC10): register derived
+   values or response field paths when safe exports become a real feature.
+9. **Descendant-process cleanup** (EC22): owned POSIX process groups and
    Windows Job Objects/equivalent, with timeout/abort/shutdown tree tests.
-6. **Preemptible template execution / hard deadline semantics**
+10. **Preemptible template execution / hard deadline semantics**
    (EC27/EC35): measure first, then isolate synchronous Jinja work in a
    killable boundary or explicitly retain a cooperative trusted-code
    deadline contract with tests and precise documentation.
-7. Poll/duplicate nodes, inline loop bodies, marker collect,
+11. Poll/duplicate nodes, inline loop bodies, marker collect,
    `napf check --write-env-example`, per-module worker-pool expansion,
    app-mode UI, endpoint catalogs/imports, general codegen, remote
    hosting/authentication, and collaborative editing.
-8. **Generated typed workspace bindings** (D38): deterministically derive a
+12. **Generated typed workspace bindings** (D38): deterministically derive a
    Python module/stub from flow discovery plus Start/End interfaces so IDEs and
    type checkers know the catalog's discovered attributes, nested flow names,
    input shapes, and output shapes. Include a stale-binding CI check and
    exact-name fallback. Do not require an editor-specific type-checker plugin
    or pretend runtime
    `__getattr__` can provide static filesystem-derived types.
-9. Encryption/key management for histories. v0.2 uses local filesystem
-   permissions plus explicit redaction/export policy.
+13. **Separate secure-history implementation if demanded by users**: custom
+    ACL/DACL policy, forced private modes, authentication/authorization,
+    encryption/key management, and secure sharing belong to one explicit
+    future security design. v0.2 relies on ordinary OS permissions and makes
+    no secure-storage or safe-export guarantee.
 
 ## Working agreements
 
@@ -801,7 +813,7 @@ release stays bounded:
   one dated `docs/JOURNAL.md` entry (done / decided / next) when the closeout
   produced a durable change or useful handoff.
 - New edge cases → `EDGE_CASES.md` (EC52+); new decisions →
-  `DECISIONS.md` (D39+).
+  `DECISIONS.md` (D40+).
 - v0.x releases are experimental (D33), tag-driven, and require exact
   tag/package version agreement (`RELEASING.md`). Breaking changes are
   permitted with clear release notes until v1.0.
