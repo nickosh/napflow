@@ -296,5 +296,17 @@ describe("summarize", () => {
     expect(
       summarize(root("log", "logger", { label: "users", value: [1, 2, 3] })),
     ).toBe("users: [1,2,3]");
+    expect(
+      summarize(
+        rec("frame_finished", {
+          frame: "f-0/f-3",
+          kind: "loop",
+          flow: "flows/item",
+          loop_index: 2,
+          state: "passed",
+          duration_ms: 8.6,
+        }),
+      ),
+    ).toBe("loop flows/item #2 · passed · 9ms");
   });
 });

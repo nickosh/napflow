@@ -18,6 +18,7 @@ from napflow.core.events import (
     MASK,
     AssertResult,
     EventStream,
+    FrameFinished,
     HistoryFormatError,
     JsonlSink,
     LogEvent,
@@ -75,6 +76,7 @@ def test_vocabulary_is_exactly_en7():
         "guard_tripped",
         "budget_warning",
         "capture_warning",
+        "frame_finished",
         "run_finished",
     }
 
@@ -192,6 +194,42 @@ def test_optional_payload_fields_omitted_when_unset():
     assert "error_reason" not in sink.records[0]
     assert sink.records[1]["error_reason"] == "run_timeout"
     assert "op" not in sink.records[2]  # status checks carry no op
+
+
+def test_frame_finished_is_a_reconstructable_child_summary():
+    s, sink = stream()
+    s.emit(
+        FrameFinished(
+            frame="f-0/f-4",
+            parent_frame="f-0",
+            parent_node="items",
+            flow="flows/item",
+            kind="loop",
+            loop_index=3,
+            duration_ms=12.5,
+            state="passed",
+            asserts={"passed": 1, "failed": 0},
+            unhandled_errors=[],
+            end_outputs={"value": 7},
+        )
+    )
+    assert sink.records[0] == {
+        "event": "frame_finished",
+        "run_id": "20260705-100000-abc123",
+        "frame": "f-0/f-4",
+        "ts": "2026-07-05T10:00:00.123Z",
+        "seq": 1,
+        "parent_frame": "f-0",
+        "parent_node": "items",
+        "flow": "flows/item",
+        "kind": "loop",
+        "loop_index": 3,
+        "duration_ms": 12.5,
+        "state": "passed",
+        "asserts": {"passed": 1, "failed": 0},
+        "unhandled_errors": [],
+        "end_outputs": {"value": 7},
+    }
 
 
 # --------------------------------------------------------------------------

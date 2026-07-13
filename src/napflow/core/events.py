@@ -262,6 +262,28 @@ class CaptureWarning(Event):
 
 
 @dataclass(kw_only=True)
+class FrameFinished(Event):
+    """Durable child-frame completion record (D36/NFR-14).
+
+    Runtime ``Frame`` objects are released after this record is emitted;
+    replay uses these records, not retained Python objects, to reconstruct
+    the completed frame tree.
+    """
+
+    event: ClassVar[str] = "frame_finished"
+    parent_frame: str
+    parent_node: str
+    flow: str
+    kind: Literal["flow", "loop"]
+    loop_index: int | None
+    duration_ms: float
+    state: Literal["passed", "failed", "aborted"]
+    asserts: dict[str, int]
+    unhandled_errors: list[dict[str, Any]]
+    end_outputs: dict[str, Any]
+
+
+@dataclass(kw_only=True)
 class RunFinished(Event):
     event: ClassVar[str] = "run_finished"
     state: Literal["passed", "failed", "error", "aborted"]
@@ -288,6 +310,7 @@ EVENT_TYPES: dict[str, type[Event]] = {
         GuardTripped,
         BudgetWarning,
         CaptureWarning,
+        FrameFinished,
         RunFinished,
     )
 }

@@ -114,6 +114,12 @@ are the **data** isolation unit — nothing leaks across except Start/End
 port values. Outcomes are NOT isolated (D20, §2). Frame IDs are
 hierarchical (`f-0/f-3/f-7`) for traceability.
 
+Completed child frames are not retained as runtime history. At quiescence,
+the engine emits one canonical `frame_finished` event, rolls the child's
+subtree outcome counts into its parent, and releases the child `Frame`.
+Only active children remain attached to a parent. Replay reconstructs the
+completed tree from events rather than live Python objects (D36/NFR-14).
+
 **Run** — the whole execution tree rooted at one entry flow + env profile
 + bound inputs. Owns: `run.id`, the shared niquests `AsyncSession`, the
 message budget, the event sink(s), the report accumulator.
@@ -392,7 +398,8 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
 - **loop** — fires on its `trigger` input; `over` is a Jinja2 expression
   evaluated against that delivery. Opens a child frame per item; binds
   `item`, `index` to body Start; `sequential` = await each; `parallel` =
-  `asyncio.Semaphore(max_concurrency)`; collects body End dicts to
+  a fixed set of at most `max_concurrency` workers claiming successive
+  indexes from the evaluated list; collects body End dicts to
   `results` — ordered by item index, not completion order (EC36) —
   failures to `errors`. An iteration "error" is a body frame
   ending `failed`/`error` (D20). `on_error: stop` halts scheduling of
@@ -487,6 +494,22 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     deferred "capped pool" note in §5a.
   - **`nodes_never_fired`** reports the ROOT frame only; child-frame
     skips are visible in the event stream per frame.
+- v0.2 M3 bounded-frame pins (2026-07-13, engine `_run_loop` /
+  `_finish_child`):
+  - A parallel loop creates `min(max_concurrency, len(items))` helper
+    workers for the whole firing, never one task per item. A shared cursor
+    claim has no await and is serialized by the run's event loop; results
+    and error entries retain their existing item-index order.
+  - A normally quiescent flow/loop child emits `frame_finished` before its
+    container output messages, rolls subtree assert/error counts into the
+    parent, and is detached. The event carries child/parent identity,
+    invoking node and kind, target flow, nullable loop index, duration,
+    subtree state/asserts/errors, and End outputs.
+  - Cancelled children are not compacted through this path: queued
+    deliveries may still reference them, and abort must not synthesize a
+    D18 required-End failure. They remain bounded by active concurrency and
+    are released with the run lifecycle; a later M3 slice owns richer
+    aborted-frame replay evidence.
 - Pins made at S3/M3 (2026-07-06, engine `_run_node` / `_load_fixture`
   / `_seed`):
   - **switch**: the evaluated value is compared to each case `equals`
@@ -717,6 +740,9 @@ log              {label, level, value(masked)}
 guard_tripped    {kind: counter|timeout, port: exhausted|expired}
 budget_warning   {remaining}            # at 10% left
 capture_warning  {remaining_mb}         # run capture budget at 10% left
+frame_finished   {parent_frame, parent_node, flow, kind: flow|loop,
+                  loop_index, duration_ms, state,
+                  asserts: {passed, failed}, unhandled_errors, end_outputs}
 run_finished     {state, duration_ms, asserts: {passed, failed},
                   unhandled_errors, end_outputs(masked),
                   nodes_never_fired: [node_ids],   # "skipped" for UI/report
@@ -757,6 +783,13 @@ Rules:
 - Timing fields included where niquests exposes them, else omitted.
 - On abort, an in-flight request leaves a `request_started` with no
   matching `request_finished`; replay tolerates a dangling start (EC20).
+- `frame_finished` is the canonical completion fact for a child frame,
+  emitted before runtime-only state is released. Its common `frame` field is
+  the child id; `parent_frame` and `parent_node` identify the invocation.
+  `asserts` and `unhandled_errors` cover the completed subtree, while
+  `end_outputs` is that frame's own End interface. Additive event kinds are
+  safe for older v0.x readers to retain/display generically and do not
+  activate a storage feature flag (D33).
 - UI replay = re-read the JSONL.
 
 Pins made at S2/M2 (2026-07-05, `core/events.py`):
@@ -880,9 +913,10 @@ on completed runs only, ordered by a truly chronological id/metadata
 never touches an active or newer run.
 
 **Disposable indexes.** Byte-offset / `seq` / frame / node indexes and
-per-frame summaries are DERIVED, rebuildable acceleration structures.
-They may be deleted at any time and regenerated from the JSONL + blobs;
-they are never authoritative and never a substitute for a source event.
+cached per-frame summary tables are DERIVED, rebuildable acceleration
+structures. They may be deleted at any time and regenerated from the JSONL
+and blobs; they are never authoritative and never a substitute for source
+events, including canonical `frame_finished` records.
 
 ## 8. `napf check` rules (v0.1)
 

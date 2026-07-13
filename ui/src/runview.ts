@@ -377,6 +377,13 @@ export function summarize(record: RunRecord): string {
       return `${record.remaining} messages left in budget`;
     case "capture_warning":
       return `${record.remaining_mb}MB body capture left`;
+    case "frame_finished": {
+      const index =
+        typeof record.loop_index === "number" ? ` #${record.loop_index}` : "";
+      return `${record.kind} ${record.flow}${index} · ${record.state} · ${Math.round(
+        (record.duration_ms as number) ?? 0,
+      )}ms`;
+    }
     case "run_finished":
       return `${record.state} in ${Math.round((record.duration_ms as number) ?? 0)}ms`;
     default:

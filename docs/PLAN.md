@@ -540,6 +540,12 @@ remain explicitly after v0.2.
       `max_concurrency`. Compact finished child frames after emitting a
       reconstructable frame summary (parent, target flow, loop index,
       timing, state, outputs/errors/assert counts). (NFR-14, D36)
+      **Progress 2026-07-13:** fixed workers and normal-quiescence frame
+      release landed with canonical `frame_finished` records, nested outcome
+      rollups, and a bounded 200-item regression. This box remains open for
+      TR-19's 100k active-state evidence and explicit aborted-frame replay/
+      release coverage; cancelled frames currently stay bounded by active
+      concurrency and die with run cleanup rather than risking a false D18.
 - [ ] Bound live subscriber queues and disconnect/resync slow consumers;
       replay late subscribers from the durable log instead of retaining
       an unlimited prefix in RAM. Keep running-run summaries bounded.

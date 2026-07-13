@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-13 — v0.2 M3 bounded loop/frame start
+
+- Done: parallel loops now use a fixed `max_concurrency` worker set; normally
+  quiescent children emit canonical `frame_finished` and release live Frames.
+- Preserved: item ordering and nested D20/D21 outcomes; cancelled frames stay
+  concurrency-bounded and defer release to cleanup so abort cannot fake D18.
+- Verified: 427 pytest passed (3 skipped, 6 expected xfails), 47 Vitest,
+  production UI build, Ruff, and both import-architecture contracts.
+- Next: stream CLI reports from durable JSONL, add robust last-record reading,
+  then land post-completion whole-run retention and bounded live subscribers.
+
 ## 2026-07-13 — public Python workspace/flow API direction
 
 - Decided D38: public embedding is reusable Workspace → bound Flow → isolated

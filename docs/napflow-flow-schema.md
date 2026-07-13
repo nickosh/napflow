@@ -470,7 +470,10 @@ the body's Start must declare an `item` port; it may declare `index`.**
 continue`; `fresh_session: true` gives each iteration its own HTTP
 session (default: shared per-run session); body End outputs collected on
 `results` — ordered by item index regardless of completion order
-(EC36) — failures on `errors`.
+(EC36) — failures on `errors`. Parallel mode uses a fixed worker set of at
+most `max_concurrency`; it does not allocate one helper task per item.
+Normally completed iteration frames are summarized durably and released,
+so active task/frame counts are bounded by concurrency (D36/NFR-14).
 
 An iteration "error" is **a body frame ending `failed` or `error`** (D20):
 any failed assert, unhandled error-port message, worker crash/timeout, or
