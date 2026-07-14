@@ -1031,7 +1031,7 @@ def test_active_marker_failure_removes_its_partial_file(tmp_path, monkeypatch):
     assert not (runs / f"{run_id}.active").exists()
 
 
-def test_history_lock_does_not_follow_symlink_outside_runs(tmp_path):
+def test_history_lock_does_not_follow_symlink_outside_runs(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     runs.mkdir()
     run_id = "20260712-100000-000001"
@@ -1043,6 +1043,10 @@ def test_history_lock_does_not_follow_symlink_outside_runs(tmp_path):
     except OSError as error:
         pytest.skip(f"symlinks unavailable: {error}")
 
+    def reject_open(*_args, **_kwargs):
+        raise AssertionError("a planted history-lock symlink must not be opened")
+
+    monkeypatch.setattr(events_module.os, "open", reject_open)
     with pytest.raises(OSError, match="history lock"):
         begin_run_history(log, run_id)
 

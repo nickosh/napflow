@@ -1719,7 +1719,7 @@ def test_clone_preserves_nested_symlinks_without_dereferencing(tmp_path):
         assert response.status == 201, await response.text()
         copied = ws.root / "flows" / "smoke_link_copy" / "outside-link"
         assert copied.is_symlink()
-        assert copied.readlink() == outside
+        assert copied.samefile(outside)
 
     with_client(ws, scenario)
 

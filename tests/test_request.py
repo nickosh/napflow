@@ -303,7 +303,7 @@ def test_adapter_transport_error_carries_final_redirect_request(server):
     finally:
         Handler.redirect_target = None
 
-    assert error.kind == "connection"
+    assert error.kind in {"connection", "timeout"}
     assert len(prepared) == 1
     assert prepared[0].url == f"{server}/redirect-fail"
     assert error.request is not None

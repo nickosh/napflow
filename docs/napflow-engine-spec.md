@@ -1139,8 +1139,10 @@ M3 uses internal exact-stem companions beside the JSONL:
   timed-out WebSocket keeps it through the reconnect window. A crash may leave
   a conservative stale lease for later recovery.
 
-The per-flow no-follow, regular-file-validated `.history.lock` and atomically
-replaced `.history-order.json` allocate order and coordinate readers/deleters
+The per-flow no-follow, regular-file-validated `.history.lock` rejects an
+existing non-regular path before any open, then revalidates the opened/current
+regular-file identity after open. Together with the atomically replaced
+`.history-order.json`, it allocates order and coordinates readers/deleters
 across local processes; allocation recovers from surviving unit markers and
 is immune to equal/backward wall clocks. Retention runs
 after completion, revalidates the canonical JSONL's matching final record,

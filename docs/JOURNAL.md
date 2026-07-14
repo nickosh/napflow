@@ -4,6 +4,15 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-14 — Windows CI portability fix
+
+- Fixed: history locking rejects planted non-regular entries before open, so
+  Windows cannot create a dangling symlink's external target during fallback.
+- Hardened tests: redirect failures allow the adapter's connection/timeout
+  mapping, and clone symlinks compare target identity rather than path spelling.
+- Verified: 593 pytest plus focused cases and Ruff check/format pass locally;
+  next push this fix and confirm the Windows PR job turns green.
+
 ## 2026-07-14 — v0.2 M7 reusable release-gate start
 
 - Done: CI is reusable by the tag workflow; Vitest/notices/artifact smoke and

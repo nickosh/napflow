@@ -817,11 +817,20 @@ def _history_directory_lock(runs_dir: Path) -> Iterator[None]:
     flags |= getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_BINARY", 0)
     try:
+        existing = lock_path.lstat()
+    except FileNotFoundError:
+        existing = None
+    except OSError as error:
+        raise OSError(f"history lock inspection failed: {lock_path}") from error
+    if existing is not None and not stat.S_ISREG(existing.st_mode):
+        raise OSError(f"history lock is not a regular file: {lock_path}")
+    try:
         fd = os.open(lock_path, flags)
     except FileNotFoundError:
         try:
-            # O_EXCL makes a raced symlink/file fail without following it,
-            # including on Windows where O_NOFOLLOW is usually unavailable.
+            # O_EXCL rejects an ordinary raced file. The preflight above
+            # protects static links where Windows lacks O_NOFOLLOW; the
+            # descriptor/path check below still detects replacements.
             fd = os.open(lock_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
         except OSError as error:
             raise OSError(f"history lock creation failed: {lock_path}") from error
