@@ -21,6 +21,24 @@ async function flowModel(page: Page, identity: string) {
   return response.json();
 }
 
+async function expectNodeInsideCanvas(page: Page, testId: string) {
+  await expect
+    .poll(async () => {
+      const [node, canvas] = await Promise.all([
+        page.getByTestId(testId).boundingBox(),
+        page.getByTestId("canvas").boundingBox(),
+      ]);
+      if (node === null || canvas === null) return false;
+      return (
+        node.x >= canvas.x &&
+        node.y >= canvas.y &&
+        node.x + node.width <= canvas.x + canvas.width &&
+        node.y + node.height <= canvas.y + canvas.height
+      );
+    })
+    .toBe(true);
+}
+
 test.describe.configure({ mode: "serial" }); // shared workspace state
 
 test("dragging a node autosaves a layout-only change", async ({ page }) => {
@@ -232,6 +250,7 @@ test("switch cases edit as structured rows", async ({ page }) => {
   await page.getByTestId("add-node").click();
   await page.getByTestId("palette-switch").click();
   await expect(page.getByTestId("node-switch")).toBeVisible();
+  await expectNodeInsideCanvas(page, "node-switch");
   await page.getByTestId("node-switch").click();
 
   await page.getByTestId("config-expr").fill("trigger.value.state");
@@ -467,6 +486,21 @@ async function dragNodeBy(page: Page, testId: string, dx: number, dy: number) {
     { steps: 3 },
   );
   await page.mouse.up();
+  // React Flow moves the DOM synchronously with a successful gesture. Prove
+  // the edit was accepted before a test attributes a later failure to save
+  // coordination (and stay inside the one-second debounce window).
+  await expect
+    .poll(
+      async () => {
+        const moved = await node.boundingBox();
+        return (
+          moved !== null &&
+          (Math.abs(moved.x - box.x) > 1 || Math.abs(moved.y - box.y) > 1)
+        );
+      },
+      { timeout: 500 },
+    )
+    .toBe(true);
 }
 
 test("immediate flow navigation flushes the pending canvas edit", async ({
@@ -475,6 +509,10 @@ test("immediate flow navigation flushes the pending canvas edit", async ({
   await page.goto("/flow/flows/main");
   const before = await flowModel(page, "flows/main");
   await dragNodeBy(page, "node-start", 70, 35);
+  await expect(page.getByTestId("save-status")).toHaveAttribute(
+    "data-state",
+    "dirty",
+  );
 
   // Click before the one-second debounce expires. openFlow must drain the
   // coordinator before it replaces the current detail.

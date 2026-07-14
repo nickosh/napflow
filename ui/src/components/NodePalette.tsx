@@ -1,13 +1,15 @@
 import { useState } from "react";
 
 import { NODE_TYPES, PALETTE_DRAG_TYPE } from "../forms";
-import { useAppStore } from "../store";
 
 // Add-node control: a small overlay button opening the v1 catalog.
-// Click adds below the graph (keyboard-friendly); dragging an entry
-// onto the canvas adds at the drop position.
-export default function NodePalette() {
-  const addNode = useAppStore((s) => s.addNode);
+// Click adds below the graph and refits it into view (keyboard-friendly);
+// dragging an entry onto the canvas adds at the drop position.
+export default function NodePalette({
+  onAdd,
+}: {
+  onAdd: (type: string) => void;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -52,7 +54,7 @@ export default function NodePalette() {
               }}
               onDragEnd={() => setOpen(false)}
               onClick={() => {
-                addNode(type);
+                onAdd(type);
                 setOpen(false);
               }}
               style={{

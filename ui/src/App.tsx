@@ -5,6 +5,7 @@ import {
   ReactFlowProvider,
   applyEdgeChanges,
   applyNodeChanges,
+  useNodesInitialized,
   useReactFlow,
   type Connection,
   type Edge,
@@ -59,13 +60,15 @@ function Canvas() {
   const inRunMode = useAppStore((s) => s.runView !== null);
   const canvasDetail =
     runFramePath.length > 0 ? runFrameDetail : detail;
-  const { screenToFlowPosition } = useReactFlow();
+  const { fitView, screenToFlowPosition } = useReactFlow();
+  const nodesInitialized = useNodesInitialized();
 
   // xyflow holds interactive state (drag positions, selection); the
   // store's model stays authoritative — graphVersion bumps rebuild
   // from it after structural edits or external reloads
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [fitAfterAddCount, setFitAfterAddCount] = useState<number | null>(null);
   const identity = canvasDetail?.identity ?? null;
   useEffect(() => {
     if (canvasDetail !== null) {
@@ -127,6 +130,28 @@ function Canvas() {
     [addNode, screenToFlowPosition],
   );
 
+  const addVisibleNode = useCallback(
+    (type: string) => {
+      // Keep the store's collision-free below-graph placement, then refit
+      // once xyflow has rendered and measured the new node.
+      setFitAfterAddCount((canvasDetail?.flow.nodes.length ?? nodes.length) + 1);
+      addNode(type);
+    },
+    [addNode, canvasDetail?.flow.nodes.length, nodes.length],
+  );
+
+  useEffect(() => {
+    if (
+      fitAfterAddCount === null ||
+      nodes.length < fitAfterAddCount ||
+      !nodesInitialized
+    ) {
+      return;
+    }
+    void fitView({ padding: 0.15 });
+    setFitAfterAddCount(null);
+  }, [fitAfterAddCount, fitView, nodes.length, nodesInitialized]);
+
   const onConnect = useCallback(
     (connection: Connection) => {
       if (
@@ -166,7 +191,10 @@ function Canvas() {
     return <div style={{ flex: 1 }} data-testid="canvas" />;
   }
   return (
-    <div style={{ flex: 1, minWidth: 0, position: "relative" }} data-testid="canvas">
+    <div
+      style={{ flex: 1, minWidth: 0, position: "relative" }}
+      data-testid="canvas"
+    >
       <ReactFlow
         key={`${canvasDetail.identity}:${runFramePath.at(-1)?.frame ?? "root"}`}
         nodes={nodes}
@@ -213,7 +241,7 @@ function Canvas() {
         <Controls />
         <ConnectHint />
       </ReactFlow>
-      {!inRunMode && <NodePalette />}
+      {!inRunMode && <NodePalette onAdd={addVisibleNode} />}
     </div>
   );
 }
