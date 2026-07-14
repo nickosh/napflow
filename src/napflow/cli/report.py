@@ -23,14 +23,11 @@ from napflow.core.engine import RunResult
 from napflow.core.events import (
     HISTORY_FEATURE_CONTENT_BLOBS,
     HISTORY_FORMAT,
-    HISTORY_FORMAT_MAJOR,
-    HISTORY_SUPPORTED_FEATURES,
     HistoryFormatError,
     SecretMasker,
-    parse_history_features,
-    parse_history_format,
     persist_record_content,
     resolve_record_content,
+    validate_history_envelope,
 )
 from napflow.core.history_content import RunContentStore
 
@@ -38,41 +35,33 @@ from napflow.core.history_content import RunContentStore
 def _iter_records(
     log_path: Path,
 ) -> Iterator[tuple[dict[str, Any], frozenset[str]]]:
-    """Read one record at a time after gating a present feature envelope.
+    """Read one record at a time after gating the history envelope.
 
-    Older focused fixtures and v0.1 logs may begin without ``run_started``;
-    those remain best-effort featureless input.  A current envelope is parsed
-    before any later record can be interpreted as descriptor-bearing content.
+    A v0.1 log remains best-effort input when its ``run_started`` header omits
+    both version fields. Every nonempty log still needs that header at seq 1
+    before later records can be interpreted as descriptor-bearing content.
     """
     features: frozenset[str] = frozenset()
     first_record = True
-    with log_path.open(encoding="utf-8") as log:
-        for line in log:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if first_record and record.get("event") == "run_started":
-                if "format" not in record and "features" in record:
+    try:
+        with log_path.open(encoding="utf-8") as log:
+            for line in log:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError as error:
                     raise HistoryFormatError(
-                        "legacy run history cannot declare storage features"
-                    )
-                major = parse_history_format(record.get("format"))
-                if major > HISTORY_FORMAT_MAJOR:
-                    raise HistoryFormatError(
-                        f"unsupported run-history format major {major}"
-                    )
-                features = (
-                    parse_history_features(record["features"])
-                    if "features" in record
-                    else frozenset()
-                )
-                unsupported = features - HISTORY_SUPPORTED_FEATURES
-                if unsupported:
-                    raise HistoryFormatError(
-                        f"unsupported run-history features: {sorted(unsupported)!r}"
-                    )
-            first_record = False
-            yield record, features
+                        "run history does not contain valid JSON records"
+                    ) from error
+                if first_record:
+                    features = validate_history_envelope(record)
+                    first_record = False
+                yield record, features
+    except UnicodeError as error:
+        raise HistoryFormatError("run history must contain valid UTF-8") from error
+    if first_record:
+        raise HistoryFormatError("run history is empty; no run_started envelope")
 
 
 def _iter_presented_records(

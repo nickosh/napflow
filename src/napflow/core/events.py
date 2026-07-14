@@ -143,6 +143,50 @@ def parse_history_features(value: Any) -> frozenset[str]:
     return frozenset(value)
 
 
+def validate_history_envelope(record: Any) -> frozenset[str]:
+    """Validate and return features from the first nonblank history record.
+
+    Every nonempty history starts with ``run_started`` at sequence 1. A
+    pre-versioning v0.1 header omits both ``format`` and ``features`` and is
+    read best-effort as featureless history. Explicit malformed metadata is
+    never treated as legacy merely because it is falsey.
+    """
+    if (
+        not isinstance(record, dict)
+        or record.get("event") != "run_started"
+        or type(record.get("seq")) is not int
+        or record["seq"] != 1
+    ):
+        raise HistoryFormatError(
+            "run history must begin with a run_started envelope at seq 1"
+        )
+    has_format = "format" in record
+    if has_format and record["format"] is None:
+        raise HistoryFormatError(
+            "run-history format must be omitted for v0.1 or contain a string"
+        )
+    if not has_format and "features" in record:
+        raise HistoryFormatError("legacy run history cannot declare storage features")
+    major = parse_history_format(record.get("format"))
+    if major > HISTORY_FORMAT_MAJOR:
+        raise HistoryFormatError(
+            f"unsupported run-history format major {major}; "
+            f"this build supports up to napflow-run/{HISTORY_FORMAT_MAJOR}"
+        )
+    features = (
+        parse_history_features(record["features"])
+        if "features" in record
+        else frozenset()
+    )
+    unsupported = features - HISTORY_SUPPORTED_FEATURES
+    if unsupported:
+        # repr() escapes malformed Unicode (including lone surrogates), so
+        # untrusted feature names remain safe in JSON and WebSocket errors.
+        shown = ", ".join(repr(feature) for feature in sorted(unsupported))
+        raise HistoryFormatError(f"unsupported run-history features: {shown}")
+    return features
+
+
 # --------------------------------------------------------------------------
 # Vocabulary (EN §7) — one dataclass per event type
 

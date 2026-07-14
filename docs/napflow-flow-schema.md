@@ -13,6 +13,12 @@ Compatibility note (D33, 2026-07-11): `schema: napflow/v1` remains an
 changes are expected before package v1.0 and v0.x migration support is
 best-effort. The marker becomes a stability/migration promise only when
 the package reaches v1.0.
+For the v0.2 upgrade specifically, no flow-file migration adapter is promised:
+v0.1 flow files that still validate continue to load, while the removed
+manifest keys `defaults.run.body_capture_mb` and
+`defaults.run.run_capture_mb` are rejected. The flow marker itself is
+unchanged; event/history compatibility is defined by the engine spec and the
+release-facing summary is `release-notes-v0.2.0.md`.
 Amended 2026-07-13 for v0.2/M4: full message/request/response event values,
 store-once `content-blobs/1` persistence, and prepared-wire request capture
 replace the historical preview/capture-valve behavior; the flow YAML shape is
@@ -206,7 +212,7 @@ If the job never reaches `done`, `end.job` is never written and the run is
 `failed` (exit 1) — the correct CI outcome — while `gave_up` records why.
 Flows that treat exhaustion as success mark `job` `required: false` instead.
 
-## Node type catalog — v1
+## Node type catalog — `napflow/v1` (experimental during package v0.x)
 
 | type      | purpose | key config | ports |
 |-----------|---------|------------|-------|
@@ -322,9 +328,11 @@ Vitest, so a new field must gain a visual path or an explicit classification.
 
 Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
 
-- **Every node accepts an optional `max_seconds`** — a hard wall-clock
-  ceiling on a single firing, enforced by the engine (worker kill for
-  `python`, task cancellation otherwise; engine spec §5a).
+- **Every node accepts an optional `max_seconds`** — an execution ceiling on a
+  single firing, enforced by worker termination for `python` and cooperative
+  task cancellation for other async work (engine spec §5a). Synchronous Jinja
+  rendering cannot be preempted, so EC35 remains an explicit post-v0.2 hard-
+  deadline limitation rather than a hidden exception to the contract.
 - **The manifest default** (`defaults.run.node_timeout_s`, 300) applies
   automatically to `request` and `python` only — the two potentially
   unbounded leaf firings. `delay` is self-bounded by its `seconds`;
@@ -353,8 +361,10 @@ Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
     `flow` node.
   - nodes without an error port (`delay`, guards, `set`/`get`, …) →
     unhandled node error ⇒ run `failed` (EC24).
-- Whole-run wall-clock deadline: `defaults.run.run_timeout_s` /
-  `napf run --timeout` (off by default; see manifest).
+- Cooperative execution deadline: `defaults.run.run_timeout_s` /
+  `napf run --timeout` (off by default; see manifest). It is armed after root
+  ENV/BIND and bounds the message pump/async firings, not LOAD/CHECK/profile
+  selection or synchronous template work (EC27/EC35).
 
 ### Request node
 - Has an explicit `trigger` input port — it fires when a message arrives
@@ -415,8 +425,11 @@ as everywhere else.
   evaluation. One syntax. (JMESPath removed from earlier drafts.)
 - Port types: `string | number | boolean | object | list | any`
   (default `any`); UI colors ports, warns on mismatch, never blocks.
-- Edits: last-write-wins; UI watches the filesystem and reloads/prompts
-  on external change.
+- Edits: per-file ETags and revisioned save coordinators serialize accepted
+  writes. A clean canvas polls for external changes and reloads; dirty/stale
+  writes receive 409 and require reload or explicit force-overwrite (the
+  last-write-wins ceiling). Navigation, code-editor close, and run start flush
+  pending writes; unload prompts while work remains (EC46).
 - Run history: JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`,
   append-only, raw, and identical to the local live WebSocket stream. JSONL
   creation is exclusive, while directories/files otherwise use ordinary

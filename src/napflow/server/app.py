@@ -41,16 +41,15 @@ from napflow.core.checker import (
     used_by,
 )
 from napflow.core.events import (
-    HISTORY_FORMAT_MAJOR,
-    HISTORY_SUPPORTED_FEATURES,
     HistoryFormatError,
     begin_history_reader,
     encode_record,
     last_jsonl_record,
-    parse_history_features,
-    parse_history_format,
     resolve_record_content,
     run_history_sort_key,
+)
+from napflow.core.events import (
+    validate_history_envelope as _validate_history_envelope,
 )
 from napflow.core.files import atomic_write_text
 from napflow.core.history_content import (
@@ -606,46 +605,6 @@ def _flow_summary(ref: Any) -> dict[str, Any]:
         "inputs": inputs,
         "outputs": outputs,
     }
-
-
-def _validate_history_envelope(record: Any) -> None:
-    """Validate the first nonblank history record before replaying data."""
-    if (
-        not isinstance(record, dict)
-        or record.get("event") != "run_started"
-        or type(record.get("seq")) is not int
-        or record["seq"] != 1
-    ):
-        raise HistoryFormatError(
-            "run history must begin with a run_started envelope at seq 1"
-        )
-    has_format = "format" in record
-    if has_format and record["format"] is None:
-        raise HistoryFormatError(
-            "run-history format must be omitted for v0.1 or contain a string"
-        )
-    if not has_format and "features" in record:
-        raise HistoryFormatError(
-            "pre-versioning run history must omit both format and features"
-        )
-    marker = record.get("format")
-    major = parse_history_format(marker)
-    if major > HISTORY_FORMAT_MAJOR:
-        raise HistoryFormatError(
-            "unsupported newer run-history major; "
-            f"this build supports up to napflow-run/{HISTORY_FORMAT_MAJOR}"
-        )
-    features = (
-        parse_history_features(record["features"])
-        if "features" in record
-        else frozenset()
-    )
-    unsupported = features - HISTORY_SUPPORTED_FEATURES
-    if unsupported:
-        # repr() escapes malformed Unicode (including lone surrogates), so
-        # untrusted feature names cannot break either JSON or WebSocket UTF-8.
-        shown = ", ".join(repr(feature) for feature in sorted(unsupported))
-        raise HistoryFormatError(f"unsupported run-history feature(s): {shown}")
 
 
 def _iter_records(

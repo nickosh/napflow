@@ -536,7 +536,8 @@ def test_reports_resolve_blob_values_before_masking(tmp_path):
     assert secret not in junit_path.read_text(encoding="utf-8")
 
 
-def test_featureless_report_preserves_legacy_marker_shaped_literal(tmp_path):
+@pytest.mark.parametrize("kind", ["json", "junit"])
+def test_reports_accept_markerless_v01_envelope(tmp_path, kind):
     log_path = tmp_path / "legacy-marker.jsonl"
     marker_literal = {
         "$napflow": {
@@ -573,7 +574,7 @@ def test_featureless_report_preserves_legacy_marker_shaped_literal(tmp_path):
     )
 
     report_path = cli_report.write_report(
-        "json",
+        kind,
         log_path,
         "flows/legacy-marker",
         result,
@@ -581,8 +582,11 @@ def test_featureless_report_preserves_legacy_marker_shaped_literal(tmp_path):
     )
 
     assert report_path is not None
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
-    assert payload["end_outputs"] == {"result": marker_literal}
+    if kind == "json":
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        assert payload["end_outputs"] == {"result": marker_literal}
+    else:
+        assert ElementTree.parse(report_path).getroot().get("tests") == "0"
 
 
 def test_reports_skip_unrelated_missing_request_blob(tmp_path):
@@ -662,7 +666,8 @@ def test_reports_skip_unrelated_missing_request_blob(tmp_path):
     assert ElementTree.parse(junit_path).getroot().get("tests") == "1"
 
 
-def test_report_rejects_unknown_history_feature_before_records(tmp_path):
+@pytest.mark.parametrize("kind", ["json", "junit"])
+def test_report_rejects_unknown_history_feature_before_records(tmp_path, kind):
     log_path = tmp_path / "unknown-feature.jsonl"
     _write_report_log(
         log_path,
@@ -688,7 +693,7 @@ def test_report_rejects_unknown_history_feature_before_records(tmp_path):
 
     with pytest.raises(HistoryFormatError, match="unsupported run-history features"):
         cli_report.write_report(
-            "json",
+            kind,
             log_path,
             "flows/unknown",
             result,
@@ -707,9 +712,35 @@ def test_report_rejects_unknown_history_feature_before_records(tmp_path):
             {"event": "run_started", "seq": 1, "features": []},
             "legacy run history cannot declare storage features",
         ),
+        (
+            {"event": "run_started", "seq": 1, "format": None},
+            "format must be omitted for v0.1 or contain a string",
+        ),
+        (
+            {"event": "run_started", "seq": 1, "format": "postman-run/1"},
+            "unrecognized run-history format",
+        ),
+        (
+            {
+                "event": "run_started",
+                "seq": 1,
+                "format": HISTORY_FORMAT,
+                "features": None,
+            },
+            "features must be an array",
+        ),
+        (
+            {"event": "node_fired", "seq": 1},
+            "must begin with a run_started envelope at seq 1",
+        ),
+        (
+            {"event": "run_started", "seq": 2},
+            "must begin with a run_started envelope at seq 1",
+        ),
     ],
 )
-def test_report_rejects_incompatible_history_envelope(tmp_path, header, message):
+@pytest.mark.parametrize("kind", ["json", "junit"])
+def test_report_rejects_incompatible_history_envelope(tmp_path, header, message, kind):
     log_path = tmp_path / "incompatible.jsonl"
     _write_report_log(log_path, [header])
     result = RunResult(
@@ -724,9 +755,57 @@ def test_report_rejects_incompatible_history_envelope(tmp_path, header, message)
 
     with pytest.raises(HistoryFormatError, match=message):
         cli_report.write_report(
-            "json",
+            kind,
             log_path,
             "flows/incompatible",
+            result,
+            masker=SecretMasker([], {}),
+        )
+
+
+@pytest.mark.parametrize("kind", ["json", "junit"])
+def test_report_rejects_malformed_first_json_record(tmp_path, kind):
+    log_path = tmp_path / "malformed.jsonl"
+    log_path.write_text("\n{not-json}\n", encoding="utf-8")
+    result = RunResult(
+        state="passed",
+        end_outputs={},
+        asserts_passed=0,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=0,
+    )
+
+    with pytest.raises(HistoryFormatError, match="valid JSON"):
+        cli_report.write_report(
+            kind,
+            log_path,
+            "flows/malformed",
+            result,
+            masker=SecretMasker([], {}),
+        )
+
+
+@pytest.mark.parametrize("kind", ["json", "junit"])
+def test_report_rejects_empty_history(tmp_path, kind):
+    log_path = tmp_path / "empty.jsonl"
+    log_path.write_text("\n", encoding="utf-8")
+    result = RunResult(
+        state="passed",
+        end_outputs={},
+        asserts_passed=0,
+        asserts_failed=0,
+        unhandled_errors=[],
+        nodes_never_fired=[],
+        duration_ms=0,
+    )
+
+    with pytest.raises(HistoryFormatError, match="history is empty"):
+        cli_report.write_report(
+            kind,
+            log_path,
+            "flows/empty",
             result,
             masker=SecretMasker([], {}),
         )
@@ -738,8 +817,10 @@ def test_junit_report_sanitizes_xml_attributes(tmp_path):
     assertion_name = "check & < > \" ' \x01"
     error_message = f"failure {secret} & < > \" ' \ud800"
     records = [
+        {"event": "run_started", "seq": 1},
         {
             "event": "assert_result",
+            "seq": 2,
             "node": "check",
             "check": assertion_name,
             "expected": secret,
@@ -748,6 +829,7 @@ def test_junit_report_sanitizes_xml_attributes(tmp_path):
         },
         {
             "event": "run_finished",
+            "seq": 3,
             "duration_ms": 1.0,
             "unhandled_errors": [
                 {"node": "check", "kind": "control", "message": error_message}
@@ -791,7 +873,8 @@ def test_junit_report_memory_does_not_scale_with_assertion_count(tmp_path):
     record_count = 100_000
     log_path = tmp_path / "bounded.jsonl"
     with log_path.open("w", encoding="utf-8") as log:
-        for seq in range(record_count):
+        log.write('{"event":"run_started","seq":1}\n')
+        for seq in range(2, record_count + 2):
             log.write(
                 json.dumps(
                     {
@@ -811,6 +894,7 @@ def test_junit_report_memory_does_not_scale_with_assertion_count(tmp_path):
             json.dumps(
                 {
                     "event": "run_finished",
+                    "seq": record_count + 2,
                     "duration_ms": 1.0,
                     "unhandled_errors": [],
                 },

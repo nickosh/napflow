@@ -2,7 +2,8 @@
 
 Status: adopted 2026-07-05 (S1 closeout); experimental-v0.x policy
 amended 2026-07-11 (D33); PyPI trusted publishing + dry-run path added
-2026-07-11; reusable PR/tag gate and artifact refusal added 2026-07-14.
+2026-07-11; reusable PR/tag gate, artifact refusal, and version-specific
+compatibility notes added 2026-07-14.
 
 ## Versioning
 
@@ -38,6 +39,10 @@ Single source of truth: `version` in `pyproject.toml`
   development segment cannot publish even when its tag matches. The stdlib-only
   `tools/check_release_version.py` enforces both rules in the reusable tag gate;
   unit tests exercise matching, mismatching, missing-`v`, and exact `.dev` tags.
+- **v0.2.0 promotion:** prepare `project.version = "0.2.0"`, regenerate the
+  lockfile/changelog, and run the manual release dry-run on that exact commit
+  before merging/tagging. The dry-run artifact metadata must already say
+  `0.2.0`; a `v0.2.0` tag against the old `0.1.0` metadata is refused.
 
 ## Release flow (automated — `.github/workflows/release.yml`)
 
@@ -103,8 +108,11 @@ the notice and the UI bundle survive the release-sdist-to-wheel boundary.
    - release notes: the workflow prepends
      `docs/release-notes-preamble-v0.md` (developer preview,
      experimental v0.x compatibility, trusted workspace/localhost
-     posture) to every `v0.*` release's git-cliff body — re-read the
-     preamble each release and keep it honest
+     posture) to every `v0.*` release's git-cliff body. When
+     `docs/release-notes-<tag>.md` exists, it is inserted before that generated
+     body; `docs/release-notes-v0.2.0.md` carries v0.2's concrete format breaks
+     and best-effort-reader notes. Re-read every applicable note each release
+     and keep it honest
    - tick anything release-worthy in REQUIREMENTS/PLAN; journal entry
 2. **Repository visibility**: the v0.1.0 one-time public-repository flip is
    historical and already complete. The sdist exposes source regardless;

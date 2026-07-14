@@ -182,8 +182,10 @@ either were the accepted v0.2 design.
    full-fidelity blobs/prepared requests → basic paged/lazy replay →
    public Workspace/Flow catalog, packaging, and UI contracts → focused
    release gate. M0/M1 completed 2026-07-12 and M2/M3/M4/M5/M6 completed
-   2026-07-13. Next is M7's focused reusable release gate, exact tag/version
-   contract, and v0.2 promotion evidence.
+   2026-07-13. M7's reusable gate, exact version contract, compatibility
+   notes, and local release preparation are implemented; the fresh remote
+   PR/release dry-run, merge, and exact `v0.2.0` tag remain the promotion
+   boundary.
    Timeline playback, 100k-event replay performance, run bundles, and
    security-grade history are future work (D39).
 

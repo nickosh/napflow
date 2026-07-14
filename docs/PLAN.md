@@ -768,26 +768,38 @@ audited notice is present in both sdist and wheel.
 
 ### M7 — release gates, compatibility evidence, and v0.2 promotion
 
-- [ ] Reuse the existing required CI/release workflows and add only missing
+- [x] Reuse the existing required CI/release workflows and add only missing
       v0.2 product checks: Vitest in the authoritative gate, installed-wheel
       `napf ui`/`run_flow` smoke, production bundle membership, and exact
       tag/package version refusal. Do not add minimum/latest dependency or
-      expanded OS/browser axes before user demand. (NFR-16)
-- [ ] Close the M0 audit entries still owned by streamlined v0.2. Reassign
+      expanded OS/browser axes before user demand. (NFR-16) — one reusable
+      workflow plus independently tested exact-tag/`.dev` refusal; PR CI run
+      #42 passed every existing Linux/macOS/Windows Python/UI job, 2026-07-14
+- [x] Close the M0 audit entries still owned by streamlined v0.2. Reassign
       placeholders for explicitly deferred export, advanced replay, or
       performance targets to the future ledger instead of treating them as
-      release failures.
-- [ ] Run the focused release checks that exercise current promises: full
+      release failures. — every v0.2-owned probe is an ordinary regression;
+      the sole conditional symlink skip is a platform capability check, while
+      export/performance/playback remain named future requirements
+- [x] Run the focused release checks that exercise current promises: full
       Python/UI suites, existing cross-platform paths, missing/corrupt blob,
       incomplete run, prepared-request capture, public API isolation, and
       clean installed-artifact smoke. Do not introduce a separate exhaustive
-      adversarial or performance matrix in v0.2.
-- [ ] Update engine/workspace/flow specs to implemented v0.2 behavior,
+      adversarial or performance matrix in v0.2. — prepared `0.2.0` tree:
+      618 pytest, 76 Vitest, 43 Playwright; Ruff/import contracts, production
+      build, notices, exact tag check, and release-sdist → no-Node-wheel →
+      installed public API/real `napf ui` smoke all pass, 2026-07-14
+- [x] Update engine/workspace/flow specs to implemented v0.2 behavior,
       publish format notes, preserve M4–M6's tested EC32/EC42/EC47/EC49/EC50
       closures, finish EC44 only with its release-gate tests, preserve M1's
       tested EC38/EC46/EC51 closures, record EC27's
       cooperative-scheduler half precisely, and retain EC10/EC22/EC35
-      as named post-v0.2 limitations; then tag `v0.2.0`.
+      as named post-v0.2 limitations. — the audit also reproduced and fixed
+      anchor/alias enforcement (EC53) and report/replay envelope drift (EC54)
+- [ ] Promote the exact prepared release: land the `0.2.0` metadata,
+      generated changelog, and compatibility notes; observe the reusable PR
+      gate and non-publishing release dry-run on that commit; merge, then tag
+      the resulting `main` commit `v0.2.0`.
 
 v0.2 DoD: every requirement still assigned to v0.2 is green; no
 v0.2-targeted correctness case remains merely documented; deferred product,
@@ -851,8 +863,8 @@ release stays bounded:
 - Run `$napflow-closeout` after each state-changing session and milestone; add
   one dated `docs/JOURNAL.md` entry (done / decided / next) when the closeout
   produced a durable change or useful handoff.
-- New edge cases → `EDGE_CASES.md` (EC52+); new decisions →
-  `DECISIONS.md` (D40+).
+- New edge cases → `EDGE_CASES.md` (EC55+); new decisions →
+  `DECISIONS.md` (D41+).
 - v0.x releases are experimental (D33), tag-driven, and require exact
   tag/package version agreement (`RELEASING.md`). Breaking changes are
   permitted with clear release notes until v1.0.

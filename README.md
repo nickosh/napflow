@@ -9,16 +9,18 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: v0.1.0 release; v0.2 development through M6 — developer preview.**
+**Status: v0.1.0 released; v0.2.0 release candidate in M7 — developer preview.**
 The first working milestone:
 file format, validator, CLI, headless engine (full node catalog), and
 the visual canvas (edit, run, inspect, history) work end to end on
 macOS, Windows, and Linux. All `v0.x` formats—including the current
 `schema: napflow/v1` marker—are experimental and may change before
 v1.0. napflow assumes trusted workspaces (flows run real Python on
-your machine) and is localhost-only. The streamlined v0.2
-full-fidelity prototype plan is in [docs/PLAN.md](docs/PLAN.md)
-(D33–D40).
+your machine) and is localhost-only. The v0.2 implementation and reusable
+release gate are complete; final promotion still requires the prepared-artifact
+dry-run, merge, and exact `v0.2.0` tag. See the
+[v0.2 compatibility notes](docs/release-notes-v0.2.0.md) and
+[plan](docs/PLAN.md) (D33–D40).
 
 ## Why
 
@@ -33,7 +35,7 @@ full-fidelity prototype plan is in [docs/PLAN.md](docs/PLAN.md)
 4. **CI-first** — headless `napf run` with assert-driven exit codes is a
    first-class citizen, not an afterthought.
 5. **Full observability** — request/response detail (headers, bodies,
-   timing, retries) captured in run history; current v0.2 development stores
+   timing, retries) captured in run history; v0.2 stores
    repeated large values once in hash-verified blobs with no destructive
    capture limits and records the effective prepared request.
 

@@ -142,6 +142,26 @@ def test_release_reuses_gate_and_cannot_publish_a_manual_dispatch() -> None:
     ):
         assert command in build_commands
 
+    assert 'version_notes="docs/release-notes-${GITHUB_REF_NAME}.md"' in build_commands
+    assert 'cat docs/release-notes-preamble-v0.md "$version_notes"' in build_commands
+
     publish_condition = "github.event_name == 'push' && github.ref_type == 'tag'"
     assert jobs["pypi"]["if"] == publish_condition
     assert jobs["github-release"]["if"] == publish_condition
+
+
+def test_v02_release_notes_publish_breaks_and_best_effort_reader_contract() -> None:
+    notes = (ROOT / "docs" / "release-notes-v0.2.0.md").read_text(encoding="utf-8")
+
+    for required in (
+        "body_capture_mb",
+        "run_capture_mb",
+        "rejects YAML anchors and aliases",
+        "napflow-run/1",
+        "content-blobs/1",
+        "napflow-replay/1",
+        "Markerless v0.1 logs are read best-effort",
+        "raw full values",
+        "direct VCS",
+    ):
+        assert required in notes

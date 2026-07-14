@@ -45,11 +45,19 @@ jobs:
       - name: Release notes for this tag
         if: github.ref_type == 'tag'
         # every v0.x is experimental (D33) — notes lead with the honest
-        # developer-preview posture (PLAN M0), then the git-cliff body
+        # developer-preview posture and any exact-version compatibility note,
+        # then the git-cliff body
         run: |
           uvx git-cliff --latest --strip header -o CLIFF_BODY.md
+          version_notes="docs/release-notes-${GITHUB_REF_NAME}.md"
           case "$GITHUB_REF_NAME" in
-            v0.*) cat docs/release-notes-preamble-v0.md CLIFF_BODY.md > RELEASE_NOTES.md ;;
+            v0.*)
+              if [ -f "$version_notes" ]; then
+                cat docs/release-notes-preamble-v0.md "$version_notes" CLIFF_BODY.md > RELEASE_NOTES.md
+              else
+                cat docs/release-notes-preamble-v0.md CLIFF_BODY.md > RELEASE_NOTES.md
+              fi
+              ;;
             *) mv CLIFF_BODY.md RELEASE_NOTES.md ;;
           esac
       - uses: actions/upload-artifact@v7

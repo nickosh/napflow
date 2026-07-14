@@ -1,7 +1,7 @@
 # napflow — Product Definition
 
-Status: v0.x product direction, amended through the v0.2 plan on
-2026-07-11. Companions: `REQUIREMENTS.md` (what to build),
+Status: v0.x product direction, amended through the v0.2 release candidate on
+2026-07-14. Companions: `REQUIREMENTS.md` (what to build),
 the spec files (how it behaves), `DECISIONS.md` (why).
 
 ## One-liner
@@ -141,7 +141,9 @@ rather than a compatibility promise (D33).
   masking; basic paged/lazy replay and child-frame drilldown; functional and
   Workspace/Flow public APIs including the runtime `workspace.flows` catalog;
   release-built artifact distribution (not arbitrary Git/source installs)
-  and a focused release gate. This is the next committed release.
+  and a focused release gate. Implementation is complete; the prepared
+  artifact dry-run, merge, and exact `v0.2.0` tag are the remaining promotion
+  actions.
 - **After v0.2 candidates:** pause/resume/step and wire breakpoints (D30),
   pack-selection-to-subflow (D31), `poll`/`duplicate`, inline loop bodies,
   marker-based `collect`, `napf check --write-env-example`, worker-pool
@@ -181,5 +183,5 @@ rather than a compatibility promise (D33).
 Single pip-installable wheel with the pre-built UI inside; `napf ui`
 serves everything on one localhost port. Apache-2.0 + NOTICE file (the
 attribution lever); no CLA (Apache §5 inbound=outbound); DCO added only
-when external contributors appear (D16). Open risk: verify PyPI name
-"napflow" availability before public attachment to the name.
+when external contributors appear (D16). The `napflow` PyPI project and
+trusted-publisher path have been active since v0.1.0.

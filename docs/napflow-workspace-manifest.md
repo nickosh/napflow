@@ -26,6 +26,14 @@ body/run capture settings. Schema-aware terminal/report redaction remains
 opt-in through non-empty secret patterns; D39 defers export and secure-history
 policy.
 
+v0.2 upgrade note: there is no automatic manifest migration. Existing files
+that still validate load best-effort, but `defaults.run.body_capture_mb` and
+`defaults.run.run_capture_mb` are removed and now fail validation. New
+scaffolds use `environments.secrets: []`, so optional terminal/report masking
+is off until patterns are configured; canonical local history is raw either
+way. Run/event reader compatibility is defined by the engine spec, and the
+release-facing break summary is `release-notes-v0.2.0.md`.
+
 ## Full example
 
 ```yaml
@@ -64,9 +72,11 @@ defaults:
                             #   to request/python only; delay/loop/flow are
                             #   exempt from the DEFAULT but honor an
                             #   explicit per-node max_seconds (D24)
-    run_timeout_s: null     # wall-clock run deadline; null = off (CI job
-                            #   timeout is the outer backstop). Expiry →
-                            #   run `error` (exit 2), report still written
+    run_timeout_s: null     # cooperative execution deadline; null = off
+                            #   (CI job timeout is the outer backstop). Armed
+                            #   after root ENV/BIND; expiry → run `error`
+                            #   (exit 2), report still written. Synchronous
+                            #   Jinja remains an explicit limitation.
 
 python:
   interpreter: null         # path to python executable for the nodes.py
@@ -194,7 +204,7 @@ the HTTP demo against httpbin (network required); it is deliberately NOT
 the smoke check, so a proxy, a firewall, or httpbin having a bad day
 cannot break a user's first five minutes (nor napflow's own CI).
 
-## CLI surface (v0.1)
+## CLI surface (current experimental v0.x)
 
 ```
 napf init [dir]               scaffold workspace
@@ -282,11 +292,13 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   Jupyter convention). An explicit busy `--port` = error, exit 2.
 - **Bind/request boundary**: `127.0.0.1` only — never a network service.
   Every HTTP/WS request must carry exactly one Host resolving to localhost or
-  a loopback IP (dynamic ports allowed). Browser mutation methods and WS must
-  also carry an `http(s)` Origin exactly matching scheme/host/port; a foreign
-  or malformed authority is rejected before the handler/WS accept as HTTP
-  403 `{error: "request_origin"}` or WS close 4403. Programmatic loopback
-  clients may omit Origin. There is no auth/public bind mode (D37/EC51).
+  a loopback IP (dynamic ports allowed). Unsafe HTTP methods and WebSockets
+  validate an Origin when present; browser-supplied Origin must be one
+  `http(s)` authority exactly matching scheme/host/port. Programmatic loopback
+  clients may omit Origin. A foreign, duplicate, or malformed required
+  authority is rejected before the handler/WS accept as HTTP 403
+  `{error: "request_origin"}` or WS close 4403. There is no auth/public bind
+  mode (D37/EC51).
 - **REST** (JSON): `GET /api/workspace` (manifest summary + profiles +
   version) · `GET /api/flows` (structured `napf list`; unloadable
   flows appear `valid: false`) · `GET /api/flows/<identity>` (catch-all
@@ -451,13 +463,15 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   after server-run finalization and removes exact whole-run companions.
   Server shutdown aborts running flows (clean JSONL prefix, EC20). Reports
   (`defaults.run.report`) are NOT written for
-  server runs in v0.1 — they stay a `napf run`/CI concern (revisited at
-  S4/M5: still deferred, D29 — the canvas gets full wire detail live
+  server runs in current v0.2 — they stay a `napf run`/CI concern (D29 — the
+  canvas gets full wire detail live
   over the WebSocket plus the JSONL history browser).
 - **Static UI**: the pre-built bundle ships inside the wheel and is
   served at `/` with an SPA fallback (S4/M2, NFR-03). Canvas deep links
   live only below `/flow/`; API and `/assets/` retain their own namespaces.
-  Until the bundle exists, `/` is a plain placeholder page.
+  A raw checkout with no generated bundle serves an explanatory artifact-
+  boundary placeholder directing users to a release wheel/sdist; direct VCS
+  and raw-source package installs are unsupported (D40).
 
 ## Roadmap / reserved
 

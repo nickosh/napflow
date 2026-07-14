@@ -2,7 +2,7 @@
 name = "napflow"
 # must equal the release tag minus the leading `v` — release.yml
 # hard-gates on it; see docs/RELEASING.md
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first flow editor and engine — visual flows that live in git, compose into bigger flows, and run headless in CI"
 readme = "README.md"
 license = "Apache-2.0"

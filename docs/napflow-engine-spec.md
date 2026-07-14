@@ -21,6 +21,30 @@ browser rows resolve one record's blobs only when expanded, and direct-child
 summary pages reconstruct completed frame trees. Exports, advanced replay,
 and the 100k-event performance target remain deferred.
 
+### v0.2 compatibility and format summary
+
+These are experimental v0.x contracts, not a migration guarantee. The
+release-facing upgrade note is `release-notes-v0.2.0.md`; this section is the
+normative format summary for implementers.
+
+- Production v0.2 history begins with `run_started` at `seq: 1`,
+  `format: "napflow-run/1"`, and `features: ["content-blobs/1"]`. The
+  canonical sequence is consecutive and ordered by `seq`, never timestamps.
+- Every declared content path carries a complete value. Values through exactly
+  65,536 encoded bytes remain inline; larger values use verified store-once
+  descriptors. `message_emitted.value`, prepared-request/response aggregates,
+  and `frame_finished` are current; `value_preview` and `capture_warning` are
+  legacy-readable but never produced.
+- Canonical JSONL and the local WebSocket are raw. Declared-secret masking is a
+  separate terminal/report projection and never rewrites protocol structure.
+- A genuinely markerless v0.1 history (both `format` and `features` absent) is
+  read best-effort. A short-lived M0 `napflow-run/1` header with no `features`
+  means `[]`. Explicit null/malformed fields, a newer major, or an unknown
+  feature are refused. Featureless records never interpret `$napflow` as a
+  descriptor. These adapters do not make v0.1 history forward-compatible.
+- Browser replay is the versioned, bounded `napflow-replay/1` projection over
+  that same recording; it never changes or re-executes canonical history.
+
 Builds on: flow schema v0.4 (message-driven, single-edge inputs,
 everything-is-data), manifest v0.3, settled decisions (Jinja2, soft port
 types, JSONL history, last-write-wins, macOS+Windows+Linux (D26),
@@ -155,8 +179,11 @@ retaining every event in the engine or adapter.
 ```
 LOAD      parse flow.yaml(s) + manifest (loader)
 CHECK     full `napf check` rule set on the closure of referenced flows
-BIND      validate & type-coerce inputs against Start ports; fail fast
-ENV       env.required present in active profile? fail fast
+PROFILE   select/parse the env profile and layer process env (run preparation)
+START     open history/event sinks and emit run_started
+ENV       env.required present in the selected layered env? fail this run
+BIND      render defaults, validate, and type-coerce root Start inputs
+DEADLINE  arm the optional cooperative execution deadline after ENV/BIND
 EXECUTE   seed Start node, pump messages until quiescent
 CLEANUP   cancel/drain firing tasks; close HTTP sessions and workers
 FINALIZE  collect End ports, emit run_finished, close the event stream
@@ -335,11 +362,16 @@ Properties:
   (`defaults.run.message_budget`, default 100000 — runaway protection,
   not resource accounting; counts run-wide including child frames);
   exhaustion → run `error` with the hot edge identified in the event.
-- **Deadline (D24)**: optional run-level wall clock
+- **Execution deadline (D24)**: optional cooperative execution clock
   (`defaults.run.run_timeout_s`, default null = off; CLI `--timeout`
-  overrides). Expiry cancels in-flight work like an abort but finalizes
+  overrides). It is armed after LOAD/CHECK/profile selection and the root
+  ENV/BIND step, immediately before the pump. Expiry cancels in-flight work
+  like an abort but finalizes
   with state `error` (`error_reason: run_timeout`) — the report and
-  JSONL are still written, unlike a CI-runner SIGKILL.
+  JSONL are still written, unlike a CI-runner SIGKILL. Bounded dispatch makes
+  inline cycles observe it, but synchronous Start-default or node-template
+  rendering is not preemptible (EC27/EC35); this is not an end-to-end hard
+  deadline over preparation or arbitrary trusted code.
 - **Cancellation**: abort flips a token and enqueues `FATAL` to wake an
   empty pump; the batch checkpoint reads the token directly because the
   sentinel may sit behind a hot ready queue. Firing tasks are cancelled
@@ -470,7 +502,7 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     importing niquests, guarded by a test. `http_version` pinning uses
     one cached session per version option (session-level disable flags;
     best-effort where niquests lacks a flag).
-  - **Retry** = immediate re-attempt (no backoff in v0.1 — the config
+  - **Retry** = immediate re-attempt (no backoff in current v0.2 — the config
     surface pinned at M1 has only `max_attempts`), transport failures
     only, never status-based. `retries_total` in `request_finished` =
     attempts performed − 1.
@@ -571,7 +603,7 @@ Pins made at S3/M4 (2026-07-06, engine `_deliver_guard`):
     is a node error (`variable_unset`), never a silent null — the EC19
     corollary: a Get racing its Set is a missing wire, not an empty
     value.
-  - **fixture**: `file`/`format` are literal in v0.1 (not templatable);
+  - **fixture**: `file`/`format` are literal in current v0.2 (not templatable);
     format infers only from `.json`/`.csv` — any other extension needs
     `format:`. The cache is per RUN, keyed by resolved path (a mid-run
     file change or deletion cannot split the data). CSV values stay
@@ -618,7 +650,8 @@ engine ──spawn──▶ worker (configured interpreter)
 - Worker imports the flow's `nodes.py` once at startup; per-firing cost is
   a pipe round-trip (negligible vs any HTTP call).
 - Multi-flow runs (subflows with their own `nodes.py`): one worker per
-  flow module, spawned lazily on first use, capped pool.
+  distinct module in the statically finite E007 flow-reference closure,
+  spawned lazily on first use; there is no eviction.
 - **Serial execution (EC09)**: the worker processes one task at a time
   (request→response per pipe line). Consequences: python firings within a
   flow module are serialized — a `mode: parallel` loop whose body hits
@@ -640,11 +673,12 @@ engine ──spawn──▶ worker (configured interpreter)
   data, never success-port payloads.
 - **Crash isolation**: worker death (segfault, OOM, sys.exit) becomes a
   node error, never an engine failure.
-- **Grandchild processes (EC22)**: killing the worker does not reap
+- **Descendant processes (EC22, OPEN after v0.2)**: killing the worker does not reap
   subprocesses the user's python spawned (`subprocess.Popen` in
-  `nodes.py`). Known v0.1 limitation — documented, not solved. Candidate
-  later: process-group kill on POSIX / `CREATE_NEW_PROCESS_GROUP` on
-  Windows.
+  `nodes.py`; only the direct worker is owned and reaped. Future closure needs
+  an owned POSIX process group and Windows Job Object/equivalent plus
+  child-and-grandchild timeout/abort/shutdown tests. Documentation alone does
+  not close this limitation.
 - **Interpreter**: `python.interpreter` in napflow.yaml; default = the
   interpreter running napflow. Pointing it at a project venv makes that
   environment's third-party packages available to `nodes.py` — the
@@ -1162,7 +1196,7 @@ structures. They may be deleted at any time and regenerated from the JSONL
 and blobs; they are never authoritative and never a substitute for source
 events, including canonical `frame_finished` records.
 
-## 8. `napf check` rules (v0.1)
+## 8. `napf check` rules (current experimental v0.x)
 
 ```
 E001 yaml parse / schema validation failure
@@ -1280,8 +1314,11 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   accidental mutation), not against a hostile flow author. Accepted
   risk: template rendering is synchronous on the engine loop, so a
   pathological expression can stall the run — same trust domain as user
-  code. **The v0.1 run deadline is not a hard backstop for synchronous
-  rendering**; EC27/EC35 remain open until the post-v0.2 decision above.
+  code. **The v0.2 execution deadline is not a hard backstop for preparation
+  or synchronous rendering**; it is armed only after root ENV/BIND and cannot
+  preempt a synchronous Jinja call. EC27's cooperative-scheduler half is
+  tested, while EC27/EC35's hard-deadline limitation remains open until the
+  post-v0.2 decision above.
 - **Workspace path containment is centralized (v0.2/M1, D37).** Entry,
   reference, fixture, source, history, and clone paths pass through one
   lexical + symlink-aware resolver and must remain below the selected

@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-14 — v0.2 M7 release candidate prepared
+
+- Done: prepared exact `0.2.0` metadata, changelog, compatibility notes, and
+  release-note wiring; closed EC44 and fixed the newly recorded EC53/EC54 gaps.
+- Verified locally: 618 pytest, 76 Vitest, 43 Playwright, Ruff/import contracts,
+  production UI/notices, exact artifacts, and installed-artifact smoke pass.
+- Cross-platform baseline: PR #1 run #42 is green on Linux, macOS, and Windows;
+  the final prepared tree still needs its fresh PR and non-publishing tag gate.
+- Next: when authorized, push this release-candidate commit, observe both
+  gates, then merge and tag exact `main` as `v0.2.0` to publish and verify it.
+
 ## 2026-07-14 — Windows CI portability fix
 
 - Fixed: history locking rejects planted non-regular entries before open, so

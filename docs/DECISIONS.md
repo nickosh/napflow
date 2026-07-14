@@ -825,7 +825,12 @@ sequence pages, scalar frame/final and graph-sized view projections, lazy
 verified event detail, and completed child-canvas drilldown. M6 now also
 supplies the public Workspace/Flow API, artifact-only distribution contract,
 schema/UI coverage, and audited frontend notices. M7's focused release gate is
-next.
+implemented: one reusable workflow now gates PRs and tags with the existing
+three-OS Python/UI paths, Vitest, notices, the installed-artifact smoke, and
+tested exact tag/development-version refusal. v0.2's concrete compatibility notes are
+inserted into the generated release notes. The remaining promotion actions are
+the prepared-commit dry-run, merge, and exact `v0.2.0` tag—not another product
+or hardening matrix.
 
 ## D40 — Distribution supports release-built artifacts, not arbitrary Git/source installs
 
@@ -848,14 +853,14 @@ forms, requires identical sdist/wheel static trees, and probes the real
 
 Rejected: committing the generated bundle; adding Node to the PEP 517 build;
 continuing to imply that an arbitrary Git checkout is an install artifact. M7
-wires the reusable smoke, notice check, frontend suites, and exact tag/version
+wired the reusable smoke, notice check, frontend suites, and exact tag/version
 refusal into the authoritative PR/tag gate.
 
 ## Known open risks (watch during implementation)
-- EC10/EC22/EC27/EC35 remain open post-v0.2 limitations; EC44 remains
-  partially open for M7's exact-version and authoritative-gate work. Their
-  ledger rows name the closure conditions; close them only with the stated
-  tests.
+- EC10/EC22/EC27/EC35 remain open post-v0.2 limitations. EC44's distribution,
+  exact-version, and authoritative-gate defect is fixed; its ledger row names
+  the artifact/workflow regressions. Close the four remaining cases only with
+  their stated tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.
 - Ghost-wires for template references — elegant on paper, may be noisy
@@ -867,7 +872,8 @@ refusal into the authoritative PR/tag gate.
   requests/botocore). Mitigations specced: internal HTTP adapter seam
   (NFR-09) + alongside-install compat CI job (NFR-10). Tech stack itself
   confirmed as-is by owner, 2026-07-02.
-- PyPI name "napflow" availability — check before attachment.
+- PyPI project ownership/trusted publishing are active since v0.1.0; keep the
+  exact workflow/environment identity intact for later releases.
 - Default-required End ports (D18) may annoy flows with conditional
   outputs — watch whether `required: false` becomes boilerplate; if so,
   reconsider the default.
