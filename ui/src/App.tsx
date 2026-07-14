@@ -30,6 +30,8 @@ import RunPanel from "./components/RunPanel";
 import SaveStatus from "./components/SaveStatus";
 import { PALETTE_DRAG_TYPE } from "./forms";
 import { drillTarget, toGraph, type CanvasNode } from "./graph";
+import { identityFromPath } from "./identity";
+import { persistenceRegistry } from "./persistence";
 import { ETAG_POLL_MS, useAppStore } from "./store";
 
 const nodeTypes = { napflow: FlowNode };
@@ -39,6 +41,8 @@ function Canvas() {
   const {
     detail,
     detailError,
+    runFramePath,
+    runFrameDetail,
     graphVersion,
     selectNode,
     moveNode,
@@ -53,6 +57,8 @@ function Canvas() {
   // run mode (S4/M5): the canvas locks editing and animates instead —
   // clicks still select (they filter the event stream)
   const inRunMode = useAppStore((s) => s.runView !== null);
+  const canvasDetail =
+    runFramePath.length > 0 ? runFrameDetail : detail;
   const { screenToFlowPosition } = useReactFlow();
 
   // xyflow holds interactive state (drag positions, selection); the
@@ -60,17 +66,20 @@ function Canvas() {
   // from it after structural edits or external reloads
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const identity = detail?.identity ?? null;
+  const identity = canvasDetail?.identity ?? null;
   useEffect(() => {
-    if (detail !== null) {
-      const graph = toGraph(detail);
+    if (canvasDetail !== null) {
+      const graph = toGraph(canvasDetail);
       setNodes(graph.nodes);
       setEdges(graph.edges);
+    } else {
+      setNodes([]);
+      setEdges([]);
     }
     // rebuild on flow switch or explicit invalidation only — NOT on
     // every autosaved detail replacement (drag positions would snap)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity, graphVersion]);
+  }, [identity, graphVersion, runFramePath.length]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
@@ -135,7 +144,7 @@ function Canvas() {
     [connectEdge],
   );
 
-  if (detailError !== null) {
+  if (runFramePath.length === 0 && detailError !== null) {
     // broken flow: no canvas to draw — the E-codes ARE the view
     return (
       <div style={{ flex: 1, padding: "1rem", overflowY: "auto" }}>
@@ -153,13 +162,13 @@ function Canvas() {
       </div>
     );
   }
-  if (detail === null) {
+  if (canvasDetail === null) {
     return <div style={{ flex: 1 }} data-testid="canvas" />;
   }
   return (
     <div style={{ flex: 1, minWidth: 0, position: "relative" }} data-testid="canvas">
       <ReactFlow
-        key={detail.identity} // remount per flow: fresh fitView
+        key={`${canvasDetail.identity}:${runFramePath.at(-1)?.frame ?? "root"}`}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -180,8 +189,10 @@ function Canvas() {
         onNodeDoubleClick={(_event, node) => {
           // drill-in (FR-1007, D09): pure navigation into the
           // referenced flow; browser back returns (popstate)
-          const target = drillTarget(node.data);
-          if (target !== null) void openFlow(target);
+          if (!inRunMode) {
+            const target = drillTarget(node.data);
+            if (target !== null) void openFlow(target);
+          }
         }}
         onEdgeClick={(_event, edge) => {
           // run mode: a wire click lists its crossed messages (M5.5)
@@ -208,7 +219,7 @@ function Canvas() {
 }
 
 export default function App() {
-  const { workspace, error, detail, load, pollEtags } = useAppStore();
+  const { workspace, error, detail, load, popFlow, pollEtags } = useAppStore();
   const inRunMode = useAppStore((s) => s.runView !== null);
   const runPanelOpen = useAppStore((s) => s.runPanelTab !== null);
   const [codeOpen, setCodeOpen] = useState(false);
@@ -216,6 +227,44 @@ export default function App() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Browser back/forward is a same-document navigation, so it must cross the
+  // same save barrier as sidebar and drill-in navigation.
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      const identity = identityFromPath(window.location.pathname);
+      const index = Number.isInteger(event.state?.napflowIndex)
+        ? event.state.napflowIndex
+        : null;
+      void popFlow(identity, index);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [popFlow]);
+
+  // Async PUT/ETag handshakes cannot be made reliable from beforeunload
+  // (sendBeacon is POST-only and keepalive bodies are bounded). Prompt while
+  // any accepted edit is debounced, saving, conflicted, or errored.
+  useEffect(() => {
+    let attached = false;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const unsubscribe = persistenceRegistry.subscribe((pending) => {
+      if (pending && !attached) {
+        window.addEventListener("beforeunload", beforeUnload);
+        attached = true;
+      } else if (!pending && attached) {
+        window.removeEventListener("beforeunload", beforeUnload);
+        attached = false;
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (attached) window.removeEventListener("beforeunload", beforeUnload);
+    };
+  }, []);
 
   // FR-1004 v1: poll etags; external edits live-reload while clean
   useEffect(() => {

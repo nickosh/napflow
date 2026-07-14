@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-14
+
+### Added
+
+- Complete M6 public packaging and UI contracts
+- *(history)* Complete paged replay and frame drilldown
+- *(history)* Complete full-fidelity M4
+- *(history)* Use ordinary filesystem permissions
+- *(history)* Add raw and redacted event views
+- *(history)* Add content store foundation
+- *(v0.2)* Complete M3 bounded history lifecycle
+- *(v0.2)* Bound loop execution state
+- *(v0.2)* Complete M2 lifecycle hardening
+- *(v0.2)* Harden workspace and editing boundaries
+- *(events)* Version-stamp the run-history envelope (FR-1101)
+
+### Fixed
+
+- *(ci)* Resolve Windows portability failures
+- *(v0.2)* Close M0 audit findings
+
+### Documentation
+
+- *(plan)* Streamline v0.2 prototype scope
+- *(api)* Define workspace flow embedding contract
+- *(v0.2)* Record M0 session handoff
+
+### Internal
+
+- *(release)* Add reusable v0.2 gate
+- *(agents)* Add project closeout skill
+- *(v0.2)* Cover M0 replay and harness edges
+- *(v0.2)* M0 audit-probe xfails + perf baselines
+
 ## [0.1.0] - 2026-07-11
 
 ### Added
@@ -65,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- *(release)* V0.1.0
 - Simplify package short description
 - *(release)* PyPI trusted publishing, dry-run path, tag-version hard gate
 - *(release)* Close S4 — version 0.1.0.dev4

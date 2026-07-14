@@ -7,6 +7,7 @@ outcome (exit codes there, HTTP statuses here).
 """
 
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -19,15 +20,31 @@ from napflow.core.checker import (
 from napflow.core.events import (
     EventStream,
     JsonlSink,
+    RunHistoryUnit,
     SecretMasker,
-    apply_retention,
+    abandon_run_history,
+    begin_run_history,
+    complete_run_history,
     new_run_id,
-    run_log_path,
 )
+from napflow.core.history_content import RunContentStore
 from napflow.core.loader import LoadedFlow, LoadError, load_flow
-from napflow.core.workspace import EnvFileError, Workspace, layer_env, parse_env_file
+from napflow.core.workspace import (
+    EnvFileError,
+    Workspace,
+    WorkspaceBoundaryError,
+    layer_env,
+    parse_env_file,
+)
 
-PrepFailure = Literal["flow_not_found", "load", "check", "env_not_found", "env_invalid"]
+PrepFailure = Literal[
+    "flow_not_found",
+    "workspace_boundary",
+    "load",
+    "check",
+    "env_not_found",
+    "env_invalid",
+]
 
 
 class RunPrepError(Exception):
@@ -65,8 +82,11 @@ def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> Prep
     broken subflow blocks like a broken entry. An explicit `env` must
     exist; the manifest default is best-effort (profiles are gitignored
     — fresh clones have none)."""
-    identity = Path(flow).as_posix().strip("/")
-    file = workspace.root / Path(identity) / "flow.yaml"
+    try:
+        identity = workspace.resolver.normalize_identity(flow)
+        file = workspace.resolver.flow_file(identity)
+    except WorkspaceBoundaryError as e:
+        raise RunPrepError("workspace_boundary", str(e)) from e
     if not file.is_file():
         known = ", ".join(r.identity for r in workspace.discover_flows()) or "none"
         raise RunPrepError(
@@ -78,6 +98,13 @@ def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> Prep
     except LoadError as e:
         raise RunPrepError("load", str(e), diagnostics_from_load_error(e)) from e
     diagnostics = check_run_closure(loaded, identity, workspace)
+    boundary = next((d for d in diagnostics if d.reason == "workspace_boundary"), None)
+    if boundary is not None:
+        raise RunPrepError(
+            "workspace_boundary",
+            f"{identity}: {boundary.message}",
+            diagnostics,
+        )
     if any(d.severity == "error" for d in diagnostics):
         raise RunPrepError("check", f"{identity}: check errors", diagnostics)
 
@@ -115,20 +142,61 @@ class OpenedRun:
     run_id: str
     log_path: Path
     stream: EventStream
+    masker: SecretMasker
+    content_store: RunContentStore
+    history_unit: RunHistoryUnit
+    history_limit: int
+
+
+def finalize_run_history(opened: OpenedRun, *, completed: bool) -> list[Path]:
+    """Publish/retain a complete unit or preserve a valid incomplete prefix."""
+    if completed:
+        return complete_run_history(opened.history_unit, opened.history_limit)
+    abandon_run_history(opened.history_unit)
+    return []
 
 
 def open_run_stream(
-    workspace: Workspace, prepared: PreparedRun, *, extra_sinks: Iterable[Any] = ()
+    workspace: Workspace,
+    prepared: PreparedRun,
+    *,
+    extra_sinks: Iterable[Any] = (),
+    presentation_sinks: Iterable[Any] = (),
 ) -> OpenedRun:
-    """JSONL sink + retention + masker wiring (FR-701, D22). Extra
-    sinks fan out the same born-masked records (D13)."""
+    """Open JSONL + active lifecycle marker + redaction wiring.
+
+    Retention runs only through ``finalize_run_history`` after execution and
+    adapter-owned reports have finished. Extra sinks receive the same raw
+    canonical records as JSONL (D13); presentation sinks receive a separate
+    declared-secret redacted view (D35).
+    """
     manifest = workspace.manifest.model
     run_id = new_run_id()
-    log_path = run_log_path(workspace.root, prepared.identity, run_id)
+    log_path = workspace.resolver.run_log(prepared.identity, run_id)
+    jsonl = JsonlSink(log_path)
+    try:
+        history_unit = begin_run_history(log_path, run_id)
+    except BaseException:
+        with suppress(BaseException):
+            jsonl.close()
+        with suppress(OSError):
+            log_path.unlink(missing_ok=True)
+        raise
+    masker = SecretMasker(manifest.environments.secrets, prepared.env)
+    content_store = RunContentStore(log_path)
     stream = EventStream(
         run_id,
-        SecretMasker(manifest.environments.secrets, prepared.env),
-        [JsonlSink(log_path), *extra_sinks],
+        masker,
+        [jsonl, *extra_sinks],
+        presentation_sinks=presentation_sinks,
+        content_store=content_store,
     )
-    apply_retention(log_path.parent, manifest.defaults.run.history)
-    return OpenedRun(run_id=run_id, log_path=log_path, stream=stream)
+    return OpenedRun(
+        run_id=run_id,
+        log_path=log_path,
+        stream=stream,
+        masker=masker,
+        content_store=content_store,
+        history_unit=history_unit,
+        history_limit=manifest.defaults.run.history,
+    )

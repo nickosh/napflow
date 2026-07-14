@@ -2,107 +2,269 @@
 written next to the run's JSONL as `<run-id>.report.json` /
 `<run-id>.junit.xml` (pinned at S2/M5).
 
-Reports are built from the MASKED wire records (the same objects the
-JSONL holds), so declared secrets never leak into CI artifacts. The
-junit mapping: one testsuite per run; each `assert_result` is a
+Reports are explicit redacted views over the raw local JSONL: declared
+secrets are removed from schema-classified content values while canonical
+local truth and protocol structure remain exact. The junit mapping: one
+testsuite per run; each `assert_result` is a
 testcase (failures carry expected/actual); each unhandled error is an
 errored testcase — CI dashboards show exactly what the exit code says.
 """
 
 import json
+import os
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
-from xml.etree import ElementTree
+from typing import Any, TextIO
+from xml.sax.saxutils import quoteattr
 
 from napflow.core.engine import RunResult
+from napflow.core.events import (
+    HISTORY_FEATURE_CONTENT_BLOBS,
+    HISTORY_FORMAT,
+    HistoryFormatError,
+    SecretMasker,
+    persist_record_content,
+    resolve_record_content,
+    validate_history_envelope,
+)
+from napflow.core.history_content import RunContentStore
 
 
-class ListSink:
-    """In-memory capture of the masked event stream — feeds reports and
-    the stderr summary without re-reading the JSONL."""
+def _iter_records(
+    log_path: Path,
+) -> Iterator[tuple[dict[str, Any], frozenset[str]]]:
+    """Read one record at a time after gating the history envelope.
 
-    def __init__(self) -> None:
-        self.records: list[dict[str, Any]] = []
+    A v0.1 log remains best-effort input when its ``run_started`` header omits
+    both version fields. Every nonempty log still needs that header at seq 1
+    before later records can be interpreted as descriptor-bearing content.
+    """
+    features: frozenset[str] = frozenset()
+    first_record = True
+    try:
+        with log_path.open(encoding="utf-8") as log:
+            for line in log:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError as error:
+                    raise HistoryFormatError(
+                        "run history does not contain valid JSON records"
+                    ) from error
+                if first_record:
+                    features = validate_history_envelope(record)
+                    first_record = False
+                yield record, features
+    except UnicodeError as error:
+        raise HistoryFormatError("run history must contain valid UTF-8") from error
+    if first_record:
+        raise HistoryFormatError("run history is empty; no run_started envelope")
 
-    def write(self, record: dict[str, Any]) -> None:
-        self.records.append(record)
 
-    def close(self) -> None:
-        pass
+def _iter_presented_records(
+    log_path: Path,
+    masker: SecretMasker,
+    store: RunContentStore,
+    *,
+    events: frozenset[str],
+) -> Iterator[dict[str, Any]]:
+    """Resolve and redact only event kinds consumed by a report pass."""
+    for record, features in _iter_records(log_path):
+        if record.get("event") in events:
+            yield masker.redact_record(resolve_record_content(record, features, store))
+
+
+def _report_facts(
+    log_path: Path, masker: SecretMasker, store: RunContentStore
+) -> tuple[dict[str, Any], int, int, frozenset[str]]:
+    """Return the final summary and bounded JUnit counters.
+
+    The report path is reached only after ``FlowRun`` has closed the JSONL,
+    so a completed run must have exactly one final summary.  Keep that one
+    record plus integer counters; assertion records are streamed again only
+    if a JUnit report is requested.
+    """
+    finished: dict[str, Any] = {}
+    assertions = 0
+    failures = 0
+    finished_features: frozenset[str] = frozenset()
+    for record, features in _iter_records(log_path):
+        event = record.get("event")
+        if event == "assert_result":
+            assertions += 1
+            failures += not record["passed"]
+        elif event == "run_finished":
+            finished = masker.redact_record(
+                resolve_record_content(record, features, store)
+            )
+            finished_features = features
+    if not finished:
+        raise ValueError(f"completed run log has no run_finished record: {log_path}")
+    return finished, assertions, failures, finished_features
 
 
 def write_report(
     kind: str,
-    directory: Path,
-    run_id: str,
+    log_path: Path,
     flow_identity: str,
     result: RunResult,
-    records: list[dict[str, Any]],
+    *,
+    masker: SecretMasker,
 ) -> Path | None:
     if kind == "none":
         return None
-    finished = next((r for r in records if r["event"] == "run_finished"), {})
+    store = RunContentStore(log_path)
+    finished, assertions, failures, features = _report_facts(log_path, masker, store)
+    directory = log_path.parent
+    run_id = log_path.stem
     if kind == "json":
         path = directory / f"{run_id}.report.json"
-        payload = {
-            "flow": flow_identity,
-            "run_id": run_id,
-            "exit_code": result.exit_code,
-        } | {
-            key: value
-            for key, value in finished.items()
-            if key not in ("event", "run_id", "ts", "seq")
-        }
-        path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
+        # A blob-aware report remains part of the run retention unit rather
+        # than expanding a large End value back into a second full copy.  The
+        # post-redaction logical record is persisted through the same store:
+        # unchanged values deduplicate to the canonical blob; masking may
+        # intentionally create a separate redacted blob.  Featureless legacy
+        # reports retain their original standalone JSON shape.
+        report_finished = finished
+        report_features: dict[str, Any] = {}
+        if HISTORY_FEATURE_CONTENT_BLOBS in features:
+            report_finished = persist_record_content(finished, store)
+            report_features = {
+                "format": HISTORY_FORMAT,
+                "features": sorted(features),
+            }
+        payload = (
+            {
+                "flow": flow_identity,
+                "run_id": run_id,
+                "exit_code": result.exit_code,
+            }
+            | report_features
+            | {
+                key: value
+                for key, value in report_finished.items()
+                if key not in ("event", "run_id", "ts", "seq")
+            }
         )
+        with _atomic_report_writer(path) as report:
+            json.dump(payload, report, indent=2, ensure_ascii=False)
+            report.write("\n")
         return path
     path = directory / f"{run_id}.junit.xml"
-    path.write_bytes(_junit_xml(flow_identity, finished, records))
+    _write_junit(
+        path,
+        flow_identity,
+        finished,
+        assertions=assertions,
+        failures=failures,
+        records=_iter_presented_records(
+            log_path,
+            masker,
+            store,
+            events=frozenset({"assert_result"}),
+        ),
+    )
     return path
 
 
-def _junit_xml(
-    identity: str, finished: dict[str, Any], records: list[dict[str, Any]]
-) -> bytes:
-    asserts = [r for r in records if r["event"] == "assert_result"]
+def _xml_attributes(values: dict[str, Any]) -> str:
+    return "".join(
+        f" {name}={quoteattr(_xml_text(value))}" for name, value in values.items()
+    )
+
+
+@contextmanager
+def _atomic_report_writer(path: Path) -> Iterator[TextIO]:
+    """Publish a complete report without following a planted target symlink."""
+    fd, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    fd_open = True
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as report:
+            fd_open = False
+            yield report
+            report.flush()
+            os.fsync(report.fileno())
+        temporary.replace(path)
+    finally:
+        if fd_open:
+            os.close(fd)
+        temporary.unlink(missing_ok=True)
+
+
+def _xml_text(value: Any) -> str:
+    """Replace characters XML 1.0 cannot represent with U+FFFD."""
+    return "".join(
+        character
+        if character in "\t\n\r"
+        or "\x20" <= character <= "\ud7ff"
+        or "\ue000" <= character <= "\ufffd"
+        or "\U00010000" <= character <= "\U0010ffff"
+        else "\ufffd"
+        for character in str(value)
+    )
+
+
+def _write_junit(
+    path: Path,
+    identity: str,
+    finished: dict[str, Any],
+    *,
+    assertions: int,
+    failures: int,
+    records: Iterator[dict[str, Any]],
+) -> None:
+    """Stream JUnit cases without retaining the run or assertion set."""
     unhandled = finished.get("unhandled_errors", [])
-    failures = sum(1 for a in asserts if not a["passed"])
     duration_ms = finished.get("duration_ms", 0)
-    suite = ElementTree.Element(
-        "testsuite",
+    suite = _xml_attributes(
         {
             "name": identity,
-            "tests": str(len(asserts) + len(unhandled)),
-            "failures": str(failures),
-            "errors": str(len(unhandled)),
+            "tests": assertions + len(unhandled),
+            "failures": failures,
+            "errors": len(unhandled),
             "time": f"{duration_ms / 1000:.3f}",
-        },
+        }
     )
-    for record in asserts:
-        name = record["check"]
-        if record.get("op"):
-            name = f"{name} [{record['op']}]"
-        case = ElementTree.SubElement(
-            suite,
-            "testcase",
-            {"classname": f"{identity}.{record.get('node', '')}", "name": name},
-        )
-        if not record["passed"]:
+    with _atomic_report_writer(path) as report:
+        report.write("<?xml version='1.0' encoding='utf-8'?>\n")
+        report.write(f"<testsuite{suite}>")
+        for record in records:
+            if record.get("event") != "assert_result":
+                continue
+            name = record["check"]
+            if record.get("op"):
+                name = f"{name} [{record['op']}]"
+            case = _xml_attributes(
+                {
+                    "classname": f"{identity}.{record.get('node', '')}",
+                    "name": name,
+                }
+            )
+            if record["passed"]:
+                report.write(f"\n  <testcase{case} />")
+                continue
             message = (
                 f"expected {record.get('expected')!r}, actual {record.get('actual')!r}"
             )
-            ElementTree.SubElement(case, "failure", {"message": message})
-    for error in unhandled:
-        case = ElementTree.SubElement(
-            suite,
-            "testcase",
-            {
-                "classname": identity,
-                "name": f"{error.get('node') or 'run'}: {error['kind']}",
-            },
-        )
-        ElementTree.SubElement(case, "error", {"message": str(error["message"])})
-    ElementTree.indent(suite)
-    return ElementTree.tostring(suite, encoding="utf-8", xml_declaration=True)
+            failure = _xml_attributes({"message": message})
+            report.write(
+                f"\n  <testcase{case}>\n    <failure{failure} />\n  </testcase>"
+            )
+        for error in unhandled:
+            case = _xml_attributes(
+                {
+                    "classname": identity,
+                    "name": f"{error.get('node') or 'run'}: {error['kind']}",
+                }
+            )
+            detail = _xml_attributes({"message": str(error["message"])})
+            report.write(f"\n  <testcase{case}>\n    <error{detail} />\n  </testcase>")
+        report.write("\n</testsuite>")

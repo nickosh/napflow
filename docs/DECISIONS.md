@@ -4,8 +4,8 @@ Why things are the way they are. Date format: 2026-06. D01–D17 decided
 during initial design (June 2026); D18–D22 in the 2026-06-14 edge-case
 review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02; D26–D32
 during v0.1 implementation; D33–D37 from the 2026-07-11 v0.2 design
-review. Reversing any of these requires understanding the rationale
-first.
+review; D38–D40 from 2026-07-13 API, scope, and distribution reviews. Reversing any
+of these requires understanding the rationale first.
 
 ## D01 — Build new instead of adopting existing tools
 No OSS project combines: node-based API flows + Python processing +
@@ -226,7 +226,8 @@ masked**. stdout carries only the End-outputs JSON and is the
 functional output; `napf run flows/login | jq .token` is the documented
 contract, and masking it would break the pipe use case the CLI exists
 for. Pinned in the WM CLI section with a test
-(`test_stdout_unmasked_but_jsonl_masked`).
+(`test_stdout_and_local_jsonl_preserve_raw_local_truth` now covers the
+superseding D35 boundary).
 
 **Superseded for v0.2 by D35.** This remains the description of v0.1
 behavior, not the target policy. The review found that recursively
@@ -592,10 +593,10 @@ full-fidelity history model:
 - Runtime execution values and persisted observation are separate.
   Moving persisted content into a blob must never silently truncate or
   change the value delivered through a flow.
-- Local limits are soft by default: warn and expose size, do not silently
-  destroy information. Explicit hard limits remain available for CI or
-  constrained machines, and any omitted content is an explicit event
-  with reason/size/hash—not a plausible-looking prefix.
+- Local defaults have no destructive content limit: expose size and preserve
+  the value rather than silently destroying information. The codec reserves an
+  explicit omission record with reason/size/hash, but D39 defers any
+  user-facing hard-limit policy until after v0.2.
 - Replay is streamed/paged, blobs load on demand, and disposable offset
   indexes/summaries may accelerate seeking. JSONL plus blobs remain the
   source of truth; derived indexes are rebuildable.
@@ -610,21 +611,36 @@ value inline; deleting old events from a retained run; UI-only row caps
 that leave server/browser memory unbounded; silent truncation as the
 normal local policy.
 
+**Scope amendment (D39, 2026-07-13):** the full-fidelity store, typed
+references, deduplication, and lazy loading remain v0.2 commitments.
+Self-contained export/import, explicit hard-limit omission policy, advanced
+seek indexes, and the 100k-event replay gate move to the future ledger.
+
+**Implemented 2026-07-13 (M4+M5):** production streams advertise
+`content-blobs/1` and apply the exhaustive field policy before the shared
+JSONL/WebSocket fan-out. The same structured HTTP response is hashed once
+across request, message, Log, End, and blob-aware JSON report records; public
+feature-gated resolution verifies size/hash and preserves marker-shaped user
+data. Destructive capture settings and previews are removed. Versioned frozen
+REST pages return bounded events plus graph-sized scalar projections; browser
+detail resolves one canonical record on demand and completed frame drilldown
+never re-executes.
+
 ## D35 — Preserve raw local truth; redact presentation and exports, never protocol structure
 
 (2026-07-11, owner decision: observability first, masking only where it
 is concretely useful for CI/CD.)
 
-The canonical local history preserves real values and is stored with
-restrictive permissions. Redaction is a view/export concern:
+The canonical local history preserves real values using ordinary inherited
+OS/workspace permissions. Redaction is a presentation/future-export concern:
 
 - Event names, schema keys, enums, identifiers, frame/node metadata,
   and control fields are never rewritten.
 - The local UI may display complete values, with hide/reveal affordances
   as convenience rather than destructive storage behavior.
-- Terminal presentation, reports, and exported run bundles support a
-  declared-secret redaction policy. CI-oriented output defaults to the
-  safe declared-secret policy; raw export requires an explicit choice.
+- Terminal presentation and JSON/JUnit reports apply the configured
+  declared-secret policy; an empty pattern list is a raw no-op. Any future
+  export surface must make its raw/redacted choice explicit.
 - Runtime-acquired secrets may later be registered or selected by field
   path. Until then, documentation must not claim absolute shareability.
 - Policy is explicit in configuration/CLI, not inferred only from a
@@ -636,6 +652,20 @@ protocol fields. Rejected: no masking anywhere (CI logs and artifacts
 often leave the developer's machine); irreversible masking at event
 creation (destroys the only ground truth); encryption/key management in
 v0.2 (overengineering for a local-first developer tool).
+
+Historical implementation status (2026-07-13): the first raw canonical JSONL
+implementation forced POSIX private modes and a protected owner/SYSTEM/admin
+DACL on Windows. The raw local WebSocket path and schema-aware terminal/JSON/
+JUnit redaction also landed, with one exhaustive field-policy registry that
+preserves dictionary keys and structural values.
+
+**Target amendment (D39, 2026-07-13):** the field-policy registry, raw local
+truth, and optional declared-secret terminal/report views remain. Custom
+ACL/DACL, ownership migration, forced modes, and export policy are no longer
+v0.2 requirements. Implemented later on 2026-07-13: the custom permission and
+owner layer was removed; JSONL and blobs now use ordinary OS/workspace
+permissions while exclusive creation, containment, and content verification
+remain. Export policy and secure-history guarantees remain future work.
 
 ## D36 — One run lifecycle owns fairness, cancellation, resources, and frame release
 
@@ -650,8 +680,11 @@ these invariants:
 - The pump processes bounded batches and yields cooperatively; every
   batch checks abort and a monotonic deadline. Tight inline guard/merge
   cycles cannot starve the event loop or ignore the run deadline.
-- All engine-owned tasks, HTTP sessions, streams, and workers close in
-  `finally`, including external coroutine cancellation.
+- All engine-owned tasks, HTTP sessions, streams, and workers are driven
+  through `finally` cleanup, including external coroutine cancellation. Every
+  event sink is attempted; a remembered ordinary close error makes history
+  incomplete without replacing the execution outcome. Control-flow
+  exceptions still propagate after cleanup.
 - Worker timeout means immediate terminate, then grace, then hard kill;
   graceful EOF is normal-finalization behavior only. A timed-out worker
   must not overlap a replacement and commit late side effects.
@@ -695,10 +728,139 @@ mean “silently access outside the selected workspace.” Rejected: relying
 on scattered `_safe_identity` calls; capability/user-token machinery in
 v0.2; exposing `0.0.0.0` before a real remote security design exists.
 
+Implemented at v0.2/M1 (2026-07-12): `WorkspaceResolver` is threaded
+through checker/engine/CLI/server path consumers; lexical + resolved
+containment failures use `workspace_boundary`. The loopback server now
+rejects non-loopback/malformed Host and foreign browser Origin before
+mutation or WebSocket accept. This boundary assumes the selected local
+workspace/process trust domain is not concurrently mutating path entries
+maliciously; it is not an OS filesystem sandbox against another local
+process, consistent with the trusted-code decision above.
+
+## D38 — Python embedding uses Workspace → Flow → isolated Run; typed catalogs are generated later
+
+(2026-07-13, owner-confirmed during public-integration design.)
+
+The public Python surface will mirror napflow's domain boundary. A loaded
+Workspace is reusable source/configuration, not a shared runtime session. It
+provides exact flow lookup and fresh discovery; each discovered/bound Flow holds
+only the workspace plus canonical identity and creates a fully isolated run on
+every sync or async invocation. `run_flow(workspace, identity, ...)` remains the
+equivalent functional form, and both paths share preparation, execution,
+history, and cleanup semantics.
+
+For convenient test-framework use, M6 also adds a runtime flow catalog. It maps
+each flow identity relative to the configured flows root onto nested attribute
+segments—conceptually `workspace.flows.<identity segments>`—when every segment
+is an exact Python identifier. Exact string/bracket lookup is the permanent
+escape hatch for punctuation, spaces, reserved-member collisions, and arbitrary
+legal identities; names are never lossy-normalized. A catalog entry may be both
+runnable and a namespace when a flow directory contains child flows. Dynamic
+catalog lookup may improve interactive completion but must not be advertised as
+static typing derived from the filesystem. Catalog bracket keys are always
+relative to the configured flows root; `workspace.flow(...)` is the distinct
+full workspace-relative form, so a legal first segment equal to the root name
+cannot alias a shallower flow.
+
+After v0.2, deterministic generated Python bindings/stubs may expose discovered
+flow names plus typed Start inputs and End outputs to IDEs/type checkers, with a
+stale-binding CI check. This is one-directional flows → code, consistent with
+D02. Rejected: mutable workspace-level cookies/variables/workers shared across
+tests; magic attribute access without exact lookup; silent identifier
+normalization; an editor-specific type-checker plugin in v0.2; claiming generic
+`__getattr__` can statically validate runtime filesystem contents.
+
+## D39 — v0.2 prioritizes a usable full-fidelity prototype over security-grade storage and advanced replay
+
+(2026-07-13, owner decision after reviewing M4 complexity and the project's
+pre-adoption stage.)
+
+v0.2 keeps the engineering that directly makes napflow work reliably, but
+stops treating speculative high-security or large-scale use as a release
+prerequisite:
+
+- M4 still activates store-once content-addressed blobs across every
+  persisted payload and captures the effective prepared request. Hash/size
+  verification, deduplication, collision-safe descriptors, exclusive
+  creation, and clear missing/corrupt errors are content-integrity behavior.
+- Canonical local JSONL and blobs remain raw and use the ordinary permissions
+  inherited from the user's OS/workspace. M4 removed the custom Windows
+  DACL/SID owner path, forced POSIX private modes, and permission-based content
+  rejection while retaining integrity and containment. A secure-history mode,
+  authentication/authorization, or encryption is a separate future design if
+  real users require it.
+- The local UI remains a raw inspection surface. Terminal and JSON/JUnit
+  reports apply declared-secret masking only when `environments.secrets` is
+  non-empty; an empty list is the explicit no-redaction path. New workspaces
+  present secret patterns as opt-in examples rather than implying a complete
+  security boundary.
+- Self-contained run export/import, raw/redacted bundle rewriting, runtime
+  token registration, and hard-limit omission metadata are deferred. v0.2
+  documents that raw run artifacts may contain secrets and makes no
+  safe-export claim.
+- M5 supplies basic versioned paging, lazy blob reads, bounded active UI
+  windows, and reconstructable frame drilldown. Timeline scrubbing, playback
+  speeds, checkpoints, advanced indexes/filters, and the 100k-event replay
+  performance target stay explicitly in the future ledger for later stages.
+- M6 retains both the functional `run_flow` entry point and the reusable
+  Workspace/Flow object surface, including the runtime nested
+  `workspace.flows` catalog. Only generated static bindings remain deferred.
+- M7 reuses the existing CI/release coverage and adds missing installed-product
+  checks; it does not expand dependency, browser, adversarial, or performance
+  matrices before user demand.
+
+Rejected: deleting the full-fidelity blob design (it fixes real silent data
+loss); deleting the runtime flow catalog (small, useful Python ergonomics);
+continuing a partial filesystem security boundary that adds platform risk
+without securing every raw-data path; silently dropping the timeline or scale
+ideas instead of preserving them as future candidates.
+
+Implementation status: M4 and M5 completed on 2026-07-13. New scaffolds
+default to an empty secret-pattern list; production history activates the full-value blob
+schema; reports resolve only consumed records and retain large JSON values by
+reference; and request events carry initial/final prepared-wire snapshots.
+Inherited permissions, no-overwrite creation, containment, and blob
+verification remain as decided. `napflow-replay/1` now supplies bounded
+sequence pages, scalar frame/final and graph-sized view projections, lazy
+verified event detail, and completed child-canvas drilldown. M6 now also
+supplies the public Workspace/Flow API, artifact-only distribution contract,
+schema/UI coverage, and audited frontend notices. M7's focused release gate is
+implemented: one reusable workflow now gates PRs and tags with the existing
+three-OS Python/UI paths, Vitest, notices, the installed-artifact smoke, and
+tested exact tag/development-version refusal. v0.2's concrete compatibility notes are
+inserted into the generated release notes. The remaining promotion actions are
+the prepared-commit dry-run, merge, and exact `v0.2.0` tag—not another product
+or hardening matrix.
+
+## D40 — Distribution supports release-built artifacts, not arbitrary Git/source installs
+
+(2026-07-13, owner-confirmed at M6 implementation start.)
+
+The Git-friendly product promise applies to user flow workspaces, not to
+installing napflow itself from an arbitrary repository checkout. Supported
+installation paths are PyPI and GitHub Release artifacts: a wheel containing
+the compiled UI, or a release sdist that already contains that same bundle and
+can produce the wheel without Node.
+
+The generated frontend remains build output and is not committed. The release
+pipeline builds it once before producing artifacts; PEP 517 does not invoke a
+frontend toolchain, and direct VCS (`git+https`) or raw-checkout builds are
+explicitly unsupported. The UI placeholder must report this boundary honestly.
+A deterministic smoke starts from the release-built sdist, blocks Node/npm/npx,
+builds and installs its wheel in isolation, exercises both public Python API
+forms, requires identical sdist/wheel static trees, and probes the real
+`napf ui` HTML, every packaged/referenced lazy asset, and workspace API.
+
+Rejected: committing the generated bundle; adding Node to the PEP 517 build;
+continuing to imply that an arbitrary Git checkout is an install artifact. M7
+wired the reusable smoke, notice check, frontend suites, and exact tag/version
+refusal into the authoritative PR/tag gate.
+
 ## Known open risks (watch during implementation)
-- EC09/EC10/EC22/EC27/EC32/EC35/EC38 and EC42–EC51 are open—not
-  “resolved by documentation.” Their ledger rows name v0.2 or
-  post-v0.2 closure conditions; close them only with the stated tests.
+- EC10/EC22/EC27/EC35 remain open post-v0.2 limitations. EC44's distribution,
+  exact-version, and authoritative-gate defect is fixed; its ledger row names
+  the artifact/workflow regressions. Close the four remaining cases only with
+  their stated tests.
 - Merge `all` clear-slots vs rule-2 latest-value under fast cycles —
   most test-worthy engine code.
 - Ghost-wires for template references — elegant on paper, may be noisy
@@ -710,7 +872,8 @@ v0.2; exposing `0.0.0.0` before a real remote security design exists.
   requests/botocore). Mitigations specced: internal HTTP adapter seam
   (NFR-09) + alongside-install compat CI job (NFR-10). Tech stack itself
   confirmed as-is by owner, 2026-07-02.
-- PyPI name "napflow" availability — check before attachment.
+- PyPI project ownership/trusted publishing are active since v0.1.0; keep the
+  exact workflow/environment identity intact for later releases.
 - Default-required End ports (D18) may annoy flows with conditional
   outputs — watch whether `required: false` becomes boilerplate; if so,
   reconsider the default.

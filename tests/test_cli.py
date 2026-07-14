@@ -50,6 +50,16 @@ def test_scaffolded_workspace_checks_clean(scaffolded: Path) -> None:
     assert check_workspace(load_workspace(scaffolded)) == []
 
 
+def test_scaffold_secret_patterns_are_opt_in(scaffolded: Path) -> None:
+    workspace = load_workspace(scaffolded)
+    text = (scaffolded / "napflow.yaml").read_text(encoding="utf-8")
+
+    assert workspace.manifest.model.environments.secrets == []
+    assert "secrets: []" in text
+    assert '# for example: ["API_TOKEN", "*_PASSWORD"].' in text
+    assert "# Raw local history and the local UI remain unmasked." in text
+
+
 def test_scaffold_is_canonical_output(scaffolded: Path) -> None:
     text = (scaffolded / "flows" / "smoke" / "flow.yaml").read_bytes().decode()
     assert 'schema: "napflow/v1"' in text  # strings force-quoted

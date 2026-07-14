@@ -8,6 +8,7 @@ Child flows are written to disk as JSON (a YAML subset the loader
 reads) under a tmp workspace root.
 """
 
+import asyncio
 import json
 import textwrap
 import threading
@@ -15,7 +16,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from test_engine import end, events_of, flow, run, start
+from napflow.core.engine import FlowRun
+from napflow.core.events import EventStream
+from test_engine import (
+    NO_SECRETS,
+    CaptureSink,
+    end,
+    events_of,
+    flow,
+    manifest,
+    run,
+    start,
+)
 
 
 def write_flow(root, ref, nodes, edges, nodes_py=None, env_required=None):
@@ -69,6 +81,41 @@ def test_subflow_passes_values_with_hierarchical_frames(tmp_path):
     assert result.end_outputs == {"res": 7}
     frames = {r["frame"] for r in events_of(records, "node_fired")}
     assert frames == {"f-0", "f-0/f-1"}  # hierarchical ids (FR-404)
+    summary = events_of(records, "frame_finished")
+    assert len(summary) == 1
+    assert {
+        key: summary[0][key]
+        for key in (
+            "frame",
+            "parent_frame",
+            "parent_node",
+            "flow",
+            "kind",
+            "loop_index",
+            "state",
+            "asserts",
+            "unhandled_errors",
+            "end_outputs",
+        )
+    } == {
+        "frame": "f-0/f-1",
+        "parent_frame": "f-0",
+        "parent_node": "child_run",
+        "flow": "flows/child",
+        "kind": "flow",
+        "loop_index": None,
+        "state": "passed",
+        "asserts": {"passed": 0, "failed": 0},
+        "unhandled_errors": [],
+        "end_outputs": {"out": 7},
+    }
+    assert summary[0]["duration_ms"] >= 0
+    child_output = next(
+        record
+        for record in events_of(records, "message_emitted")
+        if record["from_port"] == "child_run.out"
+    )
+    assert summary[0]["seq"] < child_output["seq"]
 
 
 def test_subflow_invocations_get_fresh_frames(tmp_path):
@@ -187,6 +234,10 @@ def test_nested_subflow_outcomes_bubble_through_subtree(tmp_path):
     assert payload["failed_asserts"] == 1  # summed through the subtree
     frames = {r["frame"] for r in events_of(records, "node_fired")}
     assert "f-0/f-1/f-2" in frames  # two levels deep
+    summaries = {r["flow"]: r for r in events_of(records, "frame_finished")}
+    assert summaries["flows/leaf"]["asserts"]["failed"] == 1
+    assert summaries["flows/mid"]["asserts"]["failed"] == 1
+    assert summaries["flows/leaf"]["seq"] < summaries["flows/mid"]["seq"]
 
 
 def test_flow_timeout_aborts_child_and_keeps_recorded_asserts(tmp_path):
@@ -326,6 +377,150 @@ def test_loop_parallel_results_stay_index_ordered(tmp_path):
     assert result.end_outputs == {
         "res": [{"value": 0.09}, {"value": 0.05}, {"value": 0.01}]
     }
+
+
+def test_parallel_loop_bounds_workers_and_releases_finished_frames(
+    tmp_path, monkeypatch
+):
+    """M3/NFR-14: total items do not determine helper-task or live-Frame
+    counts. Every completed iteration remains reconstructable from its durable
+    frame summary after the runtime object is detached.
+    """
+    count = 200
+    concurrency = 4
+    write_flow(
+        tmp_path,
+        "flows/bounded",
+        [
+            start({"name": "item", "type": "number"}),
+            {"id": "pause", "type": "delay", "config": {"seconds": 0.001}},
+            end({"name": "value"}),
+        ],
+        [("start.item", "pause.in"), ("pause.out", "end.value")],
+    )
+    f = flow(
+        start(),
+        loop(
+            "lp",
+            f"range({count}) | list",
+            "flows/bounded",
+            mode="parallel",
+            max_concurrency=concurrency,
+        ),
+        end({"name": "res"}),
+        edges=[("start.out", "lp.trigger"), ("lp.results", "end.res")],
+    )
+
+    active = 0
+    peak = 0
+    original_spawn = FlowRun._spawn_frame
+    original_finish = FlowRun._finish_child
+
+    def tracked_spawn(self, *args, **kwargs):
+        nonlocal active, peak
+        child = original_spawn(self, *args, **kwargs)
+        active += 1
+        peak = max(peak, active)
+        return child
+
+    def tracked_finish(self, *args, **kwargs):
+        nonlocal active
+        try:
+            return original_finish(self, *args, **kwargs)
+        finally:
+            active -= 1
+
+    worker_names = []
+    original_create_task = asyncio.TaskGroup.create_task
+
+    def tracked_create_task(group, coro, *, name=None, context=None):
+        if name and name.startswith("napf-loop-"):
+            worker_names.append(name)
+        return original_create_task(group, coro, name=name, context=context)
+
+    monkeypatch.setattr(FlowRun, "_spawn_frame", tracked_spawn)
+    monkeypatch.setattr(FlowRun, "_finish_child", tracked_finish)
+    monkeypatch.setattr(asyncio.TaskGroup, "create_task", tracked_create_task)
+
+    result, records = run(f, workspace_root=tmp_path)
+
+    assert result.state == "passed"
+    assert len(result.end_outputs["res"]) == count
+    assert len(worker_names) == concurrency
+    assert peak <= concurrency
+    assert active == 0
+    summaries = events_of(records, "frame_finished")
+    assert len(summaries) == count
+    assert {record["loop_index"] for record in summaries} == set(range(count))
+
+
+def test_parallel_loop_abort_keeps_only_active_frames_and_replays_abort(tmp_path):
+    concurrency = 4
+    write_flow(
+        tmp_path,
+        "flows/abortable",
+        [
+            start({"name": "item", "type": "number"}),
+            {"id": "pause", "type": "delay", "config": {"seconds": 60}},
+            end({"name": "value"}),
+        ],
+        [("start.item", "pause.in"), ("pause.out", "end.value")],
+    )
+    parent = flow(
+        start(),
+        loop(
+            "lp",
+            "range(100) | list",
+            "flows/abortable",
+            mode="parallel",
+            max_concurrency=concurrency,
+        ),
+        end(),
+        edges=[("start.out", "lp.trigger")],
+    )
+
+    async def scenario():
+        reached = asyncio.Event()
+
+        class AbortSink(CaptureSink):
+            def write(self, record):
+                super().write(record)
+                active_frames = {
+                    item["frame"]
+                    for item in self.records
+                    if item["event"] == "node_fired" and item.get("node") == "pause"
+                }
+                if len(active_frames) == concurrency:
+                    reached.set()
+
+        sink = AbortSink()
+        engine = FlowRun(
+            parent,
+            flow_identity="flows/abort-parent",
+            manifest=manifest(),
+            env={},
+            env_name=None,
+            inputs={},
+            stream=EventStream("abort-loop", NO_SECRETS, [sink]),
+            workspace_root=tmp_path,
+        )
+        task = asyncio.create_task(engine.execute())
+        async with asyncio.timeout(5):
+            await reached.wait()
+            engine.abort()
+            result = await task
+        return result, sink.records
+
+    result, records = asyncio.run(scenario())
+    child_frames = {
+        record["frame"]
+        for record in records
+        if record["event"] == "node_fired" and record.get("node") == "pause"
+    }
+    assert result.state == "aborted"
+    assert len(child_frames) == concurrency
+    assert events_of(records, "frame_finished") == []
+    assert events_of(records, "run_finished")[-1]["state"] == "aborted"
 
 
 def make_small_checker(tmp_path):

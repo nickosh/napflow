@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
@@ -49,21 +50,30 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - name: Install project
         run: uv sync --locked
-      - name: Build UI bundle
-        run: |
-          npm ci
-          npm run build
+      - name: Install frontend dependencies
+        run: npm ci
         working-directory: ui
-      - name: Wheel carries the bundle (NFR-03)
+      - name: Audit frontend notices
+        run: uv run python tools/generate_frontend_notices.py --check
+      - name: Vitest
+        run: npm test
+        working-directory: ui
+      - name: Build UI bundle
+        run: npm run build
+        working-directory: ui
+      - name: Release artifacts carry the bundle (NFR-03)
         shell: bash
         run: |
-          uv build --wheel
+          uv build --clear
           uv run python - <<'EOF'
           import glob, sys, zipfile
           names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
           ok = any(n == "napflow/server/static/index.html" for n in names)
           sys.exit(0 if ok else "wheel is missing the UI bundle (NFR-03)")
           EOF
+      - name: Installed release-artifact smoke
+        if: runner.os == 'Linux'
+        run: uv run python tools/smoke_release_artifact.py dist
       # --with-deps is Linux-only (apt libraries). On Windows it tries
       # to install media components via an elevated path and hangs on
       # hosted runners; macOS/Windows runners need just the browser.
@@ -79,6 +89,21 @@ jobs:
       - name: Playwright e2e
         run: npm run e2e
         working-directory: ui
+
+  # Called by release.yml on tags so the exact PR-quality workflow is the
+  # publication gate. Development checkpoints may pass ordinary CI but can
+  # never pass this release-specific refusal.
+  release-version:
+    name: release version
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Refuse tag/package mismatch and development releases
+        run: >-
+          uv run --no-project --python 3.12 python
+          tools/check_release_version.py --tag "${{ github.ref_name }}"
 
   # NFR-10: niquests pulls urllib3-future — napflow.core gets installed
   # into users' pytest envs next to requests/botocore; that combination

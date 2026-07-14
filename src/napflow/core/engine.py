@@ -30,7 +30,8 @@ import json
 import re
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from contextlib import suppress
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -39,8 +40,8 @@ from napflow import __version__
 from napflow.core.events import (
     AssertResult,
     BudgetWarning,
-    CaptureWarning,
     EventStream,
+    FrameFinished,
     GuardTripped,
     LogEvent,
     MessageEmitted,
@@ -53,7 +54,11 @@ from napflow.core.events import (
     RunStarted,
     isoformat_ms,
 )
-from napflow.core.httpclient import HttpClient, TransportError, WireResponse
+from napflow.core.httpclient import (
+    HttpClient,
+    RequestEncodingError,
+    TransportError,
+)
 from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import FlowFile
 from napflow.core.models.flow import (
@@ -86,7 +91,6 @@ from napflow.core.templating import (
     TemplateEvaluationError,
     TypeCoercionError,
     coerce_value,
-    stringify_native,
 )
 from napflow.core.worker import (
     WorkerCrash,
@@ -94,6 +98,7 @@ from napflow.core.worker import (
     WorkerTaskError,
     default_interpreter,
 )
+from napflow.core.workspace import WorkspaceBoundaryError, WorkspaceResolver
 
 RunState = Literal["passed", "failed", "error", "aborted"]
 
@@ -104,8 +109,6 @@ EXIT_CODES: dict[RunState, int] = {
     "error": 2,
     "aborted": 130,
 }
-
-_MB = 1024 * 1024
 
 # Node-error OUTLETS: where a failed firing routes (D24, EC24). Distinct
 # from error-CLASS ports (below): assert.failed carries check failures,
@@ -125,7 +128,11 @@ _ERROR_CLASS_PORTS = {
 # the potentially-unbounded leaf firings (D24).
 _DEFAULT_CEILING_TYPES = ("request", "python")
 
-_PREVIEW_LIMIT = 512  # chars of compact JSON in message_emitted previews
+# Inline merge/guard deliveries can keep the ready queue perpetually
+# non-empty, so Queue.get() alone is not a cooperative scheduling point.
+# Yield after a bounded batch: large enough to keep the fast path cheap,
+# small enough for millisecond-scale deadlines/abort requests to be seen.
+_READY_BATCH_SIZE = 128
 
 
 class _BudgetExhausted(Exception):
@@ -227,7 +234,11 @@ class Frame:
     id: str
     graph: _Graph
     inputs: dict[str, Any]
+    flow_identity: str
     flow_dir: Path | None = None  # locates this flow's nodes.py
+    parent_node: str | None = None
+    invocation_kind: Literal["root", "flow", "loop"] = "root"
+    started_at: float = field(default_factory=time.monotonic)
     variables: dict[str, Any] = field(default_factory=dict)
     node_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     firing_counts: dict[str, int] = field(default_factory=dict)
@@ -239,17 +250,24 @@ class Frame:
     # rule-4 guard state, frame-local by construction (TR-5): counter
     # remaining / timeout start; absent key = pristine (post-reset)
     guards: dict[str, Any] = field(default_factory=dict)
-    # frame tree + completion machinery (S3/M5)
+    # active frame tree + completion machinery (S3/M5, bounded in v0.2/M3)
     in_flight: int = 0
     done: asyncio.Event = field(default_factory=asyncio.Event)
     tasks: set[asyncio.Task[None]] = field(default_factory=set)
-    children: list["Frame"] = field(default_factory=list)
+    children: list["Frame"] = field(default_factory=list)  # active children only
     cancelled: bool = False
     loop_binding: tuple[Any, int] | None = None  # (item, index) in bodies
     http: HttpClient | None = None  # fresh_session override, inherited
     # frame-local outcome counts (subtree sums feed D21 payloads)
+    passed_asserts: int = 0
     failed_asserts: int = 0
     unhandled_count: int = 0
+    # Completed descendants are rolled up before their runtime Frames are
+    # detached. These scalars preserve subtree outcomes without retaining
+    # every child object for the life of a large loop (D36/NFR-14).
+    closed_passed_asserts: int = 0
+    closed_failed_asserts: int = 0
+    closed_unhandled_count: int = 0
 
 
 @dataclass
@@ -293,11 +311,19 @@ class FlowRun:
         run_timeout_s: float | None = None,
         flow_dir: Path | None = None,
         workspace_root: Path | None = None,
+        workspace_resolver: WorkspaceResolver | None = None,
     ):
         self._flow = flow
         self._flow_identity = flow_identity
         self._flow_dir = flow_dir
-        self._workspace_root = workspace_root
+        self._workspace_resolver = workspace_resolver
+        if self._workspace_resolver is None and workspace_root is not None:
+            self._workspace_resolver = WorkspaceResolver(workspace_root)
+        self._workspace_root = (
+            self._workspace_resolver.root
+            if self._workspace_resolver is not None
+            else workspace_root
+        )
         self._python_settings = manifest.python
         self._defaults = manifest.defaults.run
         self._env = dict(env)
@@ -318,6 +344,9 @@ class FlowRun:
         self._budget_warned = False
         self._aborted = False
         self._fatal: tuple[str, str] | None = None  # (error_reason, message)
+        self._deadline_at: float | None = None
+        self._runtime_closed = False
+        self._cleanup_task: asyncio.Task[None] | None = None
 
         self._asserts_passed = 0
         self._asserts_failed = 0
@@ -330,9 +359,6 @@ class FlowRun:
         self._flow_cache: dict[str, tuple[_Graph, Path, Any]] = {}
         self._frame_seq = 0
         self._request_defaults: RequestDefaults = manifest.defaults.request
-        self._body_cap = int(self._defaults.body_capture_mb * _MB)
-        self._capture_remaining = int(self._defaults.run_capture_mb * _MB)
-        self._capture_warned = False
 
     # -- public ------------------------------------------------------------
 
@@ -343,52 +369,115 @@ class FlowRun:
 
     async def execute(self) -> RunResult:
         started = time.monotonic()
-        self._stream.emit(
-            RunStarted(
-                flow=self._flow_identity,
-                env_name=self._env_name,
-                inputs=dict(self._given_inputs),
-                engine_version=__version__,
-            )
-        )
         frame: Frame | None = None
         try:
-            self._check_env_required(self._flow.env)
-            graph = _Graph(self._flow)
-            frame = Frame(
-                id="f-0",
-                graph=graph,
-                inputs=self._bind(graph.start, self._given_inputs),
-                flow_dir=self._flow_dir,
+            self._stream.emit(
+                RunStarted(
+                    flow=self._flow_identity,
+                    env_name=self._env_name,
+                    inputs=dict(self._given_inputs),
+                    engine_version=__version__,
+                )
             )
-        except _BindError as e:
-            self._fatal = (e.reason, str(e))
-        except TypeCoercionError as e:
-            self._fatal = ("bind_error", str(e))
-
-        if frame is not None:
             try:
-                if self._run_timeout_s is not None:
-                    async with asyncio.timeout(self._run_timeout_s):
-                        await self._pump(frame)
-                else:
-                    await self._pump(frame)
-            except TimeoutError:
-                # D24: expiry cancels in-flight work like an abort but
-                # finalizes `error` — the report is still written
-                self._fatal = self._fatal or ("run_timeout", "run deadline expired")
-            for task in self._tasks:
-                task.cancel()
-            if self._tasks:
-                await asyncio.gather(*self._tasks, return_exceptions=True)
+                self._check_env_required(self._flow.env)
+                graph = _Graph(self._flow)
+                frame = Frame(
+                    id="f-0",
+                    graph=graph,
+                    inputs=self._bind(graph.start, self._given_inputs),
+                    flow_identity=self._flow_identity,
+                    flow_dir=self._flow_dir,
+                )
+            except _BindError as e:
+                self._fatal = (e.reason, str(e))
+            except TypeCoercionError as e:
+                self._fatal = ("bind_error", str(e))
 
-        if self._http is not None:  # FR-408: session closed on every exit
-            await self._http.close()
-        for extra in self._extra_http:  # fresh_session iteration leftovers
-            await extra.close()
-        if self._workers is not None:  # workers killed at FINALIZE (EN §5a)
-            await self._workers.close()
-        return self._finalize(frame, started)
+            if frame is not None:
+                try:
+                    if self._run_timeout_s is not None:
+                        self._deadline_at = (
+                            asyncio.get_running_loop().time() + self._run_timeout_s
+                        )
+                        async with asyncio.timeout_at(self._deadline_at):
+                            await self._pump(frame)
+                    else:
+                        await self._pump(frame)
+                except TimeoutError:
+                    # D24: expiry cancels in-flight work like an abort but
+                    # finalizes `error` — the report is still written.
+                    self._set_run_timeout()
+
+            # Normal completion, abort, and run deadline all converge here:
+            # no owned task/session/worker is live when run_finished is born.
+            await self._wait_for_cleanup()
+            return self._finalize(frame, started)
+        finally:
+            # External coroutine cancellation and server-task teardown skip
+            # the normal path above.  Shield the one cleanup task so cancellation
+            # cannot strand the resources it is responsible for closing; the
+            # original CancelledError still escapes after cleanup completes.
+            try:
+                await self._wait_for_cleanup()
+            finally:
+                # Closing is still run-owned and every sink is attempted, but
+                # a sink failure must not replace a completed RunResult or an
+                # in-flight cancellation. EventStream remembers the failure;
+                # adapters observe it on their idempotent close and abandon
+                # the durable history unit instead of publishing it complete.
+                with suppress(Exception):
+                    self._stream.close()
+
+    async def _wait_for_cleanup(self) -> None:
+        """Await the single cleanup task without letting caller cancellation
+        cancel that task too. Repeated cancellation still waits for teardown,
+        then propagates to the caller (D36/TR-15).
+        """
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._close_runtime())
+        try:
+            await asyncio.shield(self._cleanup_task)
+        except asyncio.CancelledError:
+            while not self._cleanup_task.done():
+                try:
+                    await asyncio.shield(self._cleanup_task)
+                except asyncio.CancelledError:
+                    continue
+            # Retrieve a cleanup failure before propagating cancellation so
+            # no task exception is leaked as an unobserved warning.
+            self._cleanup_task.exception()
+            raise
+
+    async def _close_runtime(self) -> None:
+        """Close every resource owned by this run, once (D36/NFR-13).
+
+        Firing tasks go first so they cannot create another HTTP session or
+        worker while those pools are being torn down.  WorkerPool.close()
+        also drains any terminate/kill task started by a cancelled firing.
+        """
+        if self._runtime_closed:
+            return
+        tasks = [task for task in self._tasks if not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        closers = []
+        if self._http is not None:
+            closers.append(self._http.close())
+        for extra in list(self._extra_http):
+            closers.append(extra.close())
+        if self._workers is not None:
+            closers.append(self._workers.close())
+        results = (
+            await asyncio.gather(*closers, return_exceptions=True) if closers else []
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            raise errors[0]
+        self._extra_http.clear()
+        self._runtime_closed = True
 
     # -- lifecycle: BIND / ENV (EN §2) --------------------------------------
 
@@ -468,8 +557,16 @@ class FlowRun:
             return
         if self._in_flight == 0:
             return  # nothing seeded — finalize immediately (EC08)
+        batch_remaining = _READY_BATCH_SIZE
         while True:
             item = await self._queue.get()
+            # A task may produce the final QUIESCENT wakeup just after the
+            # deadline.  Check that boundary before accepting a successful
+            # termination; otherwise the timeout callback can lose the race
+            # with leaving `asyncio.timeout_at()` and the run reports passed.
+            if item is _QUIESCENT and self._deadline_expired():
+                self._set_run_timeout()
+                break
             if item is _QUIESCENT or item is _FATAL:
                 break
             delivery: _Delivery = item
@@ -480,6 +577,26 @@ class FlowRun:
                 # inline merge/guard firings emit inside the pump (EN §4)
                 self._set_fatal("budget_exhausted", str(e), e.edge)
             self._dec(delivery.frame)  # delivery consumed
+            batch_remaining -= 1
+            if batch_remaining == 0:
+                # Queue.get() does not yield when an inline cycle keeps the
+                # queue ready.  This is the explicit fairness/control point.
+                await asyncio.sleep(0)
+                if self._aborted:
+                    break
+                if self._deadline_expired():
+                    self._set_run_timeout()
+                    break
+                batch_remaining = _READY_BATCH_SIZE
+
+    def _deadline_expired(self) -> bool:
+        return self._deadline_at is not None and (
+            asyncio.get_running_loop().time() >= self._deadline_at
+        )
+
+    def _set_run_timeout(self) -> None:
+        if self._fatal is None:
+            self._set_fatal("run_timeout", "run deadline expired")
 
     def _dispatch(self, frame: Frame, delivery: _Delivery) -> None:
         """Firing rules per delivery (EN §4). Absorbed deliveries — a
@@ -697,7 +814,7 @@ class FlowRun:
                     to_node=to_node,
                     to_port=to_port,
                     msg_id=message.msg_id,
-                    value_preview=_preview(value),
+                    value=value,
                 )
             )
 
@@ -771,7 +888,7 @@ class FlowRun:
                     )
                 return [("value", frame.variables[name])]
             case LogNode():
-                self._stream.emit(  # masked at emission (D13/D22)
+                self._stream.emit(  # raw canonical + redacted presentation (D35)
                     LogEvent(
                         frame=frame.id,
                         node=node.id,
@@ -810,6 +927,23 @@ class FlowRun:
                 " FlowRun/execute_flow) to locate nodes.py",
             )
         nodes_path = frame.flow_dir / "nodes.py"
+        if self._workspace_resolver is not None:
+            try:
+                relative_dir = frame.flow_dir.resolve(strict=False).relative_to(
+                    self._workspace_resolver.root
+                )
+                if relative_dir.parts:
+                    nodes_path = self._workspace_resolver.source_file(
+                        relative_dir.as_posix(), "nodes.py"
+                    )
+                else:
+                    nodes_path = self._workspace_resolver.resolve_workspace_path(
+                        "nodes.py", label="python source"
+                    )
+            except (OSError, RuntimeError, ValueError, WorkspaceBoundaryError) as e:
+                raise _NodeError(
+                    "worker_crash", f"python source violates workspace boundary: {e}"
+                ) from e
         if not nodes_path.is_file():
             raise _NodeError("worker_crash", f"no nodes.py at {nodes_path}")
         if self._workers is None:
@@ -874,14 +1008,18 @@ class FlowRun:
         cached = self._flow_cache.get(ref)
         if cached is not None:
             return cached
-        if self._workspace_root is None:
+        if self._workspace_resolver is None:
             raise _NodeError(
                 "flow_load_error",
                 "flow references need workspace_root — pass it to FlowRun/execute_flow",
             )
-        flow_dir = self._workspace_root / Path(ref)
         try:
-            loaded = load_flow(flow_dir / "flow.yaml")
+            flow_dir = self._workspace_resolver.flow_dir(ref)
+            loaded = load_flow(self._workspace_resolver.flow_file(ref))
+        except WorkspaceBoundaryError as e:
+            raise _NodeError(
+                "flow_load_error", f"flow {ref!r} violates workspace boundary: {e}"
+            ) from e
         except (OSError, LoadError) as e:
             raise _NodeError("flow_load_error", f"cannot load flow {ref!r}: {e}") from e
         entry = (_Graph(loaded.model), flow_dir, loaded.model.env)
@@ -895,6 +1033,9 @@ class FlowRun:
         flow_dir: Path,
         inputs: dict[str, Any],
         *,
+        flow_identity: str,
+        parent_node: str,
+        invocation_kind: Literal["flow", "loop"],
         loop_binding: tuple[Any, int] | None = None,
         http: HttpClient | None = None,
     ) -> Frame:
@@ -903,7 +1044,10 @@ class FlowRun:
             id=f"{parent.id}/f-{self._frame_seq}",
             graph=graph,
             inputs=inputs,
+            flow_identity=flow_identity,
             flow_dir=flow_dir,
+            parent_node=parent_node,
+            invocation_kind=invocation_kind,
             loop_binding=loop_binding,
             http=http or parent.http,
         )
@@ -932,33 +1076,71 @@ class FlowRun:
             self._cancel_frame(child)
             raise
 
-    def _close_child(self, child: Frame) -> tuple[str, int, list[dict], dict]:
-        """Child-frame FINALIZE: the D18 required-End check runs per
-        frame (TR-3 cross-frame), then the subtree outcome (D21):
-        → (state, failed_asserts, unhandled_entries, end_outputs)."""
+    def _finish_child(
+        self, parent: Frame, child: Frame
+    ) -> tuple[str, int, list[dict], dict]:
+        """Finalize and release one quiescent child frame.
+
+        The durable ``frame_finished`` event is written before runtime-only
+        state is detached. Subtree counters are rolled into the parent so a
+        later ancestor completion preserves D20/D21 outcomes without keeping
+        every completed Frame alive (D36/NFR-14).
+
+        Cancellation is deliberately finalized by run cleanup instead: a
+        cancelled frame may still have queued deliveries referencing it, and
+        D18 must not turn an abort into a required-End failure.
+        """
+        if child.cancelled:
+            raise RuntimeError("cannot compact a cancelled child frame")
         outputs = self._close_end_ports(child)
-        failed_asserts, unhandled_count = self._subtree_counts(child)
+        passed_asserts, failed_asserts = self._subtree_assert_counts(child)
+        unhandled_count = self._subtree_unhandled_count(child)
         prefix = child.id + "/"
         entries = [
             u
             for u in self._unhandled
             if u["frame"] and (u["frame"] == child.id or u["frame"].startswith(prefix))
         ]
-        if child.cancelled:
-            state = "aborted"
-        elif failed_asserts or unhandled_count:
-            state = "failed"
-        else:
-            state = "passed"
+        state = "failed" if failed_asserts or unhandled_count else "passed"
+
+        loop_index = child.loop_binding[1] if child.loop_binding is not None else None
+        assert child.parent_node is not None
+        assert child.invocation_kind in ("flow", "loop")
+        self._stream.emit(
+            FrameFinished(
+                frame=child.id,
+                parent_frame=parent.id,
+                parent_node=child.parent_node,
+                flow=child.flow_identity,
+                kind=child.invocation_kind,
+                loop_index=loop_index,
+                duration_ms=round((time.monotonic() - child.started_at) * 1000, 3),
+                state=state,
+                asserts={"passed": passed_asserts, "failed": failed_asserts},
+                unhandled_errors=entries,
+                end_outputs=outputs,
+            )
+        )
+        parent.closed_passed_asserts += passed_asserts
+        parent.closed_failed_asserts += failed_asserts
+        parent.closed_unhandled_count += unhandled_count
+        parent.children.remove(child)
         return state, failed_asserts, entries, outputs
 
-    def _subtree_counts(self, frame: Frame) -> tuple[int, int]:
-        failed, unhandled = frame.failed_asserts, frame.unhandled_count
+    def _subtree_assert_counts(self, frame: Frame) -> tuple[int, int]:
+        passed = frame.passed_asserts + frame.closed_passed_asserts
+        failed = frame.failed_asserts + frame.closed_failed_asserts
         for child in frame.children:
-            child_failed, child_unhandled = self._subtree_counts(child)
+            child_passed, child_failed = self._subtree_assert_counts(child)
+            passed += child_passed
             failed += child_failed
-            unhandled += child_unhandled
-        return failed, unhandled
+        return passed, failed
+
+    def _subtree_unhandled_count(self, frame: Frame) -> int:
+        unhandled = frame.unhandled_count + frame.closed_unhandled_count
+        for child in frame.children:
+            unhandled += self._subtree_unhandled_count(child)
+        return unhandled
 
     def _close_end_ports(self, frame: Frame) -> dict[str, Any]:
         """D18, applied to ANY frame at its quiescence: a required End
@@ -994,9 +1176,17 @@ class FlowRun:
             inputs = self._bind(graph.start, slot_values)
         except _BindError as e:
             raise _NodeError(e.reason, f"flow {node.config.flow!r}: {e}") from e
-        child = self._spawn_frame(frame, graph, flow_dir, inputs)
+        child = self._spawn_frame(
+            frame,
+            graph,
+            flow_dir,
+            inputs,
+            flow_identity=node.config.flow,
+            parent_node=node.id,
+            invocation_kind="flow",
+        )
         await self._run_child(child)
-        state, failed_asserts, entries, port_values = self._close_child(child)
+        state, failed_asserts, entries, port_values = self._finish_child(frame, child)
         outputs = list(port_values.items())
         if state != "passed":
             outputs.append(
@@ -1066,14 +1256,19 @@ class FlowRun:
                 graph,
                 flow_dir,
                 inputs,
+                flow_identity=cfg.body,
+                parent_node=node.id,
+                invocation_kind="loop",
                 loop_binding=(item, index),
                 http=http,
             )
             await self._run_child(child)
-            state, failed_asserts, entries, port_values = self._close_child(child)
+            state, failed_asserts, entries, port_values = self._finish_child(
+                frame, child
+            )
             if http is not None:  # close eagerly; cancellation paths
-                self._extra_http.remove(http)  # fall back to run cleanup
                 await http.close()
+                self._extra_http.remove(http)  # close failed/cancelled → run cleanup
             if state == "passed":
                 results[index] = port_values
             else:
@@ -1093,15 +1288,28 @@ class FlowRun:
                     break  # gates scheduling only — never in-flight work
                 await run_iteration(index, item)
         else:
-            semaphore = asyncio.Semaphore(cfg.max_concurrency)
+            # A fixed worker set bounds helper tasks and active iteration
+            # frames by max_concurrency. Claiming the next list index contains
+            # no await, so the shared cursor is safe on this one event loop.
+            next_index = 0
 
-            async def gated(index: int, item: Any) -> None:
-                async with semaphore:
+            async def worker() -> None:
+                nonlocal next_index
+                while next_index < len(items):
                     if stop and cfg.on_error == "stop":
                         return
+                    index = next_index
+                    next_index += 1
+                    item = items[index]
                     await run_iteration(index, item)
 
-            await asyncio.gather(*(gated(i, it) for i, it in enumerate(items)))
+            worker_count = min(cfg.max_concurrency, len(items))
+            async with asyncio.TaskGroup() as workers:
+                for worker_no in range(worker_count):
+                    workers.create_task(
+                        worker(),
+                        name=f"napf-loop-{frame.id}-{node.id}-{worker_no}",
+                    )
 
         outputs: list[tuple[str, Any]] = [
             ("results", [results[i] for i in sorted(results)])
@@ -1116,14 +1324,22 @@ class FlowRun:
         per RUN (keyed by resolved path — a mid-run file change or
         deletion never splits the data). CSV → list of dicts, header
         row required, values stay strings (no inference)."""
-        root = self._workspace_root or self._flow_dir
-        if root is None:
+        resolver = self._workspace_resolver
+        if resolver is None and self._flow_dir is not None:
+            resolver = WorkspaceResolver(self._flow_dir)
+        if resolver is None:
             raise _NodeError(
                 "fixture_error",
                 "fixture nodes need workspace_root (or flow_dir) to"
                 " resolve files — pass it to FlowRun/execute_flow",
             )
-        path = root / node.config.file
+        try:
+            path = resolver.fixture_file(node.config.file)
+        except WorkspaceBoundaryError as e:
+            raise _NodeError(
+                "fixture_error",
+                f"fixture {node.config.file!r} violates workspace boundary: {e}",
+            ) from e
         key = str(path)
         if key in self._fixture_cache:
             return self._fixture_cache[key]
@@ -1208,17 +1424,20 @@ class FlowRun:
         cfg = self._effective_request_config(node, context)
         attempts: int = cfg["retry_attempts"]
         for attempt in range(1, attempts + 1):
-            self._stream.emit(
-                RequestStarted(
-                    frame=frame.id,
-                    node=node.id,
-                    method=cfg["method"],
-                    url=cfg["url"],
-                    headers=cfg["headers"],
-                    body_preview=_preview(cfg["body"]),
-                    attempt=attempt,
+
+            def on_prepared(prepared: Any, current_attempt: int = attempt) -> None:
+                request = asdict(prepared)
+                self._stream.emit(
+                    RequestStarted(
+                        frame=frame.id,
+                        node=node.id,
+                        method=request["method"],
+                        url=request["url"],
+                        attempt=current_attempt,
+                        request=request,
+                    )
                 )
-            )
+
             try:
                 wire = await http.request(
                     method=cfg["method"],
@@ -1229,17 +1448,42 @@ class FlowRun:
                     timeout_s=cfg["timeout_s"],
                     verify_tls=cfg["verify_tls"],
                     http_version=node.config.http_version,
+                    on_prepared=on_prepared,
                 )
-            except TransportError as e:
-                will_retry = attempt < attempts
+            except RequestEncodingError as e:
                 self._stream.emit(
                     RequestFailed(
                         frame=frame.id,
                         node=node.id,
+                        method=cfg["method"],
+                        url=cfg["url"],
+                        error_kind="request_encoding",
+                        message=str(e),
+                        attempt=attempt,
+                        will_retry=False,
+                        redirects_total=0,
+                    )
+                )
+                raise _NodeError(
+                    "request_encoding", f"request body encoding failed: {e}"
+                ) from e
+            except TransportError as e:
+                will_retry = attempt < attempts
+                request = asdict(e.request) if e.request is not None else None
+                self._stream.emit(
+                    RequestFailed(
+                        frame=frame.id,
+                        node=node.id,
+                        method=(
+                            request["method"] if request is not None else cfg["method"]
+                        ),
+                        url=request["url"] if request is not None else cfg["url"],
                         error_kind=e.kind,
                         message=str(e),
                         attempt=attempt,
                         will_retry=will_retry,
+                        redirects_total=e.redirects_total,
+                        request=request,
                     )
                 )
                 if not will_retry:
@@ -1247,20 +1491,7 @@ class FlowRun:
                         e.kind, f"transport failure after {attempt} attempt(s): {e}"
                     ) from e
                 continue
-            self._stream.emit(
-                RequestFinished(
-                    frame=frame.id,
-                    node=node.id,
-                    status=wire.status,
-                    http_version=wire.http_version,
-                    headers=wire.headers,
-                    body=self._capture_body(wire),
-                    size_bytes=wire.size_bytes,
-                    timing=wire.timing,
-                    attempt=attempt,
-                    retries_total=attempt - 1,
-                )
-            )
+            request = asdict(wire.request)
             value = {
                 "status": wire.status,
                 "headers": wire.headers,
@@ -1269,7 +1500,28 @@ class FlowRun:
                 "url": wire.url,
                 "http_version": wire.http_version,
                 "attempt": attempt,
+                "size_bytes": wire.size_bytes,
+                "timing": wire.timing,
+                "retries_total": attempt - 1,
+                "redirects_total": wire.redirects_total,
             }
+            self._stream.emit(
+                RequestFinished(
+                    frame=frame.id,
+                    node=node.id,
+                    method=request["method"],
+                    url=request["url"],
+                    status=wire.status,
+                    http_version=wire.http_version,
+                    size_bytes=wire.size_bytes,
+                    timing=wire.timing,
+                    attempt=attempt,
+                    retries_total=attempt - 1,
+                    redirects_total=wire.redirects_total,
+                    request=request,
+                    response=value,
+                )
+            )
             return [("response", value)]
         raise AssertionError("unreachable: retry loop returns or raises")
 
@@ -1320,32 +1572,6 @@ class FlowRun:
             "retry_attempts": retry.max_attempts,
         }
 
-    def _capture_body(self, wire: WireResponse) -> Any:
-        """Capture valves (FR-703/706): the EVENT copy of a body is
-        capped per body and per run; the port value always carries the
-        full body. Truncation is a marked wrapper, never a silent cut."""
-        size = wire.size_bytes
-        self._capture_remaining -= size
-        run_cap = int(self._defaults.run_capture_mb * _MB)
-        if not self._capture_warned and self._capture_remaining <= run_cap // 10:
-            self._capture_warned = True
-            remaining_mb = max(self._capture_remaining, 0) / _MB
-            self._stream.emit(CaptureWarning(remaining_mb=round(remaining_mb, 3)))
-        if size <= self._body_cap and self._capture_remaining >= 0:
-            return wire.body
-        body = wire.body
-        if isinstance(body, dict) and body.get("__binary__") is True:
-            return body | {
-                "base64": body["base64"][: self._body_cap],
-                "truncated": True,
-            }
-        text = body if isinstance(body, str) else stringify_native(body)
-        return {
-            "__truncated__": True,
-            "size_bytes": size,
-            "prefix": text[: self._body_cap],
-        }
-
     def _run_assert(
         self,
         frame: Frame,
@@ -1371,6 +1597,7 @@ class FlowRun:
             )
             if passed:
                 self._asserts_passed += 1
+                frame.passed_asserts += 1
             else:
                 self._asserts_failed += 1
                 frame.failed_asserts += 1
@@ -1556,19 +1783,6 @@ class FlowRun:
         return context
 
 
-def _preview(value: Any) -> Any:
-    """`value_preview` for stream events: the value itself when small,
-    a truncated compact-JSON string when large (EN §7 — full bodies
-    live in request_* events, previews stay light)."""
-    try:
-        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    except (TypeError, ValueError):
-        text = repr(value)
-    if len(text) <= _PREVIEW_LIMIT:
-        return value
-    return text[:_PREVIEW_LIMIT] + "…(truncated)"
-
-
 async def execute_flow(
     flow: FlowFile,
     *,
@@ -1581,12 +1795,17 @@ async def execute_flow(
     run_timeout_s: float | None = None,
     flow_dir: Path | None = None,
     workspace_root: Path | None = None,
+    workspace_resolver: WorkspaceResolver | None = None,
 ) -> RunResult:
-    """Run one flow to quiescence (BIND → EXECUTE → FINALIZE). The
-    caller owns LOAD/CHECK, the event stream, and its sinks (M5 wires
-    `napf run`). `flow_dir` locates nodes.py for python nodes;
-    `workspace_root` sets the worker cwd and resolves a relative
-    `python.interpreter`."""
+    """Construct and run one isolated flow to quiescence.
+
+    The caller owns LOAD/CHECK plus stream/history creation and history
+    publication. ``FlowRun.execute`` owns runtime cleanup for frames, tasks,
+    HTTP sessions, workers, and the first stream close; callers re-close the
+    stream idempotently to observe sink failures before finalizing or abandoning
+    history (D36). ``flow_dir`` locates nodes.py; ``workspace_root`` sets the
+    worker cwd and resolves a relative ``python.interpreter``.
+    """
     run = FlowRun(
         flow,
         flow_identity=flow_identity,
@@ -1598,5 +1817,6 @@ async def execute_flow(
         run_timeout_s=run_timeout_s,
         flow_dir=flow_dir,
         workspace_root=workspace_root,
+        workspace_resolver=workspace_resolver,
     )
     return await run.execute()

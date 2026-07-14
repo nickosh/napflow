@@ -13,6 +13,18 @@ Compatibility note (D33, 2026-07-11): `schema: napflow/v1` remains an
 changes are expected before package v1.0 and v0.x migration support is
 best-effort. The marker becomes a stability/migration promise only when
 the package reaches v1.0.
+For the v0.2 upgrade specifically, no flow-file migration adapter is promised:
+v0.1 flow files that still validate continue to load, while the removed
+manifest keys `defaults.run.body_capture_mb` and
+`defaults.run.run_capture_mb` are rejected. The flow marker itself is
+unchanged; event/history compatibility is defined by the engine spec and the
+release-facing summary is `release-notes-v0.2.0.md`.
+Amended 2026-07-13 for v0.2/M4: full message/request/response event values,
+store-once `content-blobs/1` persistence, and prepared-wire request capture
+replace the historical preview/capture-valve behavior; the flow YAML shape is
+unchanged except that removed manifest settings are no longer accepted.
+Amended 2026-07-13 for v0.2/M6: visual-schema coverage, universal
+`max_seconds`, and template-aware typed form controls are pinned below.
 
 Changes from v0.3: End ports gain `required:` (default `true` — an
 unreached required port fails the run, **D18**); guard `exhausted`/`expired`
@@ -200,7 +212,7 @@ If the job never reaches `done`, `end.job` is never written and the run is
 `failed` (exit 1) — the correct CI outcome — while `gave_up` records why.
 Flows that treat exhaustion as success mark `job` `required: false` instead.
 
-## Node type catalog — v1
+## Node type catalog — `napflow/v1` (experimental during package v0.x)
 
 | type      | purpose | key config | ports |
 |-----------|---------|------------|-------|
@@ -254,6 +266,33 @@ landed (`core/models/`; the models are the schema source of truth):
   `label` optional.
 - **`fixture.format`**: `json | csv`, optional — inferred from the file
   extension when omitted.
+
+### Visual editor coverage (v0.2/M6)
+
+The Pydantic models remain the schema authority. The cross-language
+`ui/src/form-coverage.json` contract is checked against every model field by
+pytest and against the implemented form descriptors/dedicated editors by
+Vitest, so a new field must gain a visual path or an explicit classification.
+
+- The canvas authors `nodes`, `edges`, and `layout`; the palette chooses a new
+  node's `type` and generates its stable `id`. Every node `config` field in the
+  v1 catalog has a dedicated control, structured row/port editor, or JSON cell.
+  Nested request retry fields remain authorable through the request's JSON
+  cell; no node config key is silently YAML-only.
+- `max_seconds` is shown for every node, including Start/End and instant nodes,
+  and is saved at node level (beside `id`/`type`/`config`), never inside config.
+- Templatable number/boolean controls accept either a native value or Jinja
+  source without forcing a numeric HTML input/select. This covers request
+  `timeout_s`/`verify_tls`, Delay `seconds`, status/response-time checks, and
+  typed Start defaults. Start defaults keep native values native; template
+  source is rendered at BIND and then coerced to the declared port type (D25).
+  An explicit default toggle distinguishes an absent default (required input)
+  from the valid native empty-string default; the run popover likewise omits
+  only untouched defaults and preserves an intentionally blank override.
+- Explicitly YAML-only in v0.2: the schema marker, flow `name`/`description`,
+  `env.required`, and renaming/retyping an existing stable node. New IDs/types
+  are still visually authorable through the palette; changing an existing one
+  means delete/recreate in the canvas or edit YAML intentionally.
 - **assert `expr` checks**: `op` defaults to `present`; every other op
   requires `value` (an explicit `value: null` is legal, e.g. for
   `equals`); `present` takes no `value`.
@@ -289,9 +328,11 @@ landed (`core/models/`; the models are the schema source of truth):
 
 Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
 
-- **Every node accepts an optional `max_seconds`** — a hard wall-clock
-  ceiling on a single firing, enforced by the engine (worker kill for
-  `python`, task cancellation otherwise; engine spec §5a).
+- **Every node accepts an optional `max_seconds`** — an execution ceiling on a
+  single firing, enforced by worker termination for `python` and cooperative
+  task cancellation for other async work (engine spec §5a). Synchronous Jinja
+  rendering cannot be preempted, so EC35 remains an explicit post-v0.2 hard-
+  deadline limitation rather than a hidden exception to the contract.
 - **The manifest default** (`defaults.run.node_timeout_s`, 300) applies
   automatically to `request` and `python` only — the two potentially
   unbounded leaf firings. `delay` is self-bounded by its `seconds`;
@@ -320,8 +361,10 @@ Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
     `flow` node.
   - nodes without an error port (`delay`, guards, `set`/`get`, …) →
     unhandled node error ⇒ run `failed` (EC24).
-- Whole-run wall-clock deadline: `defaults.run.run_timeout_s` /
-  `napf run --timeout` (off by default; see manifest).
+- Cooperative execution deadline: `defaults.run.run_timeout_s` /
+  `napf run --timeout` (off by default; see manifest). It is armed after root
+  ENV/BIND and bounds the message pump/async firings, not LOAD/CHECK/profile
+  selection or synchronous template work (EC27/EC35).
 
 ### Request node
 - Has an explicit `trigger` input port — it fires when a message arrives
@@ -347,6 +390,11 @@ Guards bound *laps around a cycle*; `max_seconds` bounds *one firing*.
   interpreter → stdlib guaranteed). Point it at your project venv to use
   third-party packages in `nodes.py`.
 - Inputs and outputs must be JSON-serializable (same as the wire format).
+- Functions must be synchronous top-level `def`s and may not declare
+  positional-only parameters. Python-node inputs are invoked by parameter
+  name, so `async def` and the `/` signature marker are positioned E008
+  checker errors; the worker rejects both defensively when invoked through
+  the standalone engine without the checker gate (EC48).
 - **`assert` is supported**: a raised `AssertionError` routes to the
   node's `error` port with the assertion message, and is recorded in the
   run report alongside declarative assert-node results. Any other
@@ -377,14 +425,26 @@ as everywhere else.
   evaluation. One syntax. (JMESPath removed from earlier drafts.)
 - Port types: `string | number | boolean | object | list | any`
   (default `any`); UI colors ports, warns on mismatch, never blocks.
-- Edits: last-write-wins; UI watches the filesystem and reloads/prompts
-  on external change.
+- Edits: per-file ETags and revisioned save coordinators serialize accepted
+  writes. A clean canvas polls for external changes and reloads; dirty/stale
+  writes receive 409 and require reload or explicit force-overwrite (the
+  last-write-wins ceiling). Navigation, code-editor close, and run start flush
+  pending writes; unload prompts while work remains (EC46).
 - Run history: JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`,
-  append-only, identical objects to the live WebSocket stream, secrets
-  masked. Request/response events carry **full detail**: URL, method,
-  negotiated HTTP version, request & response headers, bodies, status,
-  timing breakdown (DNS/connect/TLS/TTFB/total where niquests exposes it),
-  retries attempted. Replay-on-canvas = re-reading the file.
+  append-only, raw, and identical to the local live WebSocket stream. JSONL
+  creation is exclusive, while directories/files otherwise use ordinary
+  OS/workspace permissions (POSIX umask and inherited Windows ACLs); napflow
+  applies no custom owner, DACL, or forced-mode contract (D39).
+  Terminal and JSON/JUnit reports apply D35's schema-aware declared-secret
+  view; dictionary keys and protocol structure never change. Production logs
+  declare `content-blobs/1`: small values stay inline, while repeated large
+  request/response/message/Log/End values share immutable hash-verified blob
+  references. Request history contains effective prepared URL/query,
+  library/session headers and cookies, exact body/no-body, final redirect
+  request, status, timing, retries, and redirects. Runtime port values remain
+  complete and independent of persistence (EC32/EC50). Replay = re-reading the
+  recording, never re-execution; bounded pages and per-record on-demand browser
+  resolution keep blob reads and child-frame detail lazy.
 - Platforms: macOS, Windows, and Linux from day one (D26; pathlib
   discipline, no shell-isms); all three in the CI matrix.
 
@@ -465,7 +525,10 @@ the body's Start must declare an `item` port; it may declare `index`.**
 continue`; `fresh_session: true` gives each iteration its own HTTP
 session (default: shared per-run session); body End outputs collected on
 `results` — ordered by item index regardless of completion order
-(EC36) — failures on `errors`.
+(EC36) — failures on `errors`. Parallel mode uses a fixed worker set of at
+most `max_concurrency`; it does not allocate one helper task per item.
+Normally completed iteration frames are summarized durably and released,
+so active task/frame counts are bounded by concurrency (D36/NFR-14).
 
 An iteration "error" is **a body frame ending `failed` or `error`** (D20):
 any failed assert, unhandled error-port message, worker crash/timeout, or
@@ -474,7 +537,7 @@ whether further iterations are *scheduled*; failed iterations land on
 `errors` and count toward the run state regardless of mode.
 
 ## Scoping rules
-Env profiles, `defaults.request`, secret masking = global.
+Env profiles, `defaults.request`, declared-secret presentation policy = global.
 Set/Get variables, `{{ inputs.* }}`, `{{ nodes.* }}`, node IDs =
 flow-scoped; data crosses flow boundaries only via Start/End ports.
 Run builtins `run.id`, `run.timestamp`, `run.env_name` span the whole run.
@@ -520,8 +583,13 @@ pass-through outputs** carrying the triggering message, not error ports —
 unconnected, their message is dropped (W106 lints this); whether a
 tripped guard is a failure is decided by what you wire to it (D19).
 **Binary payloads** (e.g. non-text response bodies) are represented as
-`{"__binary__": true, "content_type": "...", "base64": "..."}` — the
-body-capture size cap applies to the encoded form.
+`{"__binary__": true, "content_type": "...", "base64": "..."}`. Blob
+hash/byte metadata is computed from the exact decoded bytes, and resolution
+reconstructs the canonical envelope without truncation. An inbound request-body
+envelope must have exactly those three fields, a non-empty string
+`content_type`, and canonical standard base64. A malformed envelope is a
+non-retryable `request_encoding` error on the request node's `error` port,
+never an internal engine error (EC48).
 
 ## v1.1 candidates (kept on the roadmap)
 - **`poll`** — request + success expression + interval + timeout in one
@@ -534,8 +602,8 @@ body-capture size cap applies to the encoded form.
 2026-06-11:
 - `run.*` builtins finalized: `run.id`, `run.timestamp`, `run.env_name`.
 - `merge mode: collect` is count-based in v1 (marker-based → roadmap).
-- `log` payloads ARE persisted into JSONL run history (masked) —
-  consistent with full-capture philosophy.
+- `log` payloads ARE persisted into raw local JSONL run history; CLI/report
+  presentation is separately redacted — consistent with D34/D35.
 
 2026-06-14 → 2026-07-02 (edge-case review; see `EDGE_CASES.md`):
 - D18 required End ports, D19 guard outputs, D21 flow `error` port +

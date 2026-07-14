@@ -8,11 +8,16 @@ the identical tests exercise Windows spawn semantics in CI (FR-906).
 """
 
 import ast
+import asyncio
 import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
+import napflow.core.worker as worker_module
 from napflow.core.models.manifest import Manifest
+from napflow.core.worker import WorkerCrash, WorkerPool, default_interpreter
 from test_engine import end, events_of, flow, run, start
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "napflow"
@@ -102,6 +107,53 @@ def test_single_input_by_port_name_and_literal_default(tmp_path):
     assert result.end_outputs == {"x": 15}
 
 
+def test_worker_rejects_async_function_when_checker_is_bypassed(tmp_path):
+    write_nodes(
+        tmp_path,
+        """
+        async def unsupported(value):
+            return {"out": value}
+        """,
+    )
+    f = flow(
+        start({"name": "value"}),
+        py("p", "unsupported"),
+        end({"name": "err", "required": False}),
+        edges=[("start.value", "p.value"), ("p.error", "end.err")],
+    )
+
+    result, _ = run(f, inputs={"value": 1}, flow_dir=tmp_path)
+
+    assert result.state == "passed"
+    assert result.end_outputs["err"]["error_kind"] == "python_error"
+    assert "async functions are not supported" in result.end_outputs["err"]["message"]
+
+
+def test_worker_rejects_positional_only_function_when_checker_is_bypassed(tmp_path):
+    write_nodes(
+        tmp_path,
+        """
+        def unsupported(value, /):
+            return {"out": value}
+        """,
+    )
+    f = flow(
+        start({"name": "value"}),
+        py("p", "unsupported"),
+        end({"name": "err", "required": False}),
+        edges=[("start.value", "p.value"), ("p.error", "end.err")],
+    )
+
+    result, _ = run(f, inputs={"value": 1}, flow_dir=tmp_path)
+
+    assert result.state == "passed"
+    assert result.end_outputs["err"]["error_kind"] == "python_error"
+    assert (
+        "positional-only parameters are not supported"
+        in result.end_outputs["err"]["message"]
+    )
+
+
 NODES_STATE = """
 CALLS = {"n": 0}
 
@@ -129,6 +181,55 @@ def test_worker_persists_module_state_across_firings(tmp_path):
     result, _ = run(f, flow_dir=tmp_path)
     assert result.state == "passed"
     assert result.end_outputs == {"x": 2}
+
+
+def test_cancelling_queued_call_does_not_kill_in_flight_worker(tmp_path):
+    entered = tmp_path / "entered"
+    write_nodes(
+        tmp_path,
+        f"""
+        import time
+        from pathlib import Path
+
+        def slow(value):
+            Path({str(entered)!r}).write_text("entered", encoding="utf-8")
+            time.sleep(0.25)
+            return {{"out": value}}
+
+        def echo(value):
+            return {{"out": value}}
+        """,
+    )
+
+    async def scenario():
+        pool = WorkerPool(default_interpreter(), tmp_path, lambda *_: None)
+        nodes_path = tmp_path / "nodes.py"
+        try:
+            first = asyncio.create_task(
+                pool.call(nodes_path, "slow", {"value": "first"}, ("f-0", "slow"))
+            )
+            async with asyncio.timeout(5):
+                while not entered.exists():
+                    await asyncio.sleep(0)
+            worker = pool._workers[nodes_path]
+            queued = asyncio.create_task(
+                pool.call(nodes_path, "echo", {"value": "queued"}, ("f-0", "echo"))
+            )
+            await asyncio.sleep(0)
+            queued.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await queued
+
+            assert await first == {"out": "first"}
+            assert not worker.dead
+            assert await pool.call(
+                nodes_path, "echo", {"value": "after"}, ("f-0", "echo")
+            ) == {"out": "after"}
+            assert pool._workers[nodes_path] is worker
+        finally:
+            await pool.close()
+
+    asyncio.run(scenario())
 
 
 # --------------------------------------------------------------------------
@@ -258,6 +359,69 @@ def test_timeout_kills_worker_and_next_firing_respawns(tmp_path):
     assert result.end_outputs == {"kind": "timeout", "ceiling": 0.3}
 
 
+def test_normal_worker_close_uses_eof_and_runs_atexit(tmp_path):
+    marker = tmp_path / "normal-close"
+    write_nodes(
+        tmp_path,
+        f"""
+        import atexit
+        from pathlib import Path
+
+        def on_exit(path={str(marker)!r}):
+            Path(path).write_text("closed", encoding="utf-8")
+
+        atexit.register(on_exit)
+
+        def echo(seed):
+            return {{"out": seed}}
+        """,
+    )
+
+    async def scenario():
+        pool = WorkerPool(default_interpreter(), tmp_path, lambda *_: None)
+        try:
+            return await asyncio.wait_for(
+                pool.call(
+                    tmp_path / "nodes.py",
+                    "echo",
+                    {"seed": "ok"},
+                    ("f-0", "echo"),
+                ),
+                timeout=5,
+            )
+        finally:
+            await asyncio.wait_for(pool.close(), timeout=5)
+
+    assert asyncio.run(scenario()) == {"out": "ok"}
+    assert marker.read_text(encoding="utf-8") == "closed"
+
+
+def test_pool_close_attempts_every_worker_before_reporting_failure(tmp_path):
+    closed = []
+
+    class StubWorker:
+        def __init__(self, name, *, fail=False):
+            self.name = name
+            self.fail = fail
+
+        async def shutdown(self):
+            closed.append(self.name)
+            if self.fail:
+                raise OSError(f"cannot close {self.name}")
+
+    async def scenario():
+        pool = WorkerPool(default_interpreter(), tmp_path, lambda *_: None)
+        pool._workers = {
+            tmp_path / "bad.py": StubWorker("bad", fail=True),
+            tmp_path / "good.py": StubWorker("good"),
+        }
+        with pytest.raises(WorkerCrash, match="python worker cleanup failed"):
+            await pool.close()
+
+    asyncio.run(scenario())
+    assert set(closed) == {"bad", "good"}
+
+
 NODES_CRASH = """
 import os
 
@@ -325,6 +489,144 @@ def test_print_flood_cannot_corrupt_protocol(tmp_path):
     assert "to stderr" in warn_values
     # raw fd-1 writes land in the stderr pipe, never the protocol (EC28)
     assert "raw fd write" in warn_values
+
+
+def test_long_raw_stderr_line_does_not_break_protocol_or_close(tmp_path):
+    write_nodes(
+        tmp_path,
+        """
+        import os
+
+        def noisy(value):
+            os.write(2, b"z" * 100_000 + b"\\n")
+            return {"out": value}
+        """,
+    )
+    f = flow(
+        start(),
+        py("loud", "noisy", ["out"]),
+        end({"name": "x"}),
+        edges=[("start.out", "loud.value"), ("loud.out", "end.x")],
+    )
+    result, records = run(f, flow_dir=tmp_path)
+    assert result.state == "passed"
+    assert result.end_outputs == {"x": {}}
+    warnings = [
+        record["value"]
+        for record in events_of(records, "log")
+        if record["level"] == "warn"
+    ]
+    assert any(len(value) == 100_000 and set(value) == {"z"} for value in warnings)
+
+
+def test_oversize_result_is_a_stable_python_error(tmp_path):
+    size = worker_module._PROTOCOL_LINE_LIMIT + 1024
+    write_nodes(
+        tmp_path,
+        f"def huge(seed):\n    return {{'data': 'x' * {size}}}\n",
+    )
+    f = flow(
+        start(),
+        py("p", "huge", ["data"], max_seconds=10),
+        end({"name": "err"}),
+        edges=[("start.out", "p.seed"), ("p.error", "end.err")],
+    )
+    result, _ = run(f, flow_dir=tmp_path)
+    assert result.state == "passed"
+    assert result.end_outputs["err"]["error_kind"] == "python_error"
+    assert "16 MiB JSON-line limit" in result.end_outputs["err"]["message"]
+
+
+def test_malformed_protocol_response_is_a_stable_worker_crash(tmp_path, monkeypatch):
+    fake_worker = tmp_path / "fake_worker.py"
+    fake_worker.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            import time
+
+            print('{"ready": true}', flush=True)
+            sys.stdin.buffer.readline()
+            sys.stdout.buffer.write(b'{malformed-json}\\n')
+            sys.stdout.buffer.flush()
+            time.sleep(30)
+            """
+        ),
+        encoding="utf-8",
+    )
+    nodes_path = tmp_path / "nodes.py"
+    nodes_path.write_text("def unused(seed): return {}\n", encoding="utf-8")
+    monkeypatch.setattr(worker_module, "_WORKER_MAIN", fake_worker)
+
+    async def scenario():
+        pool = WorkerPool(default_interpreter(), tmp_path, lambda *_: None)
+        worker = None
+        try:
+            with pytest.raises(
+                WorkerCrash,
+                match="worker protocol error: malformed JSON response",
+            ):
+                await asyncio.wait_for(
+                    pool.call(
+                        nodes_path,
+                        "unused",
+                        {"seed": None},
+                        ("f-0", "unused"),
+                    ),
+                    timeout=5,
+                )
+            worker = pool._workers[nodes_path]
+        finally:
+            await asyncio.wait_for(pool.close(), timeout=5)
+        assert worker is not None and worker._proc is not None
+        assert worker._proc.returncode is not None
+
+    asyncio.run(scenario())
+
+
+def test_overlimit_protocol_response_is_a_stable_worker_crash(tmp_path, monkeypatch):
+    fake_worker = tmp_path / "overlimit_worker.py"
+    fake_worker.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            import time
+
+            print('{"ready": true}', flush=True)
+            sys.stdin.buffer.readline()
+            sys.stdout.buffer.write(b'x' * 2048 + b'\\n')
+            sys.stdout.buffer.flush()
+            time.sleep(30)
+            """
+        ),
+        encoding="utf-8",
+    )
+    nodes_path = tmp_path / "nodes.py"
+    nodes_path.write_text("def unused(seed): return {}\n", encoding="utf-8")
+    monkeypatch.setattr(worker_module, "_WORKER_MAIN", fake_worker)
+    monkeypatch.setattr(worker_module, "_PROTOCOL_LINE_LIMIT", 1024)
+    monkeypatch.setattr(worker_module, "_PROTOCOL_LIMIT_LABEL", "1 KiB")
+
+    async def scenario():
+        pool = WorkerPool(default_interpreter(), tmp_path, lambda *_: None)
+        try:
+            with pytest.raises(
+                WorkerCrash,
+                match="worker protocol error: response exceeded the 1 KiB",
+            ):
+                await asyncio.wait_for(
+                    pool.call(
+                        nodes_path,
+                        "unused",
+                        {"seed": None},
+                        ("f-0", "unused"),
+                    ),
+                    timeout=5,
+                )
+        finally:
+            await asyncio.wait_for(pool.close(), timeout=5)
+
+    asyncio.run(scenario())
 
 
 # --------------------------------------------------------------------------

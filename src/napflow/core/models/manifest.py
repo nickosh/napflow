@@ -30,7 +30,8 @@ class FlowsConfig(FrozenModel):
 class EnvironmentsConfig(FrozenModel):
     """Profiles are auto-discovered from envs/*.env (FR-103) — no registry.
     `secrets` are glob patterns over env var NAMES; matching values are
-    masked at emission (D22)."""
+    redacted from terminal/report views while raw local history remains
+    raw (D35)."""
 
     default: str | None = None
     secrets: list[str] = []
@@ -58,8 +59,6 @@ class RunDefaults(FrozenModel):
     # Wall-clock run deadline; None = off. Expiry ⇒ run `error`, exit 2,
     # report still written (D24).
     run_timeout_s: Annotated[float, Field(gt=0)] | None = None
-    body_capture_mb: Annotated[float, Field(gt=0)] = 10  # per-body valve
-    run_capture_mb: Annotated[float, Field(gt=0)] = 500  # per-run valve (EC32)
 
 
 class Defaults(FrozenModel):

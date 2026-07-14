@@ -29,7 +29,7 @@ Core promises (never compromise these):
 - `docs/napflow-workspace-manifest.md` — napflow.yaml, CLI surface, env model
 - `docs/napflow-engine-spec.md`     — scheduler, frames, firing rules, events
 - `docs/yaml-profile.md`            — canonical YAML read/emit profile (D23)
-- `docs/DECISIONS.md`               — why each major decision was made (D01–D37)
+- `docs/DECISIONS.md`               — why each major decision was made (D01–D40)
 - `docs/EDGE_CASES.md`              — resolution ledger; append new cases here
 - `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; v0.1 + v0.2 FR/NFR checklist
   (tick requirements in the PR that lands them, with a test)
@@ -43,9 +43,12 @@ in the same PR as the code change.
 Documentation workflow:
 - Before non-trivial implementation work, read `docs/PLAN.md`,
   `docs/JOURNAL.md`, and the relevant authoritative specs above.
+- At the end of each state-changing session and after each milestone or PR-sized
+  change, use the repo-scoped `$napflow-closeout` skill in
+  `.agents/skills/napflow-closeout/` to reconcile project memory from evidence.
 - After behavior or schema changes, update the matching spec in the same
   change.
-- After each milestone or PR-sized commit, append a dated entry to
+- For each session or milestone closeout, prepend a dated entry to
   `docs/JOURNAL.md` (done / decided / next) — it is the cross-session
   progress log; keep entries to 2–5 lines.
 - Update `docs/REQUIREMENTS.md` only when a requirement actually lands with a
@@ -125,16 +128,18 @@ ui/       react   ─┘     loader.py / checker.py / templating.py /
   default (300) auto-applies to request/python ONLY, delay/loop/flow are
   exempt from the default (D24); timeouts route to ERROR ports, never
   data ports; optional run deadline (`run_timeout_s`/`--timeout` ⇒ run
-  `error`, report still written); body capture valves (10MB/body +
-  500MB/run, truncated markers); secrets masked AT EMISSION (events
-  born masked).
+  `error`, report still written); store-once full-fidelity content blobs
+  across every persisted payload path; raw canonical local history using
+  ordinary OS/workspace permissions; optional schema-aware declared-secret
+  terminal/report presentation.
 
-The final sentence describes **v0.1 current behavior**, not the v0.2
-target. D34–D36 + PLAN v0.2 replace destructive/local safeguards with:
-store-once full-fidelity blobs and lazy replay; private raw local truth
-plus redacted presentation/export; bounded cooperative lifecycle,
-cleanup, tasks/frames, and subscriber windows. Never extend the v0.1
-valves/mask-everywhere approach as if it were the accepted future design.
+Current v0.2 development behavior under D34–D36/D39 has no destructive body/
+run valves and never masks canonical events. It includes hash-verified lazy
+resolution, prepared-wire request capture, bounded cooperative lifecycle,
+cleanup, tasks/frames, subscriber windows, frozen versioned replay pages,
+graph-sized view/frame projections, and on-demand browser blob reads. Never
+rebuild the v0.1 valves/mask-everywhere approach or ACL/export hardening as if
+either were the accepted v0.2 design.
 
 ## Version and compatibility policy
 
@@ -171,11 +176,18 @@ valves/mask-everywhere approach as if it were the accepted future design.
 3. Remaining nodes (python + worker subprocess, merge, guards, loop,
    flow, set/get, switch, delay, log, fixture, note)
 4. server/ + UI canvas (last)
-5. **Current: v0.2 full-fidelity hardening and replay**, sequenced only
+5. **Current: v0.2 usable full-fidelity prototype**, sequenced only
    by `docs/PLAN.md` M0–M7: regression/format baseline → workspace and
    durable saves → lifecycle/worker → bounded execution/history →
-   full-fidelity blobs/redaction → scalable replay/timeline → public,
-   packaging, and UI contracts → measured release gate.
+   full-fidelity blobs/prepared requests → basic paged/lazy replay →
+   public Workspace/Flow catalog, packaging, and UI contracts → focused
+   release gate. M0/M1 completed 2026-07-12 and M2/M3/M4/M5/M6 completed
+   2026-07-13. M7's reusable gate, exact version contract, compatibility
+   notes, and local release preparation are implemented; the fresh remote
+   PR/release dry-run, merge, and exact `v0.2.0` tag remain the promotion
+   boundary.
+   Timeline playback, 100k-event replay performance, run bundles, and
+   security-grade history are future work (D39).
 
 ## Testing priorities (in order of bug-risk)
 
@@ -191,10 +203,11 @@ valves/mask-everywhere approach as if it were the accepted future design.
 7. Loader round-trip: load → save preserves comments & key order (ruamel)
 8. Timeout routing across node shapes (D24, TR-8) + native-value
    templating detection & post-eval coercion (D25, TR-10)
-9. v0.2 adversarial priorities (TR-11–22): path/symlink containment;
+9. v0.2 correctness priorities (TR-11–22): path/symlink containment;
    inline-cycle deadline/abort; worker large-line/late-side-effect;
-   cancellation cleanup; full-fidelity hash round-trip; redaction schema
-   integrity; bounded large replay/loops; autosave/atomic durability.
+   cancellation cleanup; full-fidelity hash round-trip; prepared requests;
+   protocol-safe optional redaction; basic paged/lazy replay and bounded
+   loops; autosave/atomic durability.
 
 ## Deferred by decision (do NOT implement, DO keep compatible)
 
@@ -209,8 +222,13 @@ valves/mask-everywhere approach as if it were the accepted future design.
   browser via stdlib `webbrowser`; no pywebview — see PRODUCT.md roadmap)
 - Pause/resume/step and wire breakpoints (D30), extract-to-subflow (D31),
   remote hosting/user authentication, and encryption/key management are
-  explicitly after v0.2. Keep seams compatible; do not add them to the
-  v0.2 hardening release without a new owner decision.
+  explicitly after v0.2. Keep seams compatible; do not add them to v0.2
+  without a new owner decision.
+- Also after v0.2 under D39: timeline scrubber/playback/checkpoints; the
+  100k-event replay performance gate and expanded perf suite; advanced replay
+  indexes/filters; run export/import and redacted bundles; explicit hard-limit
+  omission metadata; and any separate secure-history ACL/DACL/forced-mode
+  implementation. The runtime `workspace.flows` catalog remains in v0.2.
 - Also explicitly after v0.2: fine-grained runtime-token redaction
   (EC10), descendant process-tree cleanup (EC22), and preemptible Jinja
   rendering / a final hard-deadline contract (EC27/EC35). These are OPEN

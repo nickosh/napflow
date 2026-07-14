@@ -2,11 +2,11 @@
 name = "napflow"
 # must equal the release tag minus the leading `v` — release.yml
 # hard-gates on it; see docs/RELEASING.md
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first flow editor and engine — visual flows that live in git, compose into bigger flows, and run headless in CI"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES"]
 authors = [{ name = "nickosh" }]
 requires-python = ">=3.12"
 keywords = ["api", "testing", "qa", "flow", "http"]
@@ -50,10 +50,11 @@ dev = [
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
-# The pre-built UI bundle is gitignored build output; `artifacts`
-# forces it into sdist + wheel anyway (NFR-03: one wheel, no Node at
-# runtime). CI builds the UI before `uv build` and gates on the bundle
-# being present in the wheel.
+# The pre-built UI bundle is gitignored build output; `artifacts` forces it
+# into release-built sdists and wheels anyway (NFR-03: one wheel, no Node for
+# users or sdist consumers). Raw-checkout/VCS installs are unsupported. The
+# release process builds the UI before packaging; the focused artifact smoke
+# verifies a wheel built from that sdist can execute and serve the real bundle.
 [tool.hatch.build]
 artifacts = ["src/napflow/server/static"]
 
@@ -62,6 +63,12 @@ packages = ["src/napflow"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The perf baselines (NFR-18) are opt-in: excluded from ordinary runs and
+# CI, run explicitly with `-m perf` (the last -m on the command line wins).
+addopts = "-m 'not perf'"
+markers = [
+    "perf: opt-in performance baselines (NFR-18), excluded from default CI",
+]
 
 [tool.ruff]
 target-version = "py312"

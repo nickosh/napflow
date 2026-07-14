@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 
-import { CONFIG_FORMS, type FieldDescriptor } from "../forms";
+import {
+  CONFIG_FORMS,
+  parseTemplatableBoolean,
+  parseTemplatableNumber,
+  type FieldDescriptor,
+} from "../forms";
 import { useAppStore } from "../store";
 import { CasesEditor, ChecksEditor } from "./StructuredRows";
 
@@ -127,6 +132,36 @@ function Field({
           <option value="true">true</option>
           <option value="false">false</option>
         </select>
+      );
+    case "templatable-number":
+      return (
+        <input
+          data-testid={testId}
+          style={inputStyle}
+          inputMode="decimal"
+          value={value === undefined || value === null ? "" : String(value)}
+          placeholder={field.placeholder}
+          title="number or Jinja template"
+          onChange={(e) => onChange(parseTemplatableNumber(e.target.value))}
+        />
+      );
+    case "templatable-boolean":
+      return (
+        <>
+          <input
+            data-testid={testId}
+            style={inputStyle}
+            list={`${testId}-values`}
+            value={value === undefined || value === null ? "" : String(value)}
+            placeholder={field.placeholder}
+            title="true, false, or Jinja template"
+            onChange={(e) => onChange(parseTemplatableBoolean(e.target.value))}
+          />
+          <datalist id={`${testId}-values`}>
+            <option value="true" />
+            <option value="false" />
+          </datalist>
+        </>
       );
     case "select":
       return (

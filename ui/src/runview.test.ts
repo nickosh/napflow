@@ -2,13 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import {
   LOG_RING,
+  RUN_FRAME_WINDOW,
+  RUN_RECORD_WINDOW,
   applyRecord,
+  appendFrameSummaries,
   emptyRunView,
+  finalizeFrameReplay,
   finalizeIncomplete,
+  foldRunEventPage,
   matchesTraffic,
   reduceRun,
+  settleRootReplay,
   summarize,
   type RunRecord,
+  type RunFrameSummary,
 } from "./runview";
 
 let seq = 0;
@@ -132,7 +139,7 @@ describe("applyRecord", () => {
         to_node: "b",
         to_port: "in",
         msg_id: "m-1",
-        value_preview: { hello: 1 },
+        value: { hello: 1 },
       }),
     );
     expect(view.nodes.a.ports["out:out"]).toMatchObject({
@@ -154,7 +161,7 @@ describe("applyRecord", () => {
         to_node: "b",
         to_port: "in",
         msg_id: "m-2",
-        value_preview: "next",
+        value: "next",
       }),
     );
     expect(view.nodes.a.ports["out:out"]).toMatchObject({
@@ -163,9 +170,32 @@ describe("applyRecord", () => {
     });
   });
 
+  it("prefers a complete null value over a legacy preview", () => {
+    const view = emptyRunView();
+    applyRecord(
+      view,
+      root("message_emitted", "a", {
+        from_port: "a.out",
+        to_node: "b",
+        to_port: "in",
+        msg_id: "m-1",
+        value: null,
+        value_preview: "stale preview",
+      }),
+    );
+
+    expect(view.nodes.a.ports["out:out"].lastValue).toBeNull();
+    expect(view.nodes.b.ports["in:in"].lastValue).toBeNull();
+  });
+
   it("summarizes the request exchange for the inspector (M5.5)", () => {
     const view = emptyRunView();
-    applyRecord(view, root("request_started", "req", { method: "GET", url: "http://x", headers: {}, body_preview: null, attempt: 1 }));
+    applyRecord(view, root("request_started", "req", {
+      method: "GET",
+      url: "http://x",
+      attempt: 1,
+      request: { method: "GET", url: "http://x", headers: {}, body: null, size_bytes: 0 },
+    }));
     expect(view.nodes.req.request).toMatchObject({ method: "GET", url: "http://x", status: null });
     applyRecord(view, root("request_finished", "req", { status: 200, size_bytes: 12, timing: { total_ms: 34.2 }, attempt: 1, retries_total: 3 }));
     expect(view.nodes.req.request).toMatchObject({
@@ -179,7 +209,12 @@ describe("applyRecord", () => {
 
   it("keeps the retry error visible on the request summary", () => {
     const view = emptyRunView();
-    applyRecord(view, root("request_started", "req", { method: "GET", url: "http://x", headers: {}, body_preview: null, attempt: 1 }));
+    applyRecord(view, root("request_started", "req", {
+      method: "GET",
+      url: "http://x",
+      attempt: 1,
+      request: { method: "GET", url: "http://x", headers: {}, body: null, size_bytes: 0 },
+    }));
     applyRecord(view, root("request_failed", "req", { error_kind: "timeout", message: "t/o", attempt: 1, will_retry: true }));
     expect(view.nodes.req.request).toMatchObject({
       url: "http://x",
@@ -200,6 +235,22 @@ describe("applyRecord", () => {
     applyRecord(view, rec("node_fired", { frame: "f-0/f-1", node: "inner", firing_no: 1 }));
     expect(view.nodes.inner).toBeUndefined();
     expect(view.records).toHaveLength(1);
+  });
+
+  it("folds 100k events while retaining only the browser record window", () => {
+    const view = emptyRunView();
+    for (let index = 1; index <= 100_000; index += 1) {
+      applyRecord(view, {
+        event: "message_emitted",
+        seq: index,
+        frame: "f-0/f-1",
+      });
+    }
+
+    expect(view.recordCount).toBe(100_000);
+    expect(view.records).toHaveLength(RUN_RECORD_WINDOW);
+    expect(view.records[0].seq).toBe(100_000 - RUN_RECORD_WINDOW + 1);
+    expect(view.records.at(-1)?.seq).toBe(100_000);
   });
 
   it("finalizes: state, tallies, skipped nodes, actives cleared", () => {
@@ -225,11 +276,45 @@ describe("applyRecord", () => {
 });
 
 describe("reduceRun (history replay)", () => {
+  it("falls back to message previews in featureless legacy history", () => {
+    const view = reduceRun([
+      rec("run_started", {
+        format: "napflow-run/1",
+        features: [],
+        flow: "flows/x",
+        env_name: null,
+      }),
+      root("message_emitted", "a", {
+        from_port: "a.out",
+        to_node: "b",
+        to_port: "in",
+        msg_id: "m-1",
+        value_preview: { legacy: true },
+      }),
+      rec("run_finished", {
+        state: "passed",
+        duration_ms: 1,
+        asserts: { passed: 0, failed: 0 },
+        unhandled_errors: [],
+        end_outputs: {},
+        nodes_never_fired: [],
+      }),
+    ]);
+
+    expect(view.nodes.a.ports["out:out"].lastValue).toEqual({ legacy: true });
+    expect(view.nodes.b.ports["in:in"].lastValue).toEqual({ legacy: true });
+  });
+
   it("tolerates a dangling request_started (EC20) as incomplete", () => {
     const view = reduceRun([
       rec("run_started", { flow: "flows/x", env_name: null }),
       root("node_fired", "req", { firing_no: 1 }),
-      root("request_started", "req", { method: "GET", url: "http://x", headers: {}, body_preview: null, attempt: 1 }),
+      root("request_started", "req", {
+        method: "GET",
+        url: "http://x",
+        attempt: 1,
+        request: { method: "GET", url: "http://x", headers: {}, body: null, size_bytes: 0 },
+      }),
       // aborted mid-request: the JSONL just stops (EC20)
     ]);
     expect(view.state).toBe("incomplete");
@@ -257,6 +342,170 @@ describe("reduceRun (history replay)", () => {
   });
 });
 
+describe("paged replay", () => {
+  const summary = {
+    state: "passed" as const,
+    duration_ms: 17,
+    asserts: { passed: 3, failed: 0 },
+    unhandled_error_count: 0,
+    nodes_never_fired_count: 0,
+  };
+  const viewSummary = (
+    recordCount: number,
+    nodes: ReturnType<typeof emptyRunView>["nodes"] = {},
+  ) => ({
+    scope_frame: "f-0",
+    record_count: recordCount,
+    nodes,
+    edges: {},
+    asserts: { passed: 3, failed: 0 },
+    started_ts: "2026-07-13T00:00:00.000Z",
+  });
+
+  it("folds one page but hydrates the complete >500-event node projection", () => {
+    const events = Array.from({ length: 500 }, (_, index) => ({
+      event: index === 0 ? "run_started" : "node_fired",
+      seq: index + 1,
+      ...(index > 0 ? { frame: "f-0", node: "work", firing_no: index } : {}),
+    }));
+    const view = emptyRunView("f-0");
+    const page = {
+      root_frame: "f-0",
+      history_state: "complete" as const,
+      run_summary: summary,
+      view_summary: viewSummary(1_102, {
+        work: {
+          firings: 1_100,
+          active: false,
+          outcome: "ok",
+          guard: null,
+          lastSeq: 1_101,
+          log: null,
+          ports: {},
+          request: null,
+        },
+      }),
+      after_seq: 0,
+      next_after_seq: 500,
+      has_more: true,
+      events,
+    };
+
+    foldRunEventPage(view, page, 0, "f-0");
+    settleRootReplay(view, page);
+
+    expect(view.records).toHaveLength(500);
+    expect(view.recordCount).toBe(1_102);
+    expect(view.nodes.work.firings).toBe(1_100);
+    expect(view.state).toBe("passed");
+    expect(view.durationMs).toBe(17);
+    expect(view.asserts).toEqual({ passed: 3, failed: 0 });
+  });
+
+  it("settles only a known incomplete root and leaves running/indeterminate distinct", () => {
+    const settle = (
+      history_state: "running" | "incomplete" | "indeterminate",
+    ) => {
+      const view = emptyRunView();
+      settleRootReplay(view, {
+        root_frame: "f-0",
+        history_state,
+        run_summary: null,
+        view_summary: viewSummary(0),
+        after_seq: 0,
+        next_after_seq: 0,
+        has_more: false,
+        events: [],
+      });
+      return view.state;
+    };
+
+    expect(settle("incomplete")).toBe("incomplete");
+    expect(settle("running")).toBe("running");
+    expect(settle("indeterminate")).toBe("indeterminate");
+  });
+
+  it("rejects a duplicate/non-advancing cursor before mutating the view", () => {
+    const view = emptyRunView();
+    expect(() =>
+      foldRunEventPage(view, {
+        root_frame: "f-0",
+        history_state: "complete",
+        run_summary: summary,
+        view_summary: viewSummary(0),
+        after_seq: 0,
+        next_after_seq: 0,
+        has_more: true,
+        events: [],
+      }, 0, "f-0"),
+    ).toThrow("did not advance");
+    expect(view.recordCount).toBe(0);
+  });
+});
+
+describe("frame drilldown", () => {
+  function frame(index: number, parent = "f-0"): RunFrameSummary {
+    return {
+      event: "frame_finished",
+      seq: index + 1,
+      frame: `${parent}/f-${index}`,
+      parent_frame: parent,
+      parent_node: "items",
+      flow: "flows/item",
+      kind: "loop",
+      loop_index: index,
+      duration_ms: index,
+      state: "passed",
+      asserts: { passed: 0, failed: 0 },
+      unhandled_error_count: 0,
+      end_output_names: [],
+    };
+  }
+
+  it("bounds the active direct-child summary window and keys identity by frame", () => {
+    const window = { frames: [], frameCount: 0 } as {
+      frames: RunFrameSummary[];
+      frameCount: number;
+    };
+    const summaries = Array.from(
+      { length: RUN_FRAME_WINDOW + 7 },
+      (_, index) => frame(index),
+    );
+    appendFrameSummaries(window, summaries);
+    expect(window.frameCount).toBe(RUN_FRAME_WINDOW + 7);
+    expect(window.frames).toHaveLength(RUN_FRAME_WINDOW);
+    expect(window.frames[0].frame).toBe("f-0/f-7");
+    expect(new Set(window.frames.map((summary) => summary.frame)).size).toBe(
+      RUN_FRAME_WINDOW,
+    );
+  });
+
+  it("folds child nodes in a separate scope and settles from frame_finished", () => {
+    const summary = frame(3);
+    const child = emptyRunView(summary.frame);
+    applyRecord(child, {
+      event: "node_fired",
+      seq: 2,
+      frame: summary.frame,
+      node: "inner",
+      firing_no: 1,
+    });
+    applyRecord(child, {
+      event: "node_fired",
+      seq: 3,
+      frame: "f-0",
+      node: "root_only",
+      firing_no: 1,
+    });
+    finalizeFrameReplay(child, summary);
+
+    expect(child.nodes.inner).toMatchObject({ firings: 1, active: false });
+    expect(child.nodes.root_only).toBeUndefined();
+    expect(child.state).toBe("passed");
+    expect(child.state).not.toBe("incomplete");
+  });
+});
+
 describe("matchesTraffic (wire/port → crossed messages, M5.5)", () => {
   it("filters by edge and by either port end", () => {
     const emit = root("message_emitted", "a", {
@@ -264,7 +513,7 @@ describe("matchesTraffic (wire/port → crossed messages, M5.5)", () => {
       to_node: "b",
       to_port: "in",
       msg_id: "m-1",
-      value_preview: 42,
+      value: 42,
     });
     expect(matchesTraffic(emit, { kind: "edge", from: "a.out", to: "b.in" })).toBe(true);
     expect(matchesTraffic(emit, { kind: "edge", from: "a.out", to: "c.in" })).toBe(false);
@@ -296,5 +545,17 @@ describe("summarize", () => {
     expect(
       summarize(root("log", "logger", { label: "users", value: [1, 2, 3] })),
     ).toBe("users: [1,2,3]");
+    expect(
+      summarize(
+        rec("frame_finished", {
+          frame: "f-0/f-3",
+          kind: "loop",
+          flow: "flows/item",
+          loop_index: 2,
+          state: "passed",
+          duration_ms: 8.6,
+        }),
+      ),
+    ).toBe("loop flows/item #2 · passed · 9ms");
   });
 });

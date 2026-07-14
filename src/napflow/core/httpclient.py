@@ -16,6 +16,8 @@ exposes the corresponding latency — omitted otherwise, never zero-filled.
 
 import json
 from base64 import b64decode, b64encode
+from binascii import Error as Base64Error
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -33,13 +35,46 @@ _TEXT_MIMES = {
 }
 
 
+@dataclass(frozen=True)
+class WireRequest:
+    """One niquests-prepared request, copied before transport can mutate it.
+
+    ``headers`` includes session defaults and the effective ``Cookie`` header.
+    ``body`` is ``None`` for no body or napflow's binary envelope for the exact
+    prepared bytes; ``size_bytes`` always counts those raw bytes.
+    """
+
+    method: str
+    url: str
+    headers: dict[str, str]
+    body: Any
+    size_bytes: int
+
+
 class TransportError(Exception):
     """Transport-level failure (EC13): connection/DNS/TLS, or timeout of
     one attempt. Non-2xx responses are NOT errors — they are responses."""
 
-    def __init__(self, kind: str, message: str):
+    def __init__(
+        self,
+        kind: str,
+        message: str,
+        *,
+        request: WireRequest | None = None,
+        redirects_total: int = 0,
+    ):
         self.kind = kind  # connection | timeout | tls | transport
+        self.request = request
+        self.redirects_total = redirects_total
         super().__init__(message)
+
+
+class RequestEncodingError(ValueError):
+    """The configured request body cannot be encoded for transport.
+
+    This is user-controlled request data, not an engine failure. The
+    engine routes it through the request node's ``error`` port (EC48).
+    """
 
 
 @dataclass(frozen=True)
@@ -47,10 +82,12 @@ class WireResponse:
     status: int
     headers: dict[str, str]
     body: Any  # decoded: JSON-native | text | binary envelope | None
-    size_bytes: int  # encoded form (base64 length for binary, FR-207)
+    size_bytes: int  # exact response-body bytes received on the wire
     url: str
     http_version: str | None
     elapsed_ms: float
+    request: WireRequest
+    redirects_total: int
     timing: dict[str, float] = field(default_factory=dict)
 
 
@@ -90,14 +127,40 @@ class HttpClient:
         timeout_s: float,
         verify_tls: bool,
         http_version: str | None = None,
+        on_prepared: Callable[[WireRequest], None] | None = None,
     ) -> WireResponse:
         send: dict[str, Any] = {}
         headers = dict(headers or {})
+        explicit_empty_body = False
         if body is not None:
             kind, payload, content_type = _encode_body(body)
             send[kind] = payload
+            explicit_empty_body = kind == "data" and payload == b""
             if content_type and not _has_content_type(headers):
                 headers["Content-Type"] = content_type
+
+        initial_request: WireRequest | None = None
+        latest_request: WireRequest | None = None
+        prepared_count = 0
+
+        def capture_prepared(prepared: niquests.PreparedRequest) -> None:
+            nonlocal initial_request, latest_request, prepared_count
+            preserve_empty = (
+                explicit_empty_body
+                and prepared.method is not None
+                and prepared.method.upper() == method.upper()
+            )
+            snapshot = _wire_request_of(
+                prepared,
+                preserve_explicit_empty=preserve_empty,
+            )
+            prepared_count += 1
+            latest_request = snapshot
+            if initial_request is None:
+                initial_request = snapshot
+                if on_prepared is not None:
+                    on_prepared(snapshot)
+
         try:
             response = await self._session(http_version).request(
                 method,
@@ -106,16 +169,38 @@ class HttpClient:
                 params=query or None,
                 timeout=timeout_s,
                 verify=verify_tls,
+                hooks={"pre_request": capture_prepared},
                 **send,
             )
         except _exc.Timeout as e:
-            raise TransportError("timeout", str(e)) from e
+            raise _transport_error("timeout", e, latest_request, prepared_count) from e
         except _exc.SSLError as e:
-            raise TransportError("tls", str(e)) from e
+            raise _transport_error("tls", e, latest_request, prepared_count) from e
         except _exc.ConnectionError as e:
-            raise TransportError("connection", str(e)) from e
+            raise _transport_error(
+                "connection", e, latest_request, prepared_count
+            ) from e
         except _exc.RequestException as e:
-            raise TransportError("transport", str(e)) from e
+            raise _transport_error(
+                "transport", e, latest_request, prepared_count
+            ) from e
+
+        prepared = getattr(response, "request", None)
+        if prepared is None:
+            raise TransportError(
+                "transport",
+                "HTTP response did not expose its prepared request",
+                request=latest_request,
+                redirects_total=max(prepared_count - 1, 0),
+            )
+        final_request = _wire_request_of(
+            prepared,
+            preserve_explicit_empty=(
+                explicit_empty_body
+                and prepared.method is not None
+                and prepared.method.upper() == method.upper()
+            ),
+        )
 
         content = response.content or b""
         decoded, size = _decode_body(content, response.headers.get("Content-Type", ""))
@@ -127,6 +212,8 @@ class HttpClient:
             url=str(response.url),
             http_version=_http_version_of(response),
             elapsed_ms=_ms(response.elapsed) or 0.0,
+            request=final_request,
+            redirects_total=len(response.history),
             timing=_timing_of(response),
         )
 
@@ -140,6 +227,81 @@ class HttpClient:
 # Body codec (FR-207)
 
 
+def _wire_request_of(
+    prepared: niquests.PreparedRequest,
+    *,
+    preserve_explicit_empty: bool = False,
+) -> WireRequest:
+    """Copy the prepared method/URL/headers and exact finite body bytes."""
+    if prepared.method is None or prepared.url is None:
+        raise RequestEncodingError("niquests produced an incomplete prepared request")
+
+    headers = {
+        _header_text(name): _header_text(value)
+        for name, value in (prepared.headers or {}).items()
+    }
+    prepared_body = prepared.body
+    if prepared_body is None and not preserve_explicit_empty:
+        body = None
+        size_bytes = 0
+    else:
+        if prepared_body is None:
+            raw = b""
+        elif isinstance(prepared_body, str):
+            raw = prepared_body.encode("utf-8")
+        elif isinstance(prepared_body, bytes | bytearray | memoryview):
+            raw = bytes(prepared_body)
+        else:
+            raise RequestEncodingError(
+                "prepared request body is not a finite byte sequence"
+            )
+        body = {
+            "__binary__": True,
+            "content_type": _content_type(headers) or "application/octet-stream",
+            "base64": b64encode(raw).decode("ascii"),
+        }
+        size_bytes = len(raw)
+
+    return WireRequest(
+        method=str(prepared.method),
+        url=str(prepared.url),
+        headers=headers,
+        body=body,
+        size_bytes=size_bytes,
+    )
+
+
+def _transport_error(
+    kind: str,
+    error: _exc.RequestException,
+    latest_request: WireRequest | None,
+    prepared_count: int,
+) -> TransportError:
+    prepared = getattr(error, "request", None)
+    request = latest_request
+    if request is None and isinstance(prepared, niquests.PreparedRequest):
+        request = _wire_request_of(prepared)
+    return TransportError(
+        kind,
+        str(error),
+        request=request,
+        redirects_total=max(prepared_count - 1, 0),
+    )
+
+
+def _header_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("latin-1")
+    return str(value)
+
+
+def _content_type(headers: dict[str, str]) -> str | None:
+    return next(
+        (value for name, value in headers.items() if name.lower() == "content-type"),
+        None,
+    )
+
+
 def _has_content_type(headers: dict[str, str]) -> bool:
     return any(k.lower() == "content-type" for k in headers)
 
@@ -147,7 +309,40 @@ def _has_content_type(headers: dict[str, str]) -> bool:
 def _encode_body(body: Any) -> tuple[str, Any, str | None]:
     """→ (niquests kwarg, payload, implied content-type or None)."""
     if isinstance(body, dict) and body.get("__binary__") is True:
-        return ("data", b64decode(body["base64"]), body.get("content_type"))
+        expected = {"__binary__", "content_type", "base64"}
+        actual = set(body)
+        if actual != expected:
+            missing = sorted(expected - actual)
+            extra = sorted(
+                key if isinstance(key, str) else repr(key) for key in actual - expected
+            )
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if extra:
+                details.append(f"unexpected {', '.join(extra)}")
+            raise RequestEncodingError(
+                "invalid binary envelope fields (" + "; ".join(details) + ")"
+            )
+        content_type = body["content_type"]
+        encoded = body["base64"]
+        if not isinstance(content_type, str) or not content_type.strip():
+            raise RequestEncodingError(
+                "binary envelope content_type must be a non-empty string"
+            )
+        if not isinstance(encoded, str):
+            raise RequestEncodingError("binary envelope base64 must be a string")
+        try:
+            decoded = b64decode(encoded, validate=True)
+        except (Base64Error, UnicodeEncodeError, ValueError) as exc:
+            raise RequestEncodingError(
+                "binary envelope base64 is not valid canonical base64"
+            ) from exc
+        if b64encode(decoded).decode("ascii") != encoded:
+            raise RequestEncodingError(
+                "binary envelope base64 is not valid canonical base64"
+            )
+        return ("data", decoded, content_type)
     if isinstance(body, dict | list):
         return ("json", body, None)  # niquests sets application/json
     if isinstance(body, str):
@@ -156,7 +351,7 @@ def _encode_body(body: Any) -> tuple[str, Any, str | None]:
 
 
 def _decode_body(content: bytes, content_type: str) -> tuple[Any, int]:
-    """→ (decoded body, size of the encoded form). JSON parses native;
+    """→ (decoded body, exact response byte count). JSON parses native;
     text decodes; everything else becomes the binary envelope."""
     if not content:
         return None, 0
@@ -183,7 +378,7 @@ def _decode_body(content: bytes, content_type: str) -> tuple[Any, int]:
         "content_type": content_type or "application/octet-stream",
         "base64": encoded,
     }
-    return envelope, len(encoded)  # cap applies to the encoded form
+    return envelope, len(content)
 
 
 # --------------------------------------------------------------------------

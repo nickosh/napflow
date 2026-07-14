@@ -5,9 +5,11 @@ emit(parse(x)), and parse(emit(x)) deep-equals parse(x). Plus shape
 checks that pin the canonical profile (D23, docs/yaml-profile.md).
 """
 
+from datetime import date
 from pathlib import Path
 
 import pytest
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from napflow.core.loader import emit_document, load_document
 
@@ -74,3 +76,25 @@ def test_null_emitted_bare() -> None:
     text = emit_document(load_document(DATA_DIR / "napflow.yaml"))
     assert "interpreter: null" in text
     assert "run_timeout_s: null" in text
+
+
+@pytest.mark.parametrize(
+    "shared",
+    [CommentedSeq(["one"]), date(2026, 7, 14)],
+    ids=["container", "yaml_native_scalar"],
+)
+def test_canonical_emit_rejects_shared_objects_that_would_create_aliases(
+    shared: object,
+) -> None:
+    doc = CommentedMap({"first": shared, "second": shared})
+
+    with pytest.raises(ValueError, match="anchors and aliases are not supported"):
+        emit_document(doc)
+
+
+def test_canonical_emit_rejects_explicit_anchor_metadata() -> None:
+    anchored = CommentedSeq(["one"])
+    anchored.yaml_set_anchor("shared", always_dump=True)
+
+    with pytest.raises(ValueError, match="anchors and aliases are not supported"):
+        emit_document(CommentedMap({"value": anchored}))

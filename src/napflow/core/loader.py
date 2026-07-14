@@ -29,15 +29,19 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 from ruamel.yaml import YAML
+from ruamel.yaml.anchor import Anchor
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.composer import Composer, ComposerError
 from ruamel.yaml.constructor import DuplicateKeyError
 from ruamel.yaml.error import MarkedYAMLError, YAMLError
+from ruamel.yaml.events import AliasEvent
 from ruamel.yaml.scalarstring import (
     DoubleQuotedScalarString,
     FoldedScalarString,
     LiteralScalarString,
 )
 
+from napflow.core.files import atomic_write_text
 from napflow.core.models import FlowFile, Manifest
 
 # --------------------------------------------------------------------------
@@ -118,7 +122,24 @@ def locate(doc: Any, loc: Sequence[int | str]) -> tuple[int, int] | None:
 # --------------------------------------------------------------------------
 # Reading
 
+
+class _NoReferencesComposer(Composer):
+    """Keep round-trip construction, but reject YAML references at parse time."""
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        event = self.parser.peek_event()
+        if isinstance(event, AliasEvent) or getattr(event, "anchor", None) is not None:
+            raise ComposerError(
+                None,
+                None,
+                "YAML anchors and aliases are not supported",
+                event.start_mark,
+            )
+        return super().compose_node(parent, index)
+
+
 _yaml = YAML()  # round-trip: comments, key order, positions (FR-205/208)
+_yaml.Composer = _NoReferencesComposer
 _yaml.preserve_quotes = True
 _yaml.default_flow_style = False
 _yaml.width = 1_000_000  # never wrap scalars (long URLs stay one line)
@@ -210,6 +231,39 @@ def load_manifest(path: Path) -> LoadedManifest:
 # Canonical emit (the ONE serializer — FR-204)
 
 
+def _reject_yaml_references(node: Any) -> None:
+    """Reject objects ruamel would represent with anchors and aliases."""
+    seen: set[int] = set()
+
+    def visit(value: Any) -> None:
+        anchor = getattr(value, Anchor.attrib, None)
+        if anchor is not None and anchor.value is not None:
+            raise ValueError("YAML anchors and aliases are not supported")
+
+        ruamel_can_alias = (
+            value is not None
+            and not (isinstance(value, tuple) and value == ())
+            and not isinstance(value, bytes | str | bool | int | float)
+        )
+        if ruamel_can_alias:
+            identity = id(value)
+            if identity in seen:
+                raise ValueError("YAML anchors and aliases are not supported")
+            seen.add(identity)
+
+        is_mapping = isinstance(value, Mapping)
+        is_sequence = isinstance(value, Sequence) and not isinstance(value, str | bytes)
+        if is_mapping:
+            for key, item in value.items():
+                visit(key)
+                visit(item)
+        elif is_sequence:
+            for item in value:
+                visit(item)
+
+    visit(node)
+
+
 def _canonical_scalar(value: Any) -> Any:
     if isinstance(value, LiteralScalarString | FoldedScalarString):
         return value  # multiline blocks stay readable; no coercion risk
@@ -259,6 +313,7 @@ def emit_document(doc: Any) -> str:
     """Serialize through the canonical profile. Normalizes the document's
     styles in place (the canonical style IS the document's state);
     comments and key order are preserved (FR-205)."""
+    _reject_yaml_references(doc)
     doc = _canonicalize(doc)
     _apply_flow_islands(doc)
     buf = io.StringIO()
@@ -269,8 +324,7 @@ def emit_document(doc: Any) -> str:
 def save_document(doc: Any, path: Path) -> None:
     """Write the document to disk: UTF-8, LF, single trailing newline."""
     text = emit_document(doc)
-    with path.open("w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+    atomic_write_text(path, text)
 
 
 # --------------------------------------------------------------------------

@@ -2,3 +2,6 @@ napflow
 Copyright 2026 nickosh
 
 Licensed under the Apache License, Version 2.0.
+
+The pre-built browser UI includes third-party software. Its dependency
+inventory and upstream notices are provided in THIRD_PARTY_NOTICES.

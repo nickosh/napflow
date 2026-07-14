@@ -12,6 +12,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "e2e": "playwright test",
+    "perf:history": "playwright test --config playwright.perf.config.ts",
     "test": "vitest run"
   },
   "dependencies": {

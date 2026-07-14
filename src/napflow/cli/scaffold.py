@@ -9,6 +9,9 @@ scaffolded workspace must pass `napf check` with zero diagnostics and
 
 from pathlib import Path
 
+from ruamel.yaml.comments import CommentedMap
+
+from napflow.core.files import atomic_write_text
 from napflow.core.loader import save_document
 
 MAIN_FLOW = {
@@ -219,11 +222,20 @@ GITATTRIBUTES = """\
 
 
 def _manifest(name: str) -> dict:
+    environments = CommentedMap({"default": "dev", "secrets": []})
+    environments.yaml_set_comment_before_after_key(
+        "secrets",
+        before=(
+            "Opt in to terminal/report masking by adding env-name patterns below,\n"
+            'for example: ["API_TOKEN", "*_PASSWORD"].\n'
+            "Raw local history and the local UI remain unmasked."
+        ),
+    )
     return {
         "schema": "napflow/v1",
         "workspace": {"name": name, "description": "API flows workspace."},
         "flows": {"root": "flows", "main": "flows/main"},
-        "environments": {"default": "dev", "secrets": ["API_TOKEN", "*_PASSWORD"]},
+        "environments": environments,
     }
 
 
@@ -262,8 +274,7 @@ def scaffold_workspace(directory: Path) -> list[tuple[str, str]]:
             results.append((rel, "exists"))
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
+        atomic_write_text(path, content)
         results.append((rel, "created"))
 
     (directory / ".napflow").mkdir(parents=True, exist_ok=True)

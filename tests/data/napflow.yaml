@@ -12,9 +12,7 @@ flows:
 
 environments:
   default: dev
-  secrets:
-    - API_TOKEN
-    - "*_PASSWORD"
+  secrets: []
 
 defaults:
   request:
@@ -30,8 +28,6 @@ defaults:
     message_budget: 100000
     node_timeout_s: 300
     run_timeout_s: null
-    body_capture_mb: 10
-    run_capture_mb: 500
 
 python:
   interpreter: null

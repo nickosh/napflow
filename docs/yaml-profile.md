@@ -9,13 +9,18 @@ not used — it is pinned to a fixed profile so YAML's footguns (implicit
 type coercion, indentation ambiguity, anchors/aliases, arbitrary-object
 loading) cannot bite. Five rules, all load-bearing:
 
-1. Read with a **safe loader only**.
+1. Read with the configured ruamel **round-trip loader only**. Its
+   `RoundTripConstructor` preserves comments, author order, and source
+   positions without enabling arbitrary-object construction; a custom
+   composer rejects anchors and aliases before construction. Never use the
+   unsafe/full Python-object loader.
 2. Emit through **the one shared canonical serializer** — no ad-hoc
    `yaml.dump`/`stringify` anywhere. Since S4/M4 there is exactly one
    emitter, Python-side (`core/loader.py`): the canvas never touches
    YAML — it PUTs model JSON and the server merges + emits (FR-1003).
-3. **Force double-quoted style for string scalars only** — ints, floats,
-   bools, null stay bare so they keep their type.
+3. **Force double-quoted style for non-block string values only** — mapping
+   keys stay plain, literal/folded multiline values keep `|`/`>`, and ints,
+   floats, bools, null stay bare so they keep their type.
 4. **Validate the parsed structure against JSON Schema** (Draft 2020-12) —
    the schema, not YAML inference, is the type authority. This is *why*
    force-quoting strings is safe: types are recovered from the schema on
@@ -23,14 +28,18 @@ loading) cannot bite. Five rules, all load-bearing:
 5. One non-failing `napf check` lint (**W107**) for the residual footgun
    that only survives in hand-edited files (below).
 
-Note: YAML examples inside the docs are hand-written for readability and
-do not show the force-quoted style; files *emitted by napflow* always do.
+Note: YAML examples inside the docs are hand-written for readability and do
+not consistently show value quoting. Files *emitted by napflow* double-quote
+non-block string values; keys remain plain and block scalars remain blocks.
 
 ## Reading
 
-- **Python (engine/CLI/server):** `YAML(typ='safe')` for pure loads;
-  ruamel round-trip mode only where preserving a human's comments on
-  re-write matters. Never PyYAML `yaml.load` without `SafeLoader`.
+- **Python (engine/CLI/server):** one configured `YAML(typ="rt")` instance
+  (the `YAML()` default) handles every production load and emit. The
+  round-trip constructor retains comments/order/line marks and does not
+  construct arbitrary Python objects. Its composer rejects every anchor or
+  alias event with a positioned `LoadError`; quoted `&`/`*` characters remain
+  ordinary string data.
 - **JS/TS (canvas):** does not parse YAML at all — the flow-detail API
   serves the validated model as JSON. (If a client-side YAML read ever
   becomes necessary: `js-yaml` v4 `load()` is safe by default.)
@@ -39,18 +48,27 @@ do not show the force-quoted style; files *emitted by napflow* always do.
 
 ```python
 from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import (
+    DoubleQuotedScalarString,
+    FoldedScalarString,
+    LiteralScalarString,
+)
 
-yaml = YAML()                       # round-trip: preserves comments on edited files
+yaml = YAML(typ="rt")               # comments, author order, source positions
 yaml.default_flow_style = False     # block style only
 yaml.width = 1_000_000              # never wrap scalars (long URLs/bodies stay one line)
 yaml.indent(mapping=2, sequence=4, offset=2)
 yaml.allow_unicode = True
 
-# Force double-quoted style for STRINGS ONLY. Do NOT use yaml.default_style='"' —
-# that quotes ints/bools too (port: "8080"), corrupting their type on reload.
-def _quote_str(rep, data):
-    return rep.represent_scalar("tag:yaml.org,2002:str", data, style='"')
-yaml.representer.add_representer(str, _quote_str)
+# Canonicalization walks mapping VALUES and sequence items; mapping keys are
+# deliberately untouched. Do not use yaml.default_style='"' — that would also
+# quote keys and non-string values.
+def _canonical_scalar(value):
+    if isinstance(value, (LiteralScalarString, FoldedScalarString)):
+        return value
+    if isinstance(value, str):
+        return DoubleQuotedScalarString(value)
+    return value
 ```
 
 Exceptions to block-only style (pinned at M2, 2026-07-04 — both for
@@ -62,6 +80,11 @@ block scalars (`|`/`>`) are preserved as-is rather than force-quoted —
 multiline text carries none of the implicit-coercion risk the quoting
 rule exists to prevent. Python implementation: `core/loader.py`
 (`emit_document` / `save_document` — the one shared serializer).
+
+Before dumping, `emit_document` rejects explicit anchor metadata and repeated
+identity for any object ruamel could alias (including cycles), because ruamel
+would otherwise synthesize an anchor/alias pair. The canonical emitter
+therefore cannot produce `&name` or `*name` references.
 
 ## Canvas emit — there is none (amended at S4/M4, 2026-07-07)
 
@@ -83,14 +106,23 @@ model would silently delete every comment). The loader also retains
 ruamel's line/column marks through validation so every `napf check`
 diagnostic points at file:line (engine spec §8).
 
+As of v0.2/M1 (2026-07-12), `save_document` emits to a same-directory
+temporary file as UTF-8/LF, flushes and `fsync`s it, preserves existing
+permission bits, then atomically replaces the live path and cleans up on
+failure. The canvas, CLI/scaffold, and cloned flow sources all pass through
+this primitive; JSONL histories remain append-only streams and deliberately
+do not. This durability layer changes no serializer bytes or key ordering.
+
 ## Key order & determinism
 
-Determinism comes from the *emitter*: the loader builds node/edge
-objects in a fixed schema-defined field order (`id`, `type`, `config`,
-…; edges `from`, `to`) and the serializer preserves it. Canvas saves
-inherit this automatically — `merge_flow_document` mutates the loaded
-document in place, so key order is preserved for existing entries and
-schema-ordered for new ones. Readable *and* stable.
+Determinism does not come from sorting. The round-trip document keeps the
+author's order, canonicalization changes styles without reordering, and the
+emitter writes that order. `merge_flow_document` mutates surviving mappings
+in place, so existing keys retain their authored positions. New mapping keys
+and new node/edge objects use the validated incoming payload's order; new
+top-level keys are inserted immediately above `layout:` so layout remains at
+the bottom. The nodes/edges sequence order follows the incoming updated list.
+Readable *and* stable.
 
 File conventions: LF + UTF-8 + single trailing newline; `layout:`
 quarantined at the bottom of the file.

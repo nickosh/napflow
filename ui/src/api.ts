@@ -1,6 +1,16 @@
 // Thin typed wrappers over the server REST surface (WM "Server
 // surface"). The UI never constructs run semantics — core owns them.
 
+import { apiIdentityPath } from "./identity";
+import type {
+  ReplayHistoryState,
+  RunEventPageLike,
+  RunFramePageLike,
+  RunFrameSummary,
+  RunRecord,
+  RunReplaySummary,
+} from "./runview";
+
 export type WorkspaceInfo = {
   name: string | null;
   description: string | null;
@@ -49,6 +59,7 @@ export type FlowModelNode = {
   id: string;
   type: string;
   config?: Record<string, unknown> | null;
+  max_seconds?: number | null;
 };
 
 export type FlowModel = {
@@ -159,7 +170,7 @@ export async function fetchFlows(): Promise<FlowSummary[]> {
 }
 
 export function fetchFlowDetail(identity: string): Promise<FlowDetail> {
-  return getJson<FlowDetail>(`/api/flows/${identity}`);
+  return getJson<FlowDetail>(apiIdentityPath("/api/flows", identity));
 }
 
 async function putJson<T>(path: string, body: unknown): Promise<T> {
@@ -196,7 +207,7 @@ export function putFlow(
   baseEtag: string | null,
   force = false,
 ): Promise<SavedFlow> {
-  return putJson<SavedFlow>(`/api/flows/${identity}`, {
+  return putJson<SavedFlow>(apiIdentityPath("/api/flows", identity), {
     flow,
     base_etag: baseEtag,
     force,
@@ -204,7 +215,7 @@ export function putFlow(
 }
 
 export function fetchCode(identity: string): Promise<CodeFile> {
-  return getJson<CodeFile>(`/api/code/${identity}`);
+  return getJson<CodeFile>(apiIdentityPath("/api/code", identity));
 }
 
 export function putCode(
@@ -213,7 +224,7 @@ export function putCode(
   baseEtag: string | null,
   force = false,
 ): Promise<SavedCode> {
-  return putJson<SavedCode>(`/api/code/${identity}`, {
+  return putJson<SavedCode>(apiIdentityPath("/api/code", identity), {
     code,
     base_etag: baseEtag,
     force,
@@ -221,7 +232,7 @@ export function putCode(
 }
 
 export function fetchEtags(identity: string): Promise<Etags> {
-  return getJson<Etags>(`/api/etags/${identity}`);
+  return getJson<Etags>(apiIdentityPath("/api/etags", identity));
 }
 
 // ---- runs (S4/M5, FR-1005) ------------------------------------------
@@ -299,25 +310,140 @@ export async function listRuns(flow: string): Promise<RunListEntry[]> {
   return payload.runs;
 }
 
-/** Replay = re-read the JSONL (D13). `flow` locates runs this server
- * process didn't start (history from an earlier `napf ui`/`napf run`). */
-export async function fetchRunEvents(
+export const REPLAY_API_FORMAT = "napflow-replay/1" as const;
+export const RUN_REPLAY_PAGE_LIMIT = 500;
+export const FRAME_REPLAY_PAGE_LIMIT = 200;
+
+type ReplayEnvelope = {
+  api_format: typeof REPLAY_API_FORMAT;
+  run_id: string;
+  run_format: string | null;
+  features: string[];
+  root_frame: string;
+  history_state: ReplayHistoryState;
+  run_summary: RunReplaySummary | null;
+};
+
+export type RunEventPage = ReplayEnvelope &
+  RunEventPageLike & {
+    frame: string | null;
+  };
+
+export type RunFramePage = ReplayEnvelope &
+  RunFramePageLike & {
+    parent_frame: string;
+    after_seq: number;
+    frames: RunFrameSummary[];
+  };
+
+export type RunEventDetail = ReplayEnvelope & {
+  event: RunRecord;
+};
+
+/** A version marker only protects replay if consumers reject unknown and
+ * missing formats before interpreting any fields. */
+export function requireReplayV1<T>(payload: T): T & ReplayEnvelope {
+  const format =
+    typeof payload === "object" && payload !== null
+      ? (payload as { api_format?: unknown }).api_format
+      : undefined;
+  if (format !== REPLAY_API_FORMAT) {
+    const shown = format === undefined ? "missing" : JSON.stringify(format);
+    throw new Error(
+      `unsupported replay API format: ${shown}; expected ${REPLAY_API_FORMAT}`,
+    );
+  }
+  return payload as T & ReplayEnvelope;
+}
+
+function runReplayPath(
   runId: string,
   flow: string,
-): Promise<Record<string, unknown>[]> {
-  const payload = await getJson<{ events: Record<string, unknown>[] }>(
-    `/api/runs/${runId}/events?flow=${encodeURIComponent(flow)}`,
+  suffix: string,
+  params: Record<string, string | number | undefined>,
+): string {
+  const query = new URLSearchParams({ flow });
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) query.set(key, String(value));
+  }
+  return `/api/runs/${encodeURIComponent(runId)}/${suffix}?${query.toString()}`;
+}
+
+/** Replay = paged reads of the JSONL (D13). Canonical blob descriptors stay
+ * unresolved here; the row-detail endpoint is the explicit lazy boundary. */
+export async function fetchRunEventPage(
+  runId: string,
+  flow: string,
+  options: { afterSeq: number; limit?: number; frame?: string },
+): Promise<RunEventPage> {
+  const payload = await getJson<unknown>(
+    runReplayPath(runId, flow, "events", {
+      after_seq: options.afterSeq,
+      limit: options.limit ?? RUN_REPLAY_PAGE_LIMIT,
+      frame: options.frame,
+    }),
   );
-  return payload.events;
+  return requireReplayV1(payload) as RunEventPage;
 }
 
-export async function abortRun(runId: string): Promise<void> {
-  await fetch(`/api/runs/${runId}/abort`, { method: "POST" });
+export async function fetchRunFramePage(
+  runId: string,
+  flow: string,
+  options: { parentFrame: string; afterSeq: number; limit?: number },
+): Promise<RunFramePage> {
+  const payload = await getJson<unknown>(
+    runReplayPath(runId, flow, "frames", {
+      parent_frame: options.parentFrame,
+      after_seq: options.afterSeq,
+      limit: options.limit ?? FRAME_REPLAY_PAGE_LIMIT,
+    }),
+  );
+  return requireReplayV1(payload) as RunFramePage;
 }
 
-/** Live tail: text frames are the JSONL lines verbatim (buffered
- * prefix, then stream; normal close after run_finished). */
+/** Resolve schema-declared content (including hash-verified blobs) for one
+ * explicitly expanded event. Replay pages never call this eagerly. */
+export async function fetchRunEventDetail(
+  runId: string,
+  flow: string,
+  seq: number,
+): Promise<RunEventDetail> {
+  const payload = await getJson<unknown>(
+    runReplayPath(
+      runId,
+      flow,
+      `events/${encodeURIComponent(String(seq))}`,
+      {},
+    ),
+  );
+  return requireReplayV1(payload) as RunEventDetail;
+}
+
+export type AbortRunResult = { run_id: string; state: string };
+
+export async function abortRun(runId: string): Promise<AbortRunResult> {
+  const response = await fetch(
+    `/api/runs/${encodeURIComponent(runId)}/abort`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    let message = `abort failed: HTTP ${response.status}`;
+    try {
+      const body = (await response.json()) as { message?: string };
+      if (body.message) message = body.message;
+    } catch {
+      // non-JSON error body — keep the status-bearing message
+    }
+    throw new ApiError(message, response.status, []);
+  }
+  return (await response.json()) as AbortRunResult;
+}
+
+/** Live tail: text frames are the JSONL lines verbatim (durable disk prefix,
+ * then a bounded live queue; close 4410 asks the client to reconnect/resync). */
 export function openRunSocket(runId: string): WebSocket {
   const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  return new WebSocket(`${scheme}://${window.location.host}/ws/runs/${runId}`);
+  return new WebSocket(
+    `${scheme}://${window.location.host}/ws/runs/${encodeURIComponent(runId)}`,
+  );
 }

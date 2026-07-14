@@ -5,8 +5,8 @@
 // ROOT frame's perspective. Container nodes (flow/loop) pulse from
 // their own node_fired until their outputs emit back in the root
 // frame; child-frame events still appear in the event stream (labeled
-// with their frame path) but don't paint inner nodes — that belongs
-// to M6's drill-in.
+// with their frame path) but don't paint inner nodes — v0.2 M5 owns
+// replay-time frame drill-in.
 
 export type RunRecord = {
   event: string;
@@ -19,6 +19,8 @@ export type RunRecord = {
 };
 
 export const ROOT_FRAME = "f-0";
+export const RUN_RECORD_WINDOW = 2_000;
+export const RUN_FRAME_WINDOW = 200;
 
 /** log-node history kept per node (M5.5) — the loop-debugging view */
 export const LOG_RING = 50;
@@ -27,13 +29,20 @@ export type NodeOutcome = "none" | "ok" | "failed" | "error" | "skipped";
 
 /** What crossed a port (M5.5): message_emitted names both ends, so
  * every emission paints the source's output AND the target's input.
- * `lastValue` is the event's value_preview — the NATIVE value up to
- * 512 chars of compact JSON, truncated marker beyond (engine spec §7). */
+ * Current records carry the complete `value`; featureless legacy
+ * histories fall back to their lossy `value_preview`. */
 export type PortTraffic = {
   count: number;
   lastValue: unknown;
   lastTs: string | null;
 };
+
+/** Read the complete M4 message value without breaking v0.1/featureless
+ * histories. Presence, rather than nullishness, matters: null is a valid
+ * complete message value and must not fall back to a legacy preview. */
+export function messageValue(record: RunRecord): unknown {
+  return Object.hasOwn(record, "value") ? record.value : record.value_preview;
+}
 
 /** Last request exchange on a node (run-mode inspector summary). */
 export type RequestSummary = {
@@ -71,11 +80,16 @@ export type RunViewState =
   | "failed"
   | "error"
   | "aborted"
-  | "incomplete";
+  | "incomplete"
+  | "indeterminate";
 
 export type RunView = {
+  /** Exact frame whose node/edge aggregate this view folds. The root
+   * canvas keeps its own view while frame drilldown uses a separate one. */
+  scopeFrame: string;
   state: RunViewState;
   records: RunRecord[];
+  recordCount: number;
   nodes: Record<string, NodeRunState>;
   edges: Record<string, EdgePulse>;
   asserts: { passed: number; failed: number };
@@ -84,10 +98,12 @@ export type RunView = {
   startedTs: string | null;
 };
 
-export function emptyRunView(): RunView {
+export function emptyRunView(scopeFrame = ROOT_FRAME): RunView {
   return {
+    scopeFrame,
     state: "running",
     records: [],
+    recordCount: 0,
     nodes: {},
     edges: {},
     asserts: { passed: 0, failed: 0 },
@@ -138,16 +154,20 @@ function touch(
  * clones the outer object per flush); per-node/per-edge entries are
  * replaced immutably (see `touch`). */
 export function applyRecord(view: RunView, record: RunRecord): void {
+  view.recordCount += 1;
   view.records.push(record);
-  const seq = record.seq ?? view.records.length;
+  if (view.records.length > RUN_RECORD_WINDOW) {
+    view.records.splice(0, view.records.length - RUN_RECORD_WINDOW);
+  }
+  const seq = record.seq ?? view.recordCount;
   const event = record.event;
 
-  if (event === "run_started") {
+  if (event === "run_started" && view.scopeFrame === ROOT_FRAME) {
     view.state = "running";
     view.startedTs = record.ts ?? null;
     return;
   }
-  if (event === "run_finished") {
+  if (event === "run_finished" && view.scopeFrame === ROOT_FRAME) {
     const state = record.state as RunViewState;
     view.state = state;
     view.durationMs = (record.duration_ms as number) ?? null;
@@ -169,7 +189,7 @@ export function applyRecord(view: RunView, record: RunRecord): void {
 
   // node/edge overlay state is root-frame only (scope pin above);
   // child-frame records still landed in view.records for the stream
-  if (record.frame !== ROOT_FRAME) return;
+  if (record.frame !== view.scopeFrame) return;
   const node = record.node;
 
   switch (event) {
@@ -259,7 +279,7 @@ export function applyRecord(view: RunView, record: RunRecord): void {
           ports: withTraffic(
             prevNode?.ports ?? {},
             `out:${port}`,
-            record.value_preview,
+            messageValue(record),
             ts,
           ),
         });
@@ -275,7 +295,7 @@ export function applyRecord(view: RunView, record: RunRecord): void {
           ports: withTraffic(
             prevTo.ports,
             `in:${toPort}`,
-            record.value_preview,
+            messageValue(record),
             ts,
           ),
         };
@@ -334,6 +354,209 @@ export function reduceRun(records: RunRecord[]): RunView {
   return view;
 }
 
+// ---- paged replay + frame drilldown (v0.2/M5) ----------------------
+
+export type ReplayHistoryState =
+  | "running"
+  | "complete"
+  | "incomplete"
+  | "indeterminate";
+
+/** Scalar terminal fact projected from the durable run_finished record.
+ * Content-heavy End outputs and error bodies remain lazy event detail. */
+export type RunReplaySummary = {
+  state: "passed" | "failed" | "error" | "aborted";
+  duration_ms: number;
+  asserts: { passed: number; failed: number };
+  unhandled_error_count: number;
+  nodes_never_fired_count: number;
+  error_reason?: string;
+};
+
+/** Full-history, frame-scoped projection carried beside every bounded event
+ * page. It contains no canonical records or content-heavy run outputs. */
+export type RunViewSummary = {
+  scope_frame: string;
+  record_count: number;
+  nodes: Record<string, NodeRunState>;
+  edges: Record<string, EdgePulse>;
+  asserts: { passed: number; failed: number };
+  started_ts: string | null;
+};
+
+/** Minimum page shape consumed by the pure folder. The REST wrapper owns
+ * version gating; keeping this structural lets Vitest exercise paging with
+ * small in-memory pages and keeps fetch out of the reducer. */
+export type RunEventPageLike = {
+  root_frame: string;
+  history_state: ReplayHistoryState;
+  run_summary: RunReplaySummary | null;
+  view_summary: RunViewSummary;
+  after_seq: number;
+  next_after_seq: number;
+  has_more: boolean;
+  events: RunRecord[];
+};
+
+function validateEventPage(
+  page: RunEventPageLike,
+  expectedAfterSeq: number,
+  expectedRootFrame: string,
+): void {
+  if (page.after_seq !== expectedAfterSeq) {
+    throw new Error(
+      `replay page cursor mismatch: requested after_seq=${expectedAfterSeq}, received ${page.after_seq}`,
+    );
+  }
+  if (page.root_frame !== expectedRootFrame) {
+    throw new Error("replay root frame changed between pages");
+  }
+  if (
+    !Number.isInteger(page.view_summary.record_count) ||
+    page.view_summary.record_count < page.events.length
+  ) {
+    throw new Error("replay view summary has an invalid record count");
+  }
+  let previousSeq = expectedAfterSeq;
+  for (const record of page.events) {
+    if (
+      !Number.isInteger(record.seq) ||
+      (record.seq as number) <= previousSeq
+    ) {
+      throw new Error(
+        `replay event sequence did not advance after ${previousSeq}`,
+      );
+    }
+    previousSeq = record.seq as number;
+  }
+  const expectedNext = page.events.length > 0 ? previousSeq : expectedAfterSeq;
+  if (page.next_after_seq !== expectedNext) {
+    throw new Error(
+      `replay next cursor mismatch: expected ${expectedNext}, received ${page.next_after_seq}`,
+    );
+  }
+  if (page.has_more && page.next_after_seq <= expectedAfterSeq) {
+    throw new Error(
+      `replay page did not advance: after_seq=${expectedAfterSeq}, next_after_seq=${page.next_after_seq}`,
+    );
+  }
+}
+
+/** Fold exactly one bounded response into the reduced graph aggregate.
+ * Validation happens before mutation, so a bad cursor cannot half-apply a
+ * page or double-count records. The caller explicitly requests continuation. */
+export function foldRunEventPage(
+  view: RunView,
+  page: RunEventPageLike,
+  expectedAfterSeq: number,
+  expectedRootFrame: string,
+): void {
+  validateEventPage(page, expectedAfterSeq, expectedRootFrame);
+  if (page.view_summary.scope_frame !== view.scopeFrame) {
+    throw new Error("replay view summary scope changed");
+  }
+  view.records = page.events.slice(-RUN_RECORD_WINDOW);
+  view.recordCount = page.view_summary.record_count;
+  view.nodes = { ...page.view_summary.nodes };
+  view.edges = { ...page.view_summary.edges };
+  view.asserts = { ...page.view_summary.asserts };
+  view.startedTs = page.view_summary.started_ts;
+}
+
+/** Settle a root replay from bounded envelope metadata. A complete history
+ * does not need to fetch the tail merely to rediscover run_finished. */
+export function settleRootReplay(
+  view: RunView,
+  page: RunEventPageLike,
+): void {
+  if (page.history_state === "running") {
+    view.state = "running";
+    return;
+  }
+  if (page.history_state === "indeterminate") {
+    view.state = "indeterminate";
+    for (const [id, state] of Object.entries(view.nodes)) {
+      if (state.active) view.nodes[id] = { ...state, active: false };
+    }
+    return;
+  }
+  if (page.history_state === "incomplete") {
+    finalizeIncomplete(view);
+    return;
+  }
+  const summary = page.run_summary;
+  if (summary === null) {
+    throw new Error("complete replay is missing its durable run summary");
+  }
+  view.state = summary.state;
+  view.durationMs = summary.duration_ms;
+  view.asserts = { ...summary.asserts };
+  view.errorReason = summary.error_reason ?? null;
+  for (const [id, state] of Object.entries(view.nodes)) {
+    if (state.active) view.nodes[id] = { ...state, active: false };
+  }
+}
+
+/** Bounded direct-child projection of canonical frame_finished. Heavy error
+ * detail and End values stay in the lazy canonical event at this `seq`. */
+export type RunFrameSummary = RunRecord & {
+  event: "frame_finished";
+  seq: number;
+  frame: string;
+  parent_frame: string;
+  parent_node: string;
+  flow: string;
+  kind: "flow" | "loop";
+  loop_index?: number | null;
+  duration_ms: number;
+  state: "passed" | "failed" | "error" | "aborted";
+  asserts: { passed: number; failed: number };
+  unhandled_error_count: number;
+  end_output_names: string[];
+};
+
+export type FrameSummaryWindow = {
+  frames: RunFrameSummary[];
+  frameCount: number;
+};
+
+export type RunFramePageLike = {
+  next_after_seq: number;
+  has_more: boolean;
+  frames: RunFrameSummary[];
+};
+
+export function emptyFrameSummaryWindow(): FrameSummaryWindow {
+  return { frames: [], frameCount: 0 };
+}
+
+/** Append one response page and discard summaries older than the active
+ * browser window. This deliberately does not build or cache a frame tree. */
+export function appendFrameSummaries(
+  window: FrameSummaryWindow,
+  frames: RunFrameSummary[],
+): void {
+  window.frameCount += frames.length;
+  window.frames.push(...frames);
+  if (window.frames.length > RUN_FRAME_WINDOW) {
+    window.frames.splice(0, window.frames.length - RUN_FRAME_WINDOW);
+  }
+}
+
+/** A child event page has no run_finished. Its parent summary is the
+ * authoritative completion fact, so settle the detail view from that record. */
+export function finalizeFrameReplay(
+  view: RunView,
+  summary: RunFrameSummary,
+): void {
+  view.state = summary.state;
+  view.durationMs = summary.duration_ms;
+  view.asserts = { ...summary.asserts };
+  for (const [id, state] of Object.entries(view.nodes)) {
+    if (state.active) view.nodes[id] = { ...state, active: false };
+  }
+}
+
 /** The stream ended without run_finished (dead WS / truncated file). */
 export function finalizeIncomplete(view: RunView): void {
   view.state = "incomplete";
@@ -377,6 +600,13 @@ export function summarize(record: RunRecord): string {
       return `${record.remaining} messages left in budget`;
     case "capture_warning":
       return `${record.remaining_mb}MB body capture left`;
+    case "frame_finished": {
+      const index =
+        typeof record.loop_index === "number" ? ` #${record.loop_index}` : "";
+      return `${record.kind} ${record.flow}${index} · ${record.state} · ${Math.round(
+        (record.duration_ms as number) ?? 0,
+      )}ms`;
+    }
     case "run_finished":
       return `${record.state} in ${Math.round((record.duration_ms as number) ?? 0)}ms`;
     default:
@@ -404,8 +634,9 @@ export type RunTrafficSelection =
 export function matchesTraffic(
   record: RunRecord,
   sel: RunTrafficSelection,
+  scopeFrame = ROOT_FRAME,
 ): boolean {
-  if (record.event !== "message_emitted" || record.frame !== ROOT_FRAME) {
+  if (record.event !== "message_emitted" || record.frame !== scopeFrame) {
     return false;
   }
   if (sel.kind === "edge") {

@@ -40,13 +40,41 @@ from napflow.core.templating import (
     referenced_nodes,
     template_syntax_error,
 )
-from napflow.core.workspace import EnvFileError, Workspace, parse_env_file
+from napflow.core.workspace import (
+    EnvFileError,
+    Workspace,
+    WorkspaceBoundaryError,
+    parse_env_file,
+)
 
 GUARD_TYPES = ("counter", "timeout")
 _MERGE_INPUT_RE = re.compile(r"^in[1-9][0-9]*$")
 
 # fields holding bare Jinja2 expressions (everything else is `{{ }}` text)
 _EXPR_FIELDS = {"expr", "over"}
+
+
+def _python_callable_problem(
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[str, str] | None:
+    """Return the static worker-contract violation for ``fn``, if any.
+
+    The worker calls user functions synchronously with keyword arguments.
+    Keeping this check next to AST surface derivation prevents ``check``
+    from advertising ports that the worker cannot invoke (EC48).
+    """
+    if isinstance(fn, ast.AsyncFunctionDef):
+        return (
+            f"function {fn.name!r} is async, which python nodes do not support",
+            "use a synchronous top-level `def`",
+        )
+    if fn.args.posonlyargs:
+        names = ", ".join(argument.arg for argument in fn.args.posonlyargs)
+        return (
+            f"function {fn.name!r} has positional-only parameter(s): {names}",
+            "remove the `/`; python-node inputs are passed by keyword",
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -58,6 +86,7 @@ class CheckDiagnostic:
     line: int | None = None
     column: int | None = None
     node_id: str | None = None
+    reason: str | None = None  # stable preparation reason, when applicable
 
     @property
     def severity(self) -> str:
@@ -112,12 +141,12 @@ class _SurfaceResolver:
         if identity not in self._flow_files:
             model = None
             if self.workspace is not None:
-                file = self.workspace.root / Path(identity) / "flow.yaml"
-                if file.is_file():
-                    try:
+                try:
+                    file = self.workspace.resolver.flow_file(identity)
+                    if file.is_file():
                         model = load_flow(file).model
-                    except LoadError:
-                        model = None  # its own check run reports the details
+                except (LoadError, WorkspaceBoundaryError):
+                    model = None  # its own check run reports the details
             self._flow_files[identity] = model
         return self._flow_files[identity]
 
@@ -126,6 +155,16 @@ class _SurfaceResolver:
     ) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef] | None:
         """Top-level function defs in the flow's nodes.py, by AST only."""
         path = flow_dir / "nodes.py"
+        if self.workspace is not None:
+            try:
+                identity = (
+                    flow_dir.resolve(strict=False)
+                    .relative_to(self.workspace.root)
+                    .as_posix()
+                )
+                path = self.workspace.resolver.source_file(identity, "nodes.py")
+            except (OSError, RuntimeError, ValueError, WorkspaceBoundaryError):
+                return None
         if path not in self._modules:
             functions = None
             if path.is_file():
@@ -157,7 +196,9 @@ class _SurfaceResolver:
                 if functions is None or node.config.function not in functions:
                     return None
                 fn = functions[node.config.function]
-                positional = fn.args.posonlyargs + fn.args.args
+                if _python_callable_problem(fn) is not None:
+                    return None
+                positional = fn.args.args
                 params = [a.arg for a in positional + fn.args.kwonlyargs]
                 defaults = len(fn.args.defaults)
                 literal_optional = {
@@ -301,6 +342,7 @@ class _FlowCheck:
         *,
         node: str | None = None,
         loc_suffix: tuple[int | str, ...] = (),
+        reason: str | None = None,
     ) -> None:
         line = column = None
         if node is not None and node in self.index_of:
@@ -314,6 +356,7 @@ class _FlowCheck:
                 line=line,
                 column=column,
                 node_id=node,
+                reason=reason,
             )
         )
 
@@ -475,7 +518,18 @@ class _FlowCheck:
                     continue
                 if ws is None:
                     continue
-                target_file = ws.root / Path(ref) / "flow.yaml"
+                try:
+                    target_file = ws.resolver.flow_file(ref)
+                except WorkspaceBoundaryError as e:
+                    self.add(
+                        "E008",
+                        f"referenced flow {ref!r} violates workspace boundary: {e}",
+                        "use a workspace-relative POSIX identity",
+                        node=node.id,
+                        loc_suffix=loc,
+                        reason=e.reason,
+                    )
+                    continue
                 if not target_file.is_file():
                     self.add(
                         "E008",
@@ -503,7 +557,21 @@ class _FlowCheck:
                             )
             if isinstance(node, FixtureNode) and ws is not None:
                 file = node.config.file
-                if "{{" not in file and not (ws.root / Path(file)).is_file():
+                fixture_file = None
+                if "{{" not in file:
+                    try:
+                        fixture_file = ws.resolver.fixture_file(file)
+                    except WorkspaceBoundaryError as e:
+                        self.add(
+                            "E008",
+                            f"fixture file {file!r} violates workspace boundary: {e}",
+                            "use a workspace-relative POSIX fixture path",
+                            node=node.id,
+                            loc_suffix=("config", "file"),
+                            reason=e.reason,
+                        )
+                        continue
+                if fixture_file is not None and not fixture_file.is_file():
                     self.add(
                         "E008",
                         f"fixture file {file!r} not found under {ws.root}",
@@ -512,6 +580,27 @@ class _FlowCheck:
                         loc_suffix=("config", "file"),
                     )
             if isinstance(node, PythonNode):
+                if ws is not None:
+                    try:
+                        flow_identity = self.loaded.path.parent.relative_to(
+                            ws.root
+                        ).as_posix()
+                        ws.resolver.source_file(flow_identity, "nodes.py")
+                    except (ValueError, WorkspaceBoundaryError) as e:
+                        reason = (
+                            e.reason
+                            if isinstance(e, WorkspaceBoundaryError)
+                            else "workspace_boundary"
+                        )
+                        self.add(
+                            "E008",
+                            f"nodes.py violates workspace boundary: {e}",
+                            "keep nodes.py at the canonical flow source path",
+                            node=node.id,
+                            loc_suffix=("config", "function"),
+                            reason=reason,
+                        )
+                        continue
                 functions = self.resolver.module_functions(self.loaded.path.parent)
                 if functions is None:
                     self.add(
@@ -529,6 +618,17 @@ class _FlowCheck:
                         node=node.id,
                         loc_suffix=("config", "function"),
                     )
+                else:
+                    problem = _python_callable_problem(functions[node.config.function])
+                    if problem is not None:
+                        message, hint = problem
+                        self.add(
+                            "E008",
+                            message,
+                            hint,
+                            node=node.id,
+                            loc_suffix=("config", "function"),
+                        )
 
     # -- E009 / W107 ----------------------------------------------------------
 
@@ -838,7 +938,10 @@ def check_workspace(workspace: Workspace) -> list[CheckDiagnostic]:
     seen = set(queue)
     while queue:
         identity = queue.pop(0)
-        file = workspace.root / Path(identity) / "flow.yaml"
+        try:
+            file = workspace.resolver.flow_file(identity)
+        except WorkspaceBoundaryError:
+            continue  # the referencing flow already got E008
         if not file.is_file():
             continue  # referencing flow already got E008
         try:
@@ -884,7 +987,10 @@ def check_run_closure(
         if current == identity:
             current_loaded = loaded
         else:
-            file = workspace.root / Path(current) / "flow.yaml"
+            try:
+                file = workspace.resolver.flow_file(current)
+            except WorkspaceBoundaryError:
+                continue  # the referencing flow already got E008
             if not file.is_file():
                 continue  # the referencing flow already got E008
             try:

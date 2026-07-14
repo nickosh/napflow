@@ -4,6 +4,241 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-14 — v0.2 M7 release candidate prepared
+
+- Done: prepared exact `0.2.0` metadata, changelog, compatibility notes, and
+  release-note wiring; closed EC44 and fixed the newly recorded EC53/EC54 gaps.
+- Verified locally: 618 pytest, 76 Vitest, 43 Playwright, Ruff/import contracts,
+  production UI/notices, exact artifacts, and installed-artifact smoke pass.
+- Cross-platform baseline: PR #1 run #42 is green on Linux, macOS, and Windows;
+  the final prepared tree still needs its fresh PR and non-publishing tag gate.
+- Next: when authorized, push this release-candidate commit, observe both
+  gates, then merge and tag exact `main` as `v0.2.0` to publish and verify it.
+
+## 2026-07-14 — Windows CI portability fix
+
+- Fixed: history locking rejects planted non-regular entries before open, so
+  Windows cannot create a dangling symlink's external target during fallback.
+- Hardened tests: redirect failures allow the adapter's connection/timeout
+  mapping, and clone symlinks compare target identity rather than path spelling.
+- Verified: 593 pytest plus focused cases and Ruff check/format pass locally;
+  next push this fix and confirm the Windows PR job turns green.
+
+## 2026-07-14 — v0.2 M7 reusable release-gate start
+
+- Done: CI is reusable by the tag workflow; Vitest/notices/artifact smoke and
+  tested exact tag/final-version refusal now gate publishing; dispatch stays dry.
+- Hardened: the direct wheel must byte-match the no-Node sdist rebuild; cleared
+  three inherited formatter failures exposed by the authoritative gate.
+- Verified: 593 pytest, 76 Vitest, 43 Playwright; format, Ruff, import contracts,
+  production build, notice audit, and isolated installed-artifact smoke pass.
+- Next: push this gate slice, observe PR + release dry-run gates, then finish
+  v0.2 compatibility notes/spec audit and separate version/tag preparation.
+
+## 2026-07-13 — v0.2 M6 public/package/UI contracts complete
+
+- Done: reusable Workspace/Flow and functional APIs share isolated execution;
+  D40 supports release-built artifacts and rejects raw VCS/source installs.
+- Done: schema/form parity covers safety and templated typed fields; audited,
+  deterministic frontend notices ship in both artifacts.
+- Verified: 582 pytest, 76 Vitest, and 43 Playwright tests; Ruff, import
+  contracts, typecheck/build, and release-sdist → no-Node-wheel smoke pass.
+- Next: M7 wires these checks into the authoritative gate and pins exact
+  tag/package version refusal before v0.2 promotion.
+
+## 2026-07-13 — v0.2 M5 usable replay complete
+
+- Done: `napflow-replay/1` adds frozen bounded event/frame pages, graph-sized
+  projections, lazy verified detail, and honest complete/incomplete/indeterminate state.
+- Proved: a 1,101-event history opens one page with a complete overlay; a real
+  72 KiB child swaps to its durable canvas without re-execution or eager blob reads.
+- Verified: 564 pytest, 62 Vitest, and 42 Playwright tests pass (1 pytest
+  skipped, 1 expected xfail); Ruff, both import contracts, typecheck, and build pass.
+- Next: M6 public Workspace/Flow API, deterministic packaging, and UI/schema parity.
+
+## 2026-07-13 — v0.2 M4 full-fidelity history complete
+
+- Done: scaffold masking is opt-in; `content-blobs/1` now covers every
+  persisted value path; capture valves/previews are removed; prepared-wire
+  request/final-redirect detail is recorded.
+- Proved: a 200 KB Request→Log→End→JSON-report path keeps complete runtime data
+  and one hash-verified blob; lazy report/server/UI boundaries preserve refs.
+- Verified: 551 pytest, 50 Vitest, and 40 Playwright tests pass (1 pytest
+  skipped, 1 expected xfail); Ruff, both import contracts, and the UI build pass.
+- Next: M5 versioned paging, on-demand browser blob reads, bounded replay, and
+  reconstructable frame drilldown.
+
+## 2026-07-13 — v0.2 M4 ordinary-permission local history
+
+- Done: removed custom Windows DACL/SID ownership, forced POSIX modes, and
+  permission-only blob rejection; raw JSONL/blobs now inherit OS permissions.
+- Preserved: exclusive/no-follow creation, workspace containment, exact record
+  shapes, existing-digest equality, size checks, and SHA-256 verification.
+- Verified: 525 pytest passed (3 skipped, 2 expected xfails); Ruff and both
+  import-direction contracts pass.
+- Next: make scaffold secret patterns opt-in, then land full-value schemas,
+  blob activation, lazy consumers, and prepared-request capture.
+
+## 2026-07-13 — raw-history publication warning
+
+- Documented in README + manifest that `.napflow/runs/` may contain raw
+  credentials/content and must not be committed, uploaded, or published blindly.
+- Clarified that gitignore and terminal/report masking do not sanitize JSONL,
+  blobs, or local UI history; next remains ACL/private-permission deletion.
+
+## 2026-07-13 — v0.2 prototype-first replan
+
+- Decided D39: keep full-fidelity blobs/prepared requests and the runtime
+  Workspace/Flow catalog; use ordinary OS permissions with optional masking.
+- Deferred: secure history/export bundles, advanced replay indexes, timeline
+  playback/checkpoints, and the 100k-event replay gate remain future items.
+- Replanned M4–M7 and reconciled product/requirements/spec target notes; this
+  session changes documentation only, not current permission behavior.
+- Next: remove the ACL/DACL, owner, forced-mode, and private-blob checks with
+  focused tests, then update current-behavior specs through closeout.
+
+## 2026-07-13 — v0.2 M4 raw/redacted event seam
+
+- Done: exhaustive event-field policies now separate immutable structure,
+  content/map values, error messages, and the two lossy preview blockers.
+- Hardened: raw JSONL validates ownership + POSIX/Windows privacy; redacted
+  views preserve protocol, and ordinary close failures become incomplete.
+- Verified: 521 pytest passed (4 skipped, 2 expected xfails); the Windows DACL
+  inspection is locally skipped pending Windows CI. Ruff/import contracts pass.
+- Next: land prepared-request/full-message fields, then encode through the
+  registry and activate `content-blobs/1` with lazy consumers in one change.
+
+## 2026-07-13 — v0.2 M4 content-store foundation
+
+- Done: added the strict D34 persisted-value codec and per-run immutable,
+  private, content-addressed store; `content-blobs/1` remains disabled.
+- Hardened: exact JSON/binary fidelity, literal/omission envelopes, dedupe,
+  directory/reparse defenses, size-before-read, hash checks, and typed failures.
+- Verified: 502 pytest passed (3 skipped, 4 expected xfails), including 39
+  focused cases; Ruff and both import-direction contracts passed.
+- Next: finalize the exhaustive event payload registry and protocol-safe
+  redaction boundary, then encode before fan-out and activate the feature once.
+
+## 2026-07-13 — v0.2 M3 bounded execution + history complete
+
+- Done: fixed loop workers/frame summaries, bounded live/durable WS catch-up,
+  scalar server/browser windows, streaming CLI reports, and whole-unit retention.
+- Hardened: canonical-tail/order markers, cross-process reader leases,
+  no-follow locks/reports, resumable tombstones, large/partial tails, XML safety.
+- Verified: 463 pytest passed (3 skipped, 4 expected xfails), 48 Vitest, UI
+  build, Ruff/import contracts, plus the 100k loop gate (16 helpers/Frames).
+- Next: M4 full-fidelity blobs, prepared requests, and raw/redacted views.
+
+## 2026-07-13 — v0.2 M3 bounded loop/frame start
+
+- Done: parallel loops now use a fixed `max_concurrency` worker set; normally
+  quiescent children emit canonical `frame_finished` and release live Frames.
+- Preserved: item ordering and nested D20/D21 outcomes; cancelled frames stay
+  concurrency-bounded and defer release to cleanup so abort cannot fake D18.
+- Verified: 427 pytest passed (3 skipped, 6 expected xfails), 47 Vitest,
+  production UI build, Ruff, and both import-architecture contracts.
+- Next: stream CLI reports from durable JSONL, add robust last-record reading,
+  then land post-completion whole-run retention and bounded live subscribers.
+
+## 2026-07-13 — public Python workspace/flow API direction
+
+- Decided D38: public embedding is reusable Workspace → bound Flow → isolated
+  Run, with functional `run_flow` kept equivalent and sync/async paths.
+- Planned M6: fresh runnable discovery, exact lookup, and a nested runtime
+  `workspace.flows.<identity segments>` catalog without lossy normalization.
+- Deferred: generated flow-name plus typed Start/End bindings and stale checks
+  stay explicitly after v0.2; runtime attributes do not claim static typing.
+- Verified: D38/FR-1112/EC42 references, Markdown fences, trailing whitespace,
+  and the full documentation diff; docs-only change, so no test suite required.
+- Next: preserve this contract through M3–M5, then implement/test it in M6.
+
+## 2026-07-13 — v0.2 M2 fair lifecycle + worker safety
+
+- Done: 128-delivery fair pump, monotonic deadline/abort checks, and one
+  shielded cleanup owner across tasks, HTTP, workers, streams, and shutdown.
+- Done: immediate reap-before-replace worker teardown, graceful normal EOF,
+  16 MiB stdlib JSON-lines, callable agreement, and strict binary requests.
+- Verified: 425 pytest; Ruff/import contracts; real-uvicorn path; M2 audit and
+  cancellation matrices; 41.3k guarded laps/s and 1 KiB/100 KiB/10 MiB workers.
+- Carry: EC22 descendants and EC35 sync-Jinja preemption stay post-v0.2;
+  next is M3 bounded loop/frame tasks plus durable history lifecycle.
+
+## 2026-07-12 — v0.2 M1 workspace boundary + durable editing
+
+- Done: centralized lexical/symlink-aware workspace resolution and stable
+  boundary errors across checker/engine/CLI/server; added loopback Host/Origin.
+- Done: atomic source writes + serialized ETag locks, revisioned canvas/code
+  persistence, lifecycle save barriers, and `/flow/` segment-encoded routes.
+- Verified: 395 pytest + 47 Vitest + 40 Playwright; production UI build,
+  Ruff, import contracts, atomic interruption/concurrency, and goldens green.
+- Carry: trusted workspaces are not an OS sandbox against a malicious local
+  filesystem racer; next is M2 scheduler fairness/cancellation/worker lifecycle.
+
+## 2026-07-12 — repo-scoped closeout skill + Claude discovery
+
+- Done: added `.agents/skills/napflow-closeout` with session, milestone, and
+  no-update modes plus an evidence-driven memory reconciliation matrix; linked
+  `.claude/skills` → `../.agents/skills` so both agents share one canonical copy.
+- Decided: closeout audits every memory surface but edits only affected files;
+  milestone and requirement completion require implementation + tests.
+- Updated: AGENTS and PLAN now invoke the skill after state-changing sessions
+  and use the journal's actual newest-first/prepend convention.
+- Verified: skill validation, symlink resolution through Claude's path, metadata
+  inspection, and diff checks.
+- Next: use `$napflow-closeout` after the next v0.2 M1 work session and refine
+  only if real usage exposes friction.
+
+## 2026-07-12 — v0.2 M0 session handoff
+
+- Landed M0 code/tests `9a08209` → `fd25ccb` on `feat/v0.2`; no code changes remain.
+- Done: versioned/enforced history envelope, signal-correct audit ledger, exact
+  Python/browser baselines, malformed-history regressions, and tested e2e cleanup.
+- Verified: 354 pytest passes + 35 Vitest + 32 Playwright; 10 Python perf + 2
+  browser perf; build, Ruff, import contracts, artifact/tag reproduction green.
+- Carry: 9 strict-xfail cases + 12 explicit-owner skips move through M1–M6;
+  M7 promotion requires converting the whole M0 ledger to normal passing tests.
+- Next: M1 — central resolver/identity boundary, Host/Origin, atomic writes,
+  serialized ETag/save coordination; first target is the symlink xfail.
+
+## 2026-07-12 — v0.2 M0 adversarial closeout
+
+- Done: protected/enforced `napflow-run/1` across emission + REST/WS replay;
+  pinned collision-safe persisted-value/byte rules; hardened all audit probes.
+- Verified: clean-tag v0.1 wheel/install/smoke; 352 pytest passes + 31 Vitest + 32
+  Playwright; 10 Python perf + 2 browser perf; Ruff/import contracts green.
+- Recorded: exact 1KB/100KB/10MB worker, 100/10k/100k loop, and 10/100MB
+  server/browser baselines; FR-1101 and NFR-08/18 remain open until M3–M7.
+- Next: M1 — central workspace boundary, Host/Origin, atomic writes, save queue.
+
+## 2026-07-12 — v0.2 M0 baseline (format marker + audit probes + perf)
+
+- Done: `feat/v0.2` branch. **Box 2** — run-history is version-marked
+  before storage changes: `run_started` is the envelope header carrying
+  `format: "napflow-run/1"` (`HISTORY_FORMAT`), reader gate
+  (`parse_history_format`/`is_supported`/`HistoryFormatError`) + tests;
+  full format contract (ordering, blob-ref shape, inline threshold,
+  byte/hash, disposable indexes) pinned in engine spec §7a. **Box 3** —
+  `tests/test_v02_audit.py`: 8 confirmed critical/high findings reproduced
+  as strict `xfail` (public `run_flow` import, symlink escape past
+  `_safe_identity`, 70KB worker result crashes the 64KB StreamReader,
+  external-cancel leaks the worker, Log bypasses the capture valve,
+  secret value `passed`/`error` rewrites state/keys, >64KB final event
+  drops from `_tail_record`, same-second retention deletes the newer
+  run); 5 non-headless findings routed as explicit-owner `skip`s. **Box 4**
+  — `tests/test_perf_baselines.py` (opt-in `perf` marker, CI-excluded via
+  `-m "not perf"`) + `docs/perf-baselines.md`. 320 passed / 5 skipped /
+  6 deselected / 8 xfailed; ruff clean.
+- Decided (owner): v0.2 ships as **larger feature PRs off `feat/v0.2`**,
+  not one branch per milestone. FR-1101 and NFR-08/18 stay open (they
+  close in M3–M5 / M7 with their real implementations); no REQUIREMENTS
+  tick lands from a baseline or a failing test.
+- Baseline headlines: ~42k guarded laps/s; ~20ms spawn-dominated worker
+  round trip; 100k parallel loop **489 MB** peak heap (the M3 target);
+  10MB replay read 19 MB peak (M5 target).
+- Next: M1 — `WorkspaceResolver` symlink-aware boundary + loopback
+  Host/Origin + atomic write + serialized save coordinator (flips the
+  symlink `xfail` green, TR-12/TR-20).
+
 ## 2026-07-11 — v0.1.0 release prep
 
 - Done: version 0.1.0, CHANGELOG regenerated (`--tag v0.1.0`), README
@@ -245,8 +480,6 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 - Next: S4/M4 — editing + write path (connect rules E004, node
   add/delete, config forms + Monaco, Start/End port editing, save via
   server-side canonical serializer, golden canvas-diff test, FS watch).
-
-## 2026-07-06 — S4/M2 UI scaffold + wheel walking skeleton
 
 ## 2026-07-06 — S4/M2 UI scaffold + wheel walking skeleton
 

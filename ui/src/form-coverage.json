@@ -1,0 +1,135 @@
+{
+  "flow": {
+    "schema_": "yaml-only",
+    "flow": "yaml-only",
+    "env": "yaml-only",
+    "nodes": "canvas",
+    "edges": "canvas",
+    "layout": "canvas"
+  },
+  "flow_meta": {
+    "name": "yaml-only",
+    "description": "yaml-only"
+  },
+  "flow_env": {
+    "required": "yaml-only"
+  },
+  "edge": {
+    "from_": "canvas",
+    "to": "canvas"
+  },
+  "node": {
+    "id": "canvas",
+    "type": "palette",
+    "config": "type-form",
+    "max_seconds": "node-number"
+  },
+  "configs": {
+    "start": {
+      "ports": "start-ports"
+    },
+    "end": {
+      "ports": "end-ports"
+    },
+    "request": {
+      "url": "string",
+      "method": "string",
+      "headers": "json",
+      "query": "json",
+      "body": "json",
+      "timeout_s": "templatable-number",
+      "verify_tls": "templatable-boolean",
+      "retry": "json",
+      "http_version": "select"
+    },
+    "python": {
+      "function": "function",
+      "outputs": "json"
+    },
+    "assert": {
+      "checks": "checks",
+      "mode": "select"
+    },
+    "condition": {
+      "expr": "string"
+    },
+    "switch": {
+      "expr": "string",
+      "cases": "cases"
+    },
+    "loop": {
+      "over": "string",
+      "body": "string",
+      "mode": "select",
+      "max_concurrency": "number",
+      "on_error": "select",
+      "fresh_session": "boolean"
+    },
+    "flow": {
+      "flow": "string"
+    },
+    "set": {
+      "name": "string",
+      "value": "json"
+    },
+    "get": {
+      "name": "string"
+    },
+    "merge": {
+      "mode": "select",
+      "count": "number"
+    },
+    "counter": {
+      "count": "number"
+    },
+    "timeout": {
+      "seconds": "number"
+    },
+    "delay": {
+      "seconds": "templatable-number"
+    },
+    "log": {
+      "label": "string",
+      "level": "select"
+    },
+    "fixture": {
+      "file": "string",
+      "format": "select"
+    },
+    "note": {
+      "text": "text"
+    }
+  },
+  "nested": {
+    "StartPort": {
+      "name": "start-ports",
+      "type": "start-ports",
+      "default": "typed-template"
+    },
+    "EndPort": {
+      "name": "end-ports",
+      "required": "end-ports"
+    },
+    "RetryConfig": {
+      "max_attempts": "request-retry-json"
+    },
+    "StatusCheck": {
+      "kind": "checks",
+      "equals": "templatable-number"
+    },
+    "ExprCheck": {
+      "kind": "checks",
+      "expr": "checks",
+      "op": "checks",
+      "value": "checks"
+    },
+    "ResponseTimeCheck": {
+      "kind": "checks",
+      "under_ms": "templatable-number"
+    },
+    "SwitchCase": {
+      "name": "cases",
+      "equals": "cases"
+    }
+  }
+}

@@ -1,9 +1,9 @@
 """Request node + niquests adapter (S2/M4): FR-503 semantics against a
 local threaded HTTP server — non-2xx-is-data (EC13), transport errors on
 the error port, engine-level retry, defaults.request merge (FR-105/
-EC23), capture valves (FR-703/706), timing (FR-705), binary envelope
-(FR-207), max_seconds routing (FR-410/TR-8 request paths), native-value
-body round-trip (TR-10). No external network anywhere.
+EC23), full-fidelity prepared history (FR-1102/1103), timing (FR-705),
+binary envelope (FR-207), max_seconds routing (FR-410/TR-8 request paths),
+native-value body round-trip (TR-10). No external network anywhere.
 """
 
 import asyncio
@@ -19,7 +19,15 @@ from urllib.parse import parse_qsl, urlparse
 import pytest
 
 from napflow.core.engine import execute_flow
-from napflow.core.events import EventStream, SecretMasker
+from napflow.core.events import (
+    HISTORY_FEATURE_CONTENT_BLOBS,
+    EventStream,
+    JsonlSink,
+    SecretMasker,
+    resolve_record_content,
+)
+from napflow.core.history_content import RunContentStore
+from napflow.core.httpclient import HttpClient, TransportError, WireRequest
 from napflow.core.models.manifest import Manifest
 from test_engine import CaptureSink, end, events_of, flow, run, start
 
@@ -28,6 +36,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "napflow"
 
 class Handler(BaseHTTPRequestHandler):
     flaky_failures = 0  # /flaky: drop the connection this many times
+    redirect_target = None
 
     def log_message(self, *args):  # keep pytest output clean
         pass
@@ -39,6 +48,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+    def _redirect(self, location, *, cookie=None):
+        self.send_response(302)
+        self.send_header("Location", location)
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):  # noqa: N802 (http.server API)
         path = urlparse(self.path).path
@@ -54,6 +71,15 @@ class Handler(BaseHTTPRequestHandler):
                     "query": dict(parse_qsl(urlparse(self.path).query)),
                 },
             )
+        elif path == "/set-cookie":
+            self.send_response(200)
+            self.send_header("Set-Cookie", "sid=abc123; Path=/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif path == "/redirect":
+            self._redirect("/echo?redirected=yes", cookie="hop=redirected; Path=/")
+        elif path == "/redirect-fail" and Handler.redirect_target is not None:
+            self._redirect(Handler.redirect_target)
         elif path == "/slow":
             time.sleep(2)
             self._send(200, {"late": True})
@@ -66,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/bin":
             self._send(200, b"\x00\x01\xfe\xff", "application/octet-stream")
         elif path == "/big":
-            self._send(200, b"x" * 4096, "text/plain")
+            self._send(200, b"x" * 200_000, "text/plain")
         else:
             self._send(404, {"error": "no route"})
 
@@ -78,7 +104,13 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             body = raw.decode("utf-8", "replace")
         self._send(
-            201, {"received": body, "content_type": self.headers.get("Content-Type")}
+            201,
+            {
+                "received": body,
+                "content_type": self.headers.get("Content-Type"),
+                "headers": dict(self.headers),
+                "raw_base64": base64.b64encode(raw).decode("ascii"),
+            },
         )
 
 
@@ -117,6 +149,166 @@ def test_niquests_isolated_to_the_adapter():
         )
     ]
     assert offenders == []
+
+
+# --------------------------------------------------------------------------
+# Prepared-request adapter seam (FR-1103 / EC50 foundation)
+
+
+def test_adapter_captures_effective_prepared_request(server):
+    payload = {"user": {"id": 7}, "active": True}
+    prepared = []
+
+    async def scenario():
+        client = HttpClient()
+        try:
+            await client.request(
+                method="GET",
+                url=f"{server}/set-cookie",
+                timeout_s=2,
+                verify_tls=True,
+            )
+            return await client.request(
+                method="POST",
+                url=f"{server}/echo",
+                headers={"X-Napflow": "prepared"},
+                query={"term": "a b"},
+                body=payload,
+                timeout_s=2,
+                verify_tls=True,
+                on_prepared=prepared.append,
+            )
+        finally:
+            await client.close()
+
+    wire = asyncio.run(scenario())
+
+    assert len(prepared) == 1
+    request = prepared[0]
+    assert isinstance(request, WireRequest)
+    assert request == wire.request
+    assert request.method == "POST"
+    assert request.url == f"{server}/echo?term=a+b"
+    assert request.headers["X-Napflow"] == "prepared"
+    assert request.headers["Cookie"] == "sid=abc123"
+    assert request.headers["User-Agent"].startswith("niquests/")
+    assert request.headers["Accept-Encoding"]
+    assert request.headers["Accept"] == "*/*"
+    assert request.headers["Connection"] == "keep-alive"
+    assert request.headers["Content-Type"].startswith("application/json")
+    raw = base64.b64decode(request.body["base64"])
+    assert request.body["__binary__"] is True
+    assert request.body["content_type"] == request.headers["Content-Type"]
+    assert request.size_bytes == len(raw)
+    assert request.headers["Content-Length"] == str(len(raw))
+    assert raw == base64.b64decode(wire.body["raw_base64"])
+    assert json.loads(raw) == payload
+    assert wire.redirects_total == 0
+
+
+def test_adapter_distinguishes_no_body_from_explicit_empty_body(server):
+    async def scenario():
+        client = HttpClient()
+        absent = []
+        empty = []
+        try:
+            absent_wire = await client.request(
+                method="POST",
+                url=f"{server}/echo",
+                body=None,
+                timeout_s=2,
+                verify_tls=True,
+                on_prepared=absent.append,
+            )
+            empty_wire = await client.request(
+                method="POST",
+                url=f"{server}/echo",
+                body="",
+                timeout_s=2,
+                verify_tls=True,
+                on_prepared=empty.append,
+            )
+            return absent, empty, absent_wire, empty_wire
+        finally:
+            await client.close()
+
+    absent, empty, absent_wire, empty_wire = asyncio.run(scenario())
+
+    assert absent[0].body is None
+    assert absent[0].size_bytes == 0
+    assert absent_wire.request.body is None
+    assert empty[0].body == {
+        "__binary__": True,
+        "content_type": "application/octet-stream",
+        "base64": "",
+    }
+    assert empty[0].size_bytes == 0
+    assert empty_wire.request.body == empty[0].body
+    assert absent_wire.body["raw_base64"] == empty_wire.body["raw_base64"] == ""
+
+
+def test_adapter_captures_initial_and_final_redirect_requests(server):
+    prepared = []
+
+    async def scenario():
+        client = HttpClient()
+        try:
+            return await client.request(
+                method="GET",
+                url=f"{server}/redirect",
+                query={"source": "initial"},
+                timeout_s=2,
+                verify_tls=True,
+                on_prepared=prepared.append,
+            )
+        finally:
+            await client.close()
+
+    wire = asyncio.run(scenario())
+
+    assert len(prepared) == 1  # callback is engine-attempt scoped, not per hop
+    assert prepared[0].url == f"{server}/redirect?source=initial"
+    assert "Cookie" not in prepared[0].headers
+    assert wire.request.url == f"{server}/echo?redirected=yes"
+    assert wire.request.headers["Cookie"] == "hop=redirected"
+    assert wire.redirects_total == 1
+    assert wire.body["query"] == {"redirected": "yes"}
+
+
+def test_adapter_transport_error_carries_final_redirect_request(server):
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+    Handler.redirect_target = f"http://127.0.0.1:{dead_port}/final"
+    prepared = []
+
+    async def scenario():
+        client = HttpClient()
+        try:
+            with pytest.raises(TransportError) as excinfo:
+                await client.request(
+                    method="GET",
+                    url=f"{server}/redirect-fail",
+                    timeout_s=1,
+                    verify_tls=True,
+                    on_prepared=prepared.append,
+                )
+            return excinfo.value
+        finally:
+            await client.close()
+
+    try:
+        error = asyncio.run(scenario())
+    finally:
+        Handler.redirect_target = None
+
+    assert error.kind in {"connection", "timeout"}
+    assert len(prepared) == 1
+    assert prepared[0].url == f"{server}/redirect-fail"
+    assert error.request is not None
+    assert error.request.url == f"http://127.0.0.1:{dead_port}/final"
+    assert error.redirects_total == 1
 
 
 # --------------------------------------------------------------------------
@@ -314,59 +506,223 @@ def test_default_referencing_inputs_is_node_error(server):
 
 def test_binary_response_envelope(server):
     result, _ = run(request_flow({"url": f"{server}/bin"}))
-    body = result.end_outputs["resp"]["body"]
+    response = result.end_outputs["resp"]
+    body = response["body"]
     assert body["__binary__"] is True
     assert body["content_type"] == "application/octet-stream"
     assert base64.b64decode(body["base64"]) == b"\x00\x01\xfe\xff"
+    assert response["size_bytes"] == 4
 
 
-def test_body_capture_valve_truncates_event_not_port_value(server):
-    tiny = Manifest.model_validate(
-        {
-            "schema": "napflow/v1",
-            "defaults": {"run": {"body_capture_mb": 0.0001}},  # ~105 bytes
-        }
+def test_valid_binary_request_envelope_is_decoded_strictly(server):
+    body = {
+        "__binary__": True,
+        "content_type": "application/octet-stream",
+        "base64": base64.b64encode(b"\x00\x01\x02").decode("ascii"),
+    }
+    result, _ = run(
+        request_flow({"url": f"{server}/echo", "method": "POST", "body": body})
     )
-    result, records = run(request_flow({"url": f"{server}/big"}), mani=tiny)
+
     assert result.state == "passed"
-    assert result.end_outputs["resp"]["body"] == "x" * 4096  # port: full
-    captured = events_of(records, "request_finished")[0]["body"]
-    assert captured["__truncated__"] is True
-    assert captured["size_bytes"] == 4096
-    assert len(captured["prefix"]) < 4096
+    echoed = result.end_outputs["resp"]["body"]
+    assert echoed["received"] == "\x00\x01\x02"
+    assert echoed["content_type"] == "application/octet-stream"
 
 
-def test_run_capture_valve_and_warning(server):
-    tiny_run = Manifest.model_validate(
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            {"__binary__": True, "content_type": "application/octet-stream"},
+            "missing base64",
+        ),
+        (
+            {
+                "__binary__": True,
+                "content_type": "application/octet-stream",
+                "base64": "not base64!",
+            },
+            "canonical base64",
+        ),
+        (
+            {
+                "__binary__": True,
+                "content_type": "application/octet-stream",
+                "base64": "AA==",
+                "extra": True,
+            },
+            "unexpected extra",
+        ),
+        (
+            {"__binary__": True, "content_type": None, "base64": "AA=="},
+            "content_type must be a non-empty string",
+        ),
+    ],
+)
+def test_malformed_binary_request_envelope_routes_to_wired_error_once(
+    server, body, message
+):
+    f = request_flow(
         {
-            "schema": "napflow/v1",
-            "defaults": {"run": {"run_capture_mb": 0.005}},  # ~5.2 KB total
-        }
+            "url": f"{server}/echo",
+            "method": "POST",
+            "body": body,
+            "retry": {"max_attempts": 3},
+        },
+        wire_error_port=True,
     )
+
+    result, records = run(f)
+
+    assert result.state == "passed"
+    assert result.end_outputs["err"]["error_kind"] == "request_encoding"
+    assert message in result.end_outputs["err"]["message"]
+    failed = events_of(records, "request_failed")
+    assert len(failed) == 1
+    assert failed[0]["error_kind"] == "request_encoding"
+    assert failed[0]["will_retry"] is False
+    assert not events_of(records, "request_finished")
+
+
+def test_malformed_binary_request_envelope_unwired_is_node_failure(server):
+    body = {
+        "__binary__": True,
+        "content_type": "application/octet-stream",
+        "base64": "%%%",
+    }
+
+    result, records = run(
+        request_flow({"url": f"{server}/echo", "method": "POST", "body": body})
+    )
+
+    assert result.state == "failed"
+    assert result.unhandled_errors[0]["kind"] == "unhandled_error_port"
+    assert "request_encoding" in result.unhandled_errors[0]["message"]
+    assert events_of(records, "run_finished")[0]["state"] == "failed"
+
+
+@pytest.mark.parametrize("removed", ["body_capture_mb", "run_capture_mb"])
+def test_removed_destructive_capture_settings_are_rejected(removed):
+    with pytest.raises(ValueError, match=removed):
+        Manifest.model_validate(
+            {"schema": "napflow/v1", "defaults": {"run": {removed: 1}}}
+        )
+
+
+def test_large_response_is_stored_once_through_request_log_end_and_report(
+    server, tmp_path
+):
     f = flow(
         start(),
-        {"id": "one", "type": "request", "config": {"url": f"{server}/big"}},
-        {"id": "two", "type": "request", "config": {"url": f"{server}/big"}},
-        end({"name": "a", "required": False}, {"name": "b", "required": False}),
+        {"id": "req", "type": "request", "config": {"url": f"{server}/big"}},
+        {"id": "show", "type": "log", "config": {"label": "large"}},
+        end({"name": "response"}),
         edges=[
-            ("start.out", "one.trigger"),
-            ("one.response", "two.trigger"),
-            ("two.response", "end.b"),
+            ("start.out", "req.trigger"),
+            ("req.response", "show.in"),
+            ("show.out", "end.response"),
         ],
     )
-    result, records = run(f, mani=tiny_run)
+    log_path = tmp_path / "run.jsonl"
+    store = RunContentStore(log_path)
+    stream = EventStream(
+        "m4-run",
+        SecretMasker([], {}),
+        [JsonlSink(log_path)],
+        content_store=store,
+    )
+
+    result = asyncio.run(
+        execute_flow(
+            f,
+            flow_identity="flows/m4",
+            manifest=Manifest.model_validate({"schema": "napflow/v1"}),
+            env={},
+            env_name="dev",
+            inputs={},
+            stream=stream,
+            flow_dir=tmp_path,
+            workspace_root=tmp_path,
+        )
+    )
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
     assert result.state == "passed"
-    assert events_of(records, "capture_warning")
-    bodies = [e["body"] for e in events_of(records, "request_finished")]
-    assert bodies[0] == "x" * 4096  # first fits the run budget
-    assert bodies[1]["__truncated__"] is True  # second exceeds it
+    runtime_response = result.end_outputs["response"]
+    assert runtime_response["body"].encode() == b"x" * 200_000
+    assert runtime_response["size_bytes"] == 200_000
+
+    features = records[0]["features"]
+    assert features == [HISTORY_FEATURE_CONTENT_BLOBS]
+    started = events_of(records, "request_started")[0]
+    finished = events_of(records, "request_finished")[0]
+    logged = events_of(records, "log")[0]
+    ended = events_of(records, "run_finished")[0]
+    large_messages = [
+        record
+        for record in events_of(records, "message_emitted")
+        if record["from_port"] in {"req.response", "show.out"}
+    ]
+    reference = finished["response"]
+    assert reference["$napflow"]["kind"] == "blob"
+    assert logged["value"] == ended["end_outputs"]["response"] == reference
+    assert [record["value"] for record in large_messages] == [reference, reference]
+
+    request = started["request"]
+    assert request == finished["request"]
+    assert request["method"] == "GET"
+    assert request["url"] == f"{server}/big"
+    assert request["headers"]["User-Agent"].startswith("niquests/")
+    assert request["headers"]["Accept-Encoding"]
+    assert request["body"] is None
+    assert request["size_bytes"] == 0
+
+    resolved = resolve_record_content(finished, features, store)["response"]
+    assert resolved == runtime_response
+    assert resolved["body"].encode() == b"x" * 200_000
+    descriptor = reference["$napflow"]
+    blobs = list(store.blob_dir.iterdir())
+    assert len(blobs) == 1
+    assert blobs[0].name == descriptor["hash"].removeprefix("sha256:")
+    assert len(blobs[0].read_bytes()) == descriptor["bytes"]
+    assert "__truncated__" not in log_path.read_text(encoding="utf-8")
+    assert not events_of(records, "capture_warning")
+
+    from napflow.cli.report import write_report
+
+    report_path = write_report(
+        "json",
+        log_path,
+        "flows/m4",
+        result,
+        masker=SecretMasker([], {}),
+    )
+    assert report_path is not None
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["features"] == features
+    assert report["end_outputs"]["response"] == reference
+    assert (
+        resolve_record_content(
+            {"event": "run_finished", "end_outputs": report["end_outputs"]},
+            report["features"],
+            store,
+        )["end_outputs"]["response"]
+        == runtime_response
+    )
+    assert len(list(store.blob_dir.iterdir())) == 1
 
 
-def test_secret_masked_in_request_events(server):
+def test_request_history_is_raw_and_presentation_headers_are_redacted(server):
     f = request_flow(
         {"url": f"{server}/echo", "headers": {"Authorization": "Bearer sk-hidden-1"}}
     )
-    sink = CaptureSink()
+    raw = CaptureSink()
+    shown = CaptureSink()
     masker = SecretMasker(["*TOKEN*"], {"API_TOKEN": "sk-hidden-1"})
     result = asyncio.run(
         execute_flow(
@@ -376,12 +732,16 @@ def test_secret_masked_in_request_events(server):
             env={"API_TOKEN": "sk-hidden-1"},
             env_name="dev",
             inputs={},
-            stream=EventStream("r", masker, [sink]),
+            stream=EventStream("r", masker, [raw], presentation_sinks=[shown]),
         )
     )
     assert result.state == "passed"
-    started = events_of(sink.records, "request_started")[0]
-    assert started["headers"]["Authorization"] == "Bearer ***"  # born masked
+    started = events_of(raw.records, "request_started")[0]
+    presented = events_of(shown.records, "request_started")[0]
+    assert started["method"] == presented["method"] == "GET"
+    assert started["request"]["headers"]["Authorization"] == "Bearer sk-hidden-1"
+    assert presented["request"]["headers"]["Authorization"] == "Bearer ***"
+    assert "Authorization" in presented["request"]["headers"]
 
 
 # --------------------------------------------------------------------------

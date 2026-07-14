@@ -3,7 +3,34 @@ import { useState } from "react";
 import { useAppStore } from "../store";
 import { parseDefault } from "./PortEditor";
 
-type StartPort = { name: string; type?: string; default?: unknown };
+export type StartPort = { name: string; type?: string; default?: unknown };
+
+export function collectRunInputs(
+  startPorts: StartPort[],
+  cells: Record<string, string>,
+  edited: ReadonlySet<string>,
+): { inputs: Record<string, unknown>; invalid: Set<string> } {
+  const inputs: Record<string, unknown> = {};
+  const invalid = new Set<string>();
+  for (const port of startPorts) {
+    const text = cells[port.name] ?? "";
+    const wasEdited = edited.has(port.name);
+    // Only a truly untouched configured default is omitted, so the engine can
+    // evaluate it in BIND context. An edited blank is a real empty-string
+    // override for string/any ports, not a request to silently reuse default.
+    if (
+      port.default !== undefined &&
+      text === showValue(port.default)
+    ) {
+      continue;
+    }
+    if (!wasEdited && text === "" && port.default === undefined) continue;
+    const parsed = parseDefault(text, port.type ?? "any", false);
+    if (parsed.ok) inputs[port.name] = parsed.value;
+    else invalid.add(port.name);
+  }
+  return { inputs, invalid };
+}
 
 function showValue(value: unknown): string {
   if (value === undefined) return "";
@@ -36,6 +63,7 @@ export default function RunControls() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [cells, setCells] = useState<Record<string, string>>({});
   const [bad, setBad] = useState<Set<string>>(new Set());
+  const [edited, setEdited] = useState<Set<string>>(new Set());
 
   if (detail === null) return null;
   const startPorts = (
@@ -54,19 +82,12 @@ export default function RunControls() {
     for (const port of startPorts) prefill[port.name] = showValue(port.default);
     setCells(prefill);
     setBad(new Set());
+    setEdited(new Set());
     setPopoverOpen(true);
   };
 
   const launchWithInputs = () => {
-    const inputs: Record<string, unknown> = {};
-    const invalid = new Set<string>();
-    for (const port of startPorts) {
-      const text = cells[port.name] ?? "";
-      if (text === "" && port.default === undefined) continue; // gate decides
-      const parsed = parseDefault(text, port.type ?? "any");
-      if (parsed.ok) inputs[port.name] = parsed.value;
-      else invalid.add(port.name);
-    }
+    const { inputs, invalid } = collectRunInputs(startPorts, cells, edited);
     setBad(invalid);
     if (invalid.size === 0) launch(inputs);
   };
@@ -165,9 +186,10 @@ export default function RunControls() {
               <input
                 data-testid={`run-input-${port.name}`}
                 value={cells[port.name] ?? ""}
-                onChange={(e) =>
-                  setCells({ ...cells, [port.name]: e.target.value })
-                }
+                onChange={(e) => {
+                  setCells({ ...cells, [port.name]: e.target.value });
+                  setEdited((current) => new Set(current).add(port.name));
+                }}
                 style={{
                   flex: 1,
                   fontSize: 12,

@@ -51,6 +51,44 @@ def test_duplicate_key_rejected(tmp_path: Path) -> None:
         load_flow(bad)
 
 
+@pytest.mark.parametrize(
+    "flow_value",
+    ["&flow_metadata\n  name: t", "*flow_metadata"],
+    ids=["anchor", "alias"],
+)
+def test_yaml_anchors_and_aliases_are_rejected_with_position(
+    tmp_path: Path, flow_value: str
+) -> None:
+    bad = tmp_path / "flow.yaml"
+    bad.write_text(
+        f"schema: napflow/v1\nflow: {flow_value}\nnodes: []\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LoadError, match="anchors and aliases are not supported") as exc:
+        load_flow(bad)
+
+    (diag,) = exc.value.diagnostics
+    assert diag.kind == "parse"
+    assert diag.line == 2
+
+
+def test_anchor_like_characters_inside_strings_are_data(tmp_path: Path) -> None:
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(
+        "schema: napflow/v1\n"
+        "flow:\n"
+        "  name: t\n"
+        '  description: "literal &anchor and *alias text"\n'
+        "nodes: []\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_flow(flow)
+
+    assert loaded.model.flow.description == "literal &anchor and *alias text"
+
+
 def test_validation_error_points_at_file_line(tmp_path: Path) -> None:
     bad = tmp_path / "flow.yaml"
     bad.write_text(

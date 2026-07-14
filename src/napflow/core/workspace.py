@@ -15,7 +15,9 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
+import napflow
 from napflow.core.loader import LoadedFlow, LoadedManifest, load_flow, load_manifest
 
 MANIFEST_NAME = "napflow.yaml"
@@ -23,12 +25,209 @@ ENVS_DIR = "envs"
 FLOW_FILE = "flow.yaml"
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_WINDOWS_DRIVE_SEGMENT_RE = re.compile(r"^[A-Za-z]:")
+_RUN_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+
+SourceFilename = Literal["flow.yaml", "nodes.py"]
 
 
 class WorkspaceNotFoundError(Exception):
     def __init__(self, start: Path):
         self.start = start
         super().__init__(f"no {MANIFEST_NAME} found in {start} or any parent directory")
+
+
+class WorkspaceBoundaryError(ValueError):
+    """A user- or workspace-supplied path crossed the selected workspace.
+
+    ``reason`` is the stable preparation/API vocabulary required by D37.
+    Missing files are deliberately not boundary errors: callers retain their
+    existing not-found/E008 behavior after a safe path has been resolved.
+    """
+
+    reason = "workspace_boundary"
+
+    def __init__(self, message: str):
+        self.reason = type(self).reason
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class WorkspaceResolver:
+    """The sole identity-to-path authority for one selected workspace.
+
+    Identities are POSIX-style on every platform. Resolution is lexical first,
+    then symlink-aware: the final candidate (including a missing destination's
+    existing parents) is resolved and must remain beneath the canonical root.
+    """
+
+    root: Path
+    flows_root_identity: str = "flows"
+    flows_root: Path = field(init=False)
+    flows_root_resolved: Path = field(init=False)
+    runs_root: Path = field(init=False)
+
+    def __post_init__(self) -> None:
+        try:
+            root = self.root.resolve(strict=False)
+        except (OSError, RuntimeError) as e:
+            raise WorkspaceBoundaryError(
+                f"cannot resolve workspace root {self.root!s}: {e}"
+            ) from e
+        object.__setattr__(self, "root", root)
+        flows_identity = self.normalize_identity(
+            self.flows_root_identity, label="flows.root"
+        )
+        object.__setattr__(self, "flows_root_identity", flows_identity)
+        object.__setattr__(
+            self, "flows_root", self.root.joinpath(*flows_identity.split("/"))
+        )
+        object.__setattr__(
+            self,
+            "flows_root_resolved",
+            self._resolve_normalized(flows_identity, label="flows.root"),
+        )
+        object.__setattr__(
+            self,
+            "runs_root",
+            self._resolve_normalized(".napflow/runs", label="run-history root"),
+        )
+
+    def normalize_identity(self, value: str, *, label: str = "flow identity") -> str:
+        """Validate and return one canonical relative POSIX identity.
+
+        URL-reserved filename characters remain legal (spaces, ``#``, ``%``,
+        ``?``); the browser transport encodes them per segment. Backslashes and
+        Windows drive syntax are rejected even on POSIX so the boundary does
+        not depend on the host running the check.
+        """
+        if not isinstance(value, str) or not value:
+            raise WorkspaceBoundaryError(f"{label} must be a non-empty string")
+        if value.startswith("/"):
+            raise WorkspaceBoundaryError(f"{label} must be workspace-relative")
+        if "\\" in value:
+            raise WorkspaceBoundaryError(
+                f"{label} must use POSIX '/' separators, not backslashes"
+            )
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise WorkspaceBoundaryError(f"{label} contains a control character")
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            raise WorkspaceBoundaryError(
+                f"{label} contains an invalid Unicode surrogate"
+            )
+
+        parts = value.split("/")
+        if any(part == "" for part in parts):
+            raise WorkspaceBoundaryError(f"{label} contains an empty path segment")
+        if any(part in {".", ".."} for part in parts):
+            raise WorkspaceBoundaryError(
+                f"{label} contains a forbidden '.' or '..' path segment"
+            )
+        if any(_WINDOWS_DRIVE_SEGMENT_RE.match(part) for part in parts):
+            raise WorkspaceBoundaryError(f"{label} contains Windows drive syntax")
+        return "/".join(parts)
+
+    def _resolve_normalized(self, value: str, *, label: str) -> Path:
+        candidate = self.root.joinpath(*value.split("/"))
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError) as e:
+            raise WorkspaceBoundaryError(
+                f"cannot resolve {label} {value!r}: {e}"
+            ) from e
+        if not resolved.is_relative_to(self.root):
+            raise WorkspaceBoundaryError(
+                f"{label} {value!r} resolves outside workspace {self.root}"
+            )
+        return resolved
+
+    def resolve_workspace_path(
+        self, value: str, *, label: str = "workspace path"
+    ) -> Path:
+        normalized = self.normalize_identity(value, label=label)
+        return self._resolve_normalized(normalized, label=label)
+
+    def flow_dir(self, identity: str) -> Path:
+        return self.resolve_workspace_path(identity, label="flow identity")
+
+    def flow_file(self, identity: str) -> Path:
+        return self.source_file(identity, FLOW_FILE)
+
+    def source_file(self, identity: str, filename: SourceFilename) -> Path:
+        if filename not in {FLOW_FILE, "nodes.py"}:
+            raise WorkspaceBoundaryError(
+                f"unsupported flow source filename {filename!r}"
+            )
+        normalized = self.normalize_identity(identity, label="flow identity")
+        flow_dir = self._resolve_normalized(normalized, label="flow identity")
+        source = self._resolve_normalized(
+            f"{normalized}/{filename}", label="flow source"
+        )
+        expected = flow_dir / filename
+        if source != expected:
+            raise WorkspaceBoundaryError(
+                f"flow source {normalized + '/' + filename!r} resolves outside "
+                f"its canonical source path {expected}"
+            )
+        return source
+
+    def fixture_file(self, value: str) -> Path:
+        return self.resolve_workspace_path(value, label="fixture path")
+
+    def runs_dir(self, identity: str) -> Path:
+        normalized = self.normalize_identity(identity, label="flow identity")
+        resolved = self._resolve_normalized(
+            f".napflow/runs/{normalized}", label="run-history directory"
+        )
+        if not resolved.is_relative_to(self.runs_root):
+            raise WorkspaceBoundaryError(
+                f"run-history directory for {identity!r} resolves outside "
+                f"{self.runs_root}"
+            )
+        return resolved
+
+    def validate_run_id(self, run_id: str) -> str:
+        if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
+            raise WorkspaceBoundaryError(
+                "run id must match YYYYmmdd-HHMMSS-xxxxxx (lowercase hex)"
+            )
+        return run_id
+
+    def run_log(self, identity: str, run_id: str) -> Path:
+        validated = self.validate_run_id(run_id)
+        runs = self.runs_dir(identity)
+        try:
+            resolved = (runs / f"{validated}.jsonl").resolve(strict=False)
+        except (OSError, RuntimeError) as e:
+            raise WorkspaceBoundaryError(
+                f"cannot resolve run log {validated!r}: {e}"
+            ) from e
+        expected = runs / f"{validated}.jsonl"
+        if resolved != expected:
+            raise WorkspaceBoundaryError(
+                f"run log {validated!r} resolves outside its canonical path {expected}"
+            )
+        return resolved
+
+    def clone_source(self, identity: str) -> Path:
+        return self.flow_dir(identity)
+
+    def clone_destination(self, identity: str) -> Path:
+        normalized = self.normalize_identity(identity, label="clone destination")
+        if normalized != self.flows_root_identity and not normalized.startswith(
+            f"{self.flows_root_identity}/"
+        ):
+            raise WorkspaceBoundaryError(
+                f"clone destination {identity!r} must be lexically under "
+                f"{self.flows_root_identity!r}"
+            )
+        destination = self.flow_dir(normalized)
+        if not destination.is_relative_to(self.flows_root_resolved):
+            raise WorkspaceBoundaryError(
+                f"clone destination {identity!r} must be under "
+                f"{self.flows_root_identity!r}"
+            )
+        return destination
 
 
 class EnvFileError(Exception):
@@ -68,10 +267,16 @@ class FlowRef:
 class Workspace:
     root: Path  # the directory containing napflow.yaml
     manifest: LoadedManifest = field(repr=False)
+    resolver: WorkspaceResolver = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        resolver = WorkspaceResolver(self.root, self.manifest.model.flows.root)
+        object.__setattr__(self, "root", resolver.root)
+        object.__setattr__(self, "resolver", resolver)
 
     @property
     def flows_root(self) -> Path:
-        return self.root / self.manifest.model.flows.root
+        return self.resolver.flows_root
 
     def discover_flows(self) -> list[FlowRef]:
         """Every directory under flows.root containing a flow.yaml,
@@ -79,16 +284,68 @@ class Workspace:
         refs = []
         if self.flows_root.is_dir():
             for file in self.flows_root.rglob(FLOW_FILE):
-                if not file.is_file():
-                    continue
                 directory = file.parent
                 identity = directory.relative_to(self.root).as_posix()
-                refs.append(FlowRef(identity=identity, directory=directory, file=file))
+                try:
+                    safe_file = self.resolver.flow_file(identity)
+                    safe_directory = self.resolver.flow_dir(identity)
+                except WorkspaceBoundaryError:
+                    # Discovery must never read an escaping symlink. An explicit
+                    # entry/reference to it reports the stable boundary error.
+                    continue
+                if not safe_file.is_file():
+                    continue
+                refs.append(
+                    FlowRef(
+                        identity=identity,
+                        directory=safe_directory,
+                        file=safe_file,
+                    )
+                )
         return sorted(refs, key=lambda ref: ref.identity)
+
+    def discover(self) -> tuple["napflow.core.api.Flow", ...]:
+        """Fresh runnable-flow discovery for the public embedding API.
+
+        The workspace is reusable source/configuration, not a cached runtime
+        session.  Each call observes the filesystem again and returns immutable
+        handles that bind only this workspace and an exact identity (D38).
+        """
+        from napflow.core.api import Flow
+
+        return tuple(Flow(self, ref.identity) for ref in self.discover_flows())
+
+    def flow(self, identity: str) -> "napflow.core.api.Flow":
+        """Bind an exact workspace-relative flow identity.
+
+        Loading and checking deliberately remain per-run, so a reusable handle
+        observes edits made after it was created.  Lookup only establishes that
+        the exact canonical ``flow.yaml`` exists now; names are never normalized
+        beyond the workspace's platform-independent identity grammar.
+        """
+        from napflow.core.api import Flow
+
+        normalized = self.resolver.normalize_identity(identity)
+        file = self.resolver.flow_file(normalized)
+        if not file.is_file():
+            raise KeyError(f"no flow at {normalized!r}")
+        return Flow(self, normalized)
+
+    @property
+    def flows(self) -> "napflow.core.api.FlowCatalog":
+        """Dynamic nested catalog below the configured ``flows.root``.
+
+        Catalog access performs fresh discovery.  Attribute access is only an
+        ergonomic view for exact identifier-safe segments; bracket and
+        :meth:`flow` lookup retain every legal identity without normalization.
+        """
+        from napflow.core.api import FlowCatalog
+
+        return FlowCatalog(self)
 
     def load_flow(self, identity: str) -> LoadedFlow:
         """Load a flow by its workspace-relative identity."""
-        return load_flow(self.root / Path(identity) / FLOW_FILE)
+        return load_flow(self.resolver.flow_file(identity))
 
     def env_profiles(self) -> dict[str, Path]:
         """Profile name (filename stem) → file path, sorted by name

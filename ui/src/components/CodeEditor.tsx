@@ -1,11 +1,17 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 
 import {
   ConflictError,
   fetchCode,
   putCode,
+  type SavedCode,
   type SyntaxError_,
 } from "../api";
+import {
+  persistenceRegistry,
+  SaveCoordinator,
+  type SavePhase,
+} from "../persistence";
 
 // Whole-file nodes.py editor (owner fork 2026-07-06) over PUT
 // /api/code/* with etag concurrency. Debounced autosave like the
@@ -27,59 +33,71 @@ export default function CodeEditor({
 }) {
   const [code, setCode] = useState<string | null>(null);
   const [syntaxError, setSyntaxError] = useState<SyntaxError_ | null>(null);
-  const [state, setState] = useState<"clean" | "dirty" | "saving" | "conflict">(
-    "clean",
+  const [state, setState] = useState<SavePhase>("clean");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const coordinator = useMemo(
+    () =>
+      new SaveCoordinator<string, SavedCode>({
+        debounceMs: AUTOSAVE_MS,
+        save: (value, baseEtag, force) =>
+          putCode(identity, value, baseEtag, force),
+        etag: (saved) => saved.etag,
+        classifyError: (error) =>
+          error instanceof ConflictError ? "conflict" : "error",
+        onSaved: (saved, { latest }) => {
+          if (latest) setSyntaxError(saved.syntax_error);
+        },
+      }),
+    [identity],
   );
-  const etag = useRef<string | null>(null);
-  const latest = useRef<string>("");
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () =>
+      coordinator.subscribe(({ phase, error }) => {
+        setState(phase);
+        setSaveError(
+          phase === "error"
+            ? error instanceof Error
+              ? error.message
+              : String(error)
+            : null,
+        );
+      }),
+    [coordinator],
+  );
+
+  useEffect(() => persistenceRegistry.register(coordinator), [coordinator]);
 
   useEffect(() => {
+    let current = true;
+    setCode(null);
     void fetchCode(identity).then((file) => {
-      etag.current = file.etag;
-      latest.current = file.code;
+      if (!current) return;
+      coordinator.reset(file.etag);
       setCode(file.code);
       setSyntaxError(file.syntax_error);
     });
     return () => {
-      if (timer.current !== null) clearTimeout(timer.current);
+      current = false;
     };
-  }, [identity]);
-
-  const save = useCallback(
-    async (force = false) => {
-      setState("saving");
-      try {
-        const saved = await putCode(identity, latest.current, etag.current, force);
-        etag.current = saved.etag;
-        setSyntaxError(saved.syntax_error);
-        setState("clean");
-      } catch (e) {
-        if (e instanceof ConflictError) {
-          setState("conflict");
-        } else {
-          setState("dirty"); // transient — retry on next edit
-        }
-      }
-    },
-    [identity],
-  );
+  }, [coordinator, identity]);
 
   const onEdit = (value: string) => {
-    latest.current = value;
     setCode(value);
-    setState("dirty");
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void save(), AUTOSAVE_MS);
+    coordinator.edit(value);
   };
 
   const reload = async () => {
+    const revision = coordinator.state.revision;
     const file = await fetchCode(identity);
-    etag.current = file.etag;
-    latest.current = file.code;
+    if (coordinator.state.revision !== revision) return;
+    coordinator.reset(file.etag);
     setCode(file.code);
     setSyntaxError(file.syntax_error);
-    setState("clean");
+  };
+
+  const close = async () => {
+    if (await coordinator.flush()) onClose();
   };
 
   return (
@@ -121,11 +139,15 @@ export default function CodeEditor({
             </button>
             <button
               data-testid="code-conflict-overwrite"
-              onClick={() => void save(true)}
+              onClick={() => void coordinator.overwrite()}
               style={{ cursor: "pointer", fontFamily: "inherit" }}
             >
               overwrite
             </button>
+          </span>
+        ) : state === "error" ? (
+          <span data-testid="code-save-error" style={{ fontSize: 12, color: "#c62828" }}>
+            save failed: {saveError ?? "unknown error"}
           </span>
         ) : (
           <span
@@ -144,7 +166,7 @@ export default function CodeEditor({
         <span style={{ flex: 1 }} />
         <button
           data-testid="code-close"
-          onClick={onClose}
+          onClick={() => void close()}
           style={{ cursor: "pointer", fontFamily: "inherit" }}
         >
           close

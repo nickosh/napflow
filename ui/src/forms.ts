@@ -8,6 +8,8 @@ export type FieldKind =
   | "text" // multiline text
   | "number"
   | "boolean"
+  | "templatable-number" // native number or a Jinja template string
+  | "templatable-boolean" // native bool or a Jinja template string
   | "select"
   | "json" // any JSON value, edited as text
   | "function" // python function name — options come from detail.functions
@@ -23,6 +25,29 @@ export type FieldDescriptor = {
   help?: string;
 };
 
+/** Parse a text control backed by TemplatableNumber. Numeric text stays
+ * native in YAML; every other non-empty value stays a string for Jinja. */
+export function parseTemplatableNumber(
+  text: string,
+): number | string | undefined {
+  if (text === "") return undefined;
+  const trimmed = text.trim();
+  return trimmed !== "" && Number.isFinite(Number(trimmed))
+    ? Number(trimmed)
+    : text;
+}
+
+/** Parse a text control backed by TemplatableBool. The literal choices stay
+ * native in YAML while templates remain editable as strings. */
+export function parseTemplatableBoolean(
+  text: string,
+): boolean | string | undefined {
+  if (text === "") return undefined;
+  if (text === "true") return true;
+  if (text === "false") return false;
+  return text;
+}
+
 export const CONFIG_FORMS: Record<string, FieldDescriptor[]> = {
   request: [
     { key: "method", label: "method", kind: "string", placeholder: "GET" },
@@ -30,8 +55,18 @@ export const CONFIG_FORMS: Record<string, FieldDescriptor[]> = {
     { key: "headers", label: "headers", kind: "json", placeholder: '{"X-Token": "{{ env.TOKEN }}"}' },
     { key: "query", label: "query", kind: "json", placeholder: '{"page": 1}' },
     { key: "body", label: "body", kind: "json" },
-    { key: "timeout_s", label: "timeout_s", kind: "number" },
-    { key: "verify_tls", label: "verify_tls", kind: "boolean" },
+    {
+      key: "timeout_s",
+      label: "timeout_s",
+      kind: "templatable-number",
+      placeholder: "30 or {{ env.REQUEST_TIMEOUT }}",
+    },
+    {
+      key: "verify_tls",
+      label: "verify_tls",
+      kind: "templatable-boolean",
+      placeholder: "true, false, or {{ env.VERIFY_TLS }}",
+    },
     { key: "retry", label: "retry", kind: "json", placeholder: '{"max_attempts": 3}' },
     { key: "http_version", label: "http_version", kind: "select", options: ["", "1.1", "2", "3"] },
   ],
@@ -68,7 +103,14 @@ export const CONFIG_FORMS: Record<string, FieldDescriptor[]> = {
   ],
   counter: [{ key: "count", label: "count", kind: "number" }],
   timeout: [{ key: "seconds", label: "seconds", kind: "number" }],
-  delay: [{ key: "seconds", label: "seconds", kind: "number" }],
+  delay: [
+    {
+      key: "seconds",
+      label: "seconds",
+      kind: "templatable-number",
+      placeholder: "1 or {{ inputs.wait_s }}",
+    },
+  ],
   log: [
     { key: "label", label: "label", kind: "string" },
     {
@@ -84,6 +126,38 @@ export const CONFIG_FORMS: Record<string, FieldDescriptor[]> = {
   ],
   note: [{ key: "text", label: "text", kind: "text" }],
 };
+
+/** Cross-language schema coverage markers. `form-coverage.json` is checked
+ * against Pydantic by pytest and against these implemented UI paths by
+ * Vitest, so adding a schema field cannot silently omit its editor policy. */
+export const NODE_FIELD_COVERAGE = {
+  id: "canvas",
+  type: "palette",
+  config: "type-form",
+  max_seconds: "node-number",
+} as const;
+
+export const DEDICATED_FORM_COVERAGE = {
+  StartPort: {
+    name: "start-ports",
+    type: "start-ports",
+    default: "typed-template",
+  },
+  EndPort: { name: "end-ports", required: "end-ports" },
+  RetryConfig: { max_attempts: "request-retry-json" },
+  StatusCheck: { kind: "checks", equals: "templatable-number" },
+  ExprCheck: {
+    kind: "checks",
+    expr: "checks",
+    op: "checks",
+    value: "checks",
+  },
+  ResponseTimeCheck: {
+    kind: "checks",
+    under_ms: "templatable-number",
+  },
+  SwitchCase: { name: "cases", equals: "cases" },
+} as const;
 
 /** dataTransfer key for palette→canvas drags (drag-from-palette). */
 export const PALETTE_DRAG_TYPE = "application/x-napflow-node-type";
