@@ -4,6 +4,15 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-15 — macOS release-gate browser fix
+
+- Reproduced dry-run #29348197790: a click-added Switch stayed below the fitted
+  viewport under the flow list; its serial retry then obscured the root failure.
+- Fixed click-add to retain collision-free placement and refit after measurement;
+  strengthened drag/readiness assertions and retained Playwright failure artifacts.
+- Verified: typecheck/build, 76 Vitest, 43 Playwright, and 20 repeated failure-path
+  cases pass locally; next push the branch, pass PR CI, and rerun the dry-run.
+
 ## 2026-07-14 — v0.2 M7 release candidate prepared
 
 - Done: prepared exact `0.2.0` metadata, changelog, compatibility notes, and

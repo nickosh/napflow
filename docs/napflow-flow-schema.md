@@ -278,7 +278,10 @@ Vitest, so a new field must gain a visual path or an explicit classification.
   node's `type` and generates its stable `id`. Every node `config` field in the
   v1 catalog has a dedicated control, structured row/port editor, or JSON cell.
   Nested request retry fields remain authorable through the request's JSON
-  cell; no node config key is silently YAML-only.
+  cell; no node config key is silently YAML-only. A palette click retains the
+  collision-free below-graph placement and refits after the new node is
+  measured, so the node is immediately reachable in the current canvas;
+  drag-from-palette retains exact drop-point placement.
 - `max_seconds` is shown for every node, including Start/End and instant nodes,
   and is saved at node level (beside `id`/`type`/`config`), never inside config.
 - Templatable number/boolean controls accept either a native value or Jinja

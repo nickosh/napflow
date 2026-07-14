@@ -89,6 +89,15 @@ jobs:
       - name: Playwright e2e
         run: npm run e2e
         working-directory: ui
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-${{ matrix.os }}
+          path: |
+            ui/playwright-report
+            ui/test-results
+          if-no-files-found: ignore
 
   # Called by release.yml on tags so the exact PR-quality workflow is the
   # publication gate. Development checkpoints may pass ordinary CI but can

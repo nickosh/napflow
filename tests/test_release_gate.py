@@ -118,6 +118,16 @@ def test_ci_workflow_is_the_reusable_product_gate() -> None:
         if step.get("name") == "Installed release-artifact smoke"
     )
     assert smoke_step["if"] == "runner.os == 'Linux'"
+    diagnostics_step = next(
+        step
+        for step in ui["steps"]
+        if step.get("name") == "Upload Playwright diagnostics"
+    )
+    assert diagnostics_step["if"] == "failure()"
+    assert diagnostics_step["uses"] == "actions/upload-artifact@v7"
+    assert diagnostics_step["with"]["name"] == "playwright-${{ matrix.os }}"
+    assert diagnostics_step["with"]["if-no-files-found"] == "ignore"
+    assert "ui/test-results" in diagnostics_step["with"]["path"]
 
     version_job = workflow["jobs"]["release-version"]
     assert version_job["if"] == "github.ref_type == 'tag'"
