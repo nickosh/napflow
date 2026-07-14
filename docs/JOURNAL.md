@@ -4,6 +4,16 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-15 — v0.2.0 release-memory closeout
+
+- Done: PR #2 and release dispatch #29352493848 passed the full three-OS gate;
+  uploaded wheel/sdist names and metadata are exact `0.2.0`.
+- Closed: TR-22 and EC55 remote evidence; public status, plan, decisions,
+  requirements, release process, edge ledger, and changelog reconciled.
+- Unchanged: behavior/schema specs and compatibility notes remain accurate.
+- Next: merge this docs-only closeout, rerun the dry-run on exact `main`, then
+  create and push `v0.2.0`; verify PyPI install and GitHub Release artifacts.
+
 ## 2026-07-15 — macOS release-gate browser fix
 
 - Reproduced dry-run #29348197790: a click-added Switch stayed below the fitted

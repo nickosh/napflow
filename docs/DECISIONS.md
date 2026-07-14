@@ -828,9 +828,11 @@ schema/UI coverage, and audited frontend notices. M7's focused release gate is
 implemented: one reusable workflow now gates PRs and tags with the existing
 three-OS Python/UI paths, Vitest, notices, the installed-artifact smoke, and
 tested exact tag/development-version refusal. v0.2's concrete compatibility notes are
-inserted into the generated release notes. The remaining promotion actions are
-the prepared-commit dry-run, merge, and exact `v0.2.0` tag—not another product
-or hardening matrix.
+inserted into the generated release notes. PR #2 and non-publishing release
+dispatch #29352493848 then passed the full three-OS gate on the prepared
+`0.2.0` tree; its uploaded wheel and sdist both carry exact `0.2.0` metadata.
+The remaining promotion action is the exact `v0.2.0` tag after release-memory
+closeout—not another product or hardening matrix.
 
 ## D40 — Distribution supports release-built artifacts, not arbitrary Git/source installs
 

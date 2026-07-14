@@ -176,16 +176,15 @@ either were the accepted v0.2 design.
 3. Remaining nodes (python + worker subprocess, merge, guards, loop,
    flow, set/get, switch, delay, log, fixture, note)
 4. server/ + UI canvas (last)
-5. **Current: v0.2 usable full-fidelity prototype**, sequenced only
+5. **v0.2 usable full-fidelity prototype**, sequenced only
    by `docs/PLAN.md` M0–M7: regression/format baseline → workspace and
    durable saves → lifecycle/worker → bounded execution/history →
    full-fidelity blobs/prepared requests → basic paged/lazy replay →
    public Workspace/Flow catalog, packaging, and UI contracts → focused
    release gate. M0/M1 completed 2026-07-12 and M2/M3/M4/M5/M6 completed
    2026-07-13. M7's reusable gate, exact version contract, compatibility
-   notes, and local release preparation are implemented; the fresh remote
-   PR/release dry-run, merge, and exact `v0.2.0` tag remain the promotion
-   boundary.
+   notes, remote three-OS gate, and prepared-artifact dry-run are complete;
+   the exact `v0.2.0` tag is the immutable promotion boundary.
    Timeline playback, 100k-event replay performance, run bundles, and
    security-grade history are future work (D39).
 

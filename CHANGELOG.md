@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(ui)* Stabilize macOS canvas interactions
 - *(ci)* Resolve Windows portability failures
 - *(v0.2)* Close M0 audit findings
 
@@ -34,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 
+- *(release)* Prepare v0.2.0
 - *(release)* Add reusable v0.2 gate
 - *(agents)* Add project closeout skill
 - *(v0.2)* Cover M0 replay and harness edges

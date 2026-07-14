@@ -3,7 +3,8 @@
 Status: adopted 2026-07-05 (S1 closeout); experimental-v0.x policy
 amended 2026-07-11 (D33); PyPI trusted publishing + dry-run path added
 2026-07-11; reusable PR/tag gate, artifact refusal, and version-specific
-compatibility notes added 2026-07-14.
+compatibility notes added 2026-07-14; first complete v0.2.0 prepared-artifact
+dry-run verified 2026-07-15.
 
 ## Versioning
 
@@ -43,6 +44,11 @@ Single source of truth: `version` in `pyproject.toml`
   lockfile/changelog, and run the manual release dry-run on that exact commit
   before merging/tagging. The dry-run artifact metadata must already say
   `0.2.0`; a `v0.2.0` tag against the old `0.1.0` metadata is refused.
+  Dispatch #29352493848 passed this gate on the prepared implementation at
+  `de8f40f` and uploaded exact `0.2.0` wheel/sdist artifacts. Because the final
+  release-memory closeout is intentionally included in the sdist, rerun the
+  non-publishing dispatch once on the merged closeout commit immediately before
+  applying the tag.
 
 ## Release flow (automated — `.github/workflows/release.yml`)
 

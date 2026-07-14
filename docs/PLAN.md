@@ -799,11 +799,14 @@ audited notice is present in both sdist and wheel.
 - [ ] Promote the exact prepared release: land the `0.2.0` metadata,
       generated changelog, and compatibility notes; observe the reusable PR
       gate and non-publishing release dry-run on that commit; merge, then tag
-      the resulting `main` commit `v0.2.0`. The first post-merge dispatch
-      (#29348197790) stopped before build/artifact upload on a macOS browser
-      failure; EC55 fixes the reproduced viewport cause locally, but fresh PR
-      CI and a fully green dispatch with inspected `0.2.0` artifacts remain
-      required.
+      the resulting `main` commit `v0.2.0`. Metadata, notes, and changelog landed
+      through PR #1; EC55 landed through green PR #2. Non-publishing dispatch
+      #29352493848 then passed every reusable gate job on `main` at `de8f40f`,
+      including the formerly failing macOS browser path, exact artifact smoke,
+      and upload. Inspection confirmed `napflow-0.2.0` wheel/sdist names and
+      metadata. After this release-memory closeout merges, run the final
+      non-publishing dispatch against that exact `main` commit, then tag it;
+      the checkbox remains open until `v0.2.0` exists.
 
 v0.2 DoD: every requirement still assigned to v0.2 is green; no
 v0.2-targeted correctness case remains merely documented; deferred product,
