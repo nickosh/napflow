@@ -488,8 +488,7 @@ def test_parallel_loop_abort_keeps_only_active_frames_and_replays_abort(tmp_path
                 active_frames = {
                     item["frame"]
                     for item in self.records
-                    if item["event"] == "node_fired"
-                    and item.get("node") == "pause"
+                    if item["event"] == "node_fired" and item.get("node") == "pause"
                 }
                 if len(active_frames) == concurrency:
                     reached.set()

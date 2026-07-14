@@ -1,15 +1,13 @@
 """v0.2 audit probes (PLAN M0) — one test per confirmed critical/high
 finding from the first-working-version review (TR-11–22, EC42–EC51).
 
-Each unresolved backend-reproducible finding is an `xfail(strict=True)`
-test that asserts the CORRECT, post-fix behavior. When its owning milestone
-lands, the marker is removed and the test becomes an ordinary regression;
-M1's workspace-boundary probe is the first converted case.
-
-Findings owned by later milestones without a clean test at this layer remain
-explicit `skip`s near the bottom. M1's frontend persistence cases moved to
-real Playwright coverage plus pure coordinator tests, so they no longer sit
-in this placeholder ledger.
+The original M0 probes asserted the correct post-fix behavior behind strict
+xfails. M1--M6 converted every v0.2-owned backend probe into an ordinary
+regression; the sole conditional skip is the symlink case on platforms or
+privilege levels that cannot create one. Cross-surface findings moved to their
+real Playwright, coordinator, artifact, and release-workflow tests instead of
+remaining placeholders here. Explicit post-v0.2 limitations live in the edge
+case and requirements ledgers, not as artificial skips in this module.
 """
 
 import asyncio
@@ -367,7 +365,7 @@ def test_retention_keeps_newest_within_same_second(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Routed to a later milestone (M0 DoD: explicit owner in lieu of a test)
+# Additional regressions promoted from M0's original cross-surface ledger
 
 
 def test_entry_flow_boundary_matrix(tmp_path):
@@ -579,9 +577,9 @@ def test_blob_marker_shaped_user_payload_round_trips_as_literal(tmp_path):
 
 
 # TR-11/FR-1113's clean release-sdist -> wheel -> installed `napf ui`
-# subprocess check lives in tools/smoke_release_artifact.py. It is explicit
-# release-gate work rather than an ordinary pytest because it creates an
-# isolated environment and installs dependencies.
+# subprocess check lives in tools/smoke_release_artifact.py because it creates
+# an isolated environment and installs dependencies. tests/test_release_gate.py
+# pins that smoke into both the reusable PR gate and the exact release build.
 
 
 # TR-20 immediate navigation, editor close, unload prompt, and overlapping

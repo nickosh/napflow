@@ -4,6 +4,17 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-14 — v0.2 M7 reusable release-gate start
+
+- Done: CI is reusable by the tag workflow; Vitest/notices/artifact smoke and
+  tested exact tag/final-version refusal now gate publishing; dispatch stays dry.
+- Hardened: the direct wheel must byte-match the no-Node sdist rebuild; cleared
+  three inherited formatter failures exposed by the authoritative gate.
+- Verified: 593 pytest, 76 Vitest, 43 Playwright; format, Ruff, import contracts,
+  production build, notice audit, and isolated installed-artifact smoke pass.
+- Next: push this gate slice, observe PR + release dry-run gates, then finish
+  v0.2 compatibility notes/spec audit and separate version/tag preparation.
+
 ## 2026-07-13 — v0.2 M6 public/package/UI contracts complete
 
 - Done: reusable Workspace/Flow and functional APIs share isolated execution;

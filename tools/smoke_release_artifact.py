@@ -80,6 +80,21 @@ def _resolve_sdist(candidate: Path) -> Path:
     return matches[0]
 
 
+def _resolve_published_wheel(candidate: Path) -> Path | None:
+    """Return the direct wheel beside a directory-selected release sdist."""
+    candidate = candidate.resolve()
+    if candidate.is_file():
+        return None
+    if not candidate.is_dir():
+        raise ArtifactSmokeError(f"artifact path does not exist: {candidate}")
+    matches = sorted(path for path in candidate.iterdir() if path.suffix == ".whl")
+    if len(matches) != 1:
+        raise ArtifactSmokeError(
+            f"expected exactly one published wheel in {candidate}, found {len(matches)}"
+        )
+    return matches[0]
+
+
 def _sdist_members(path: Path) -> list[str]:
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as archive:
@@ -140,6 +155,39 @@ def _assert_wheel_bundle(path: Path) -> set[str]:
     except zipfile.BadZipFile as error:
         raise ArtifactSmokeError(f"cannot read wheel {path}: {error}") from error
     return _assert_wheel_members(members)
+
+
+def _wheel_payload(path: Path) -> dict[str, bytes]:
+    """Read deterministic wheel payload bytes, excluding self-hashed RECORD."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return {
+                name: archive.read(name)
+                for name in archive.namelist()
+                if not name.endswith("/") and not name.endswith(".dist-info/RECORD")
+            }
+    except zipfile.BadZipFile as error:
+        raise ArtifactSmokeError(f"cannot read wheel {path}: {error}") from error
+
+
+def _assert_matching_wheel_payloads(published: Path, rebuilt: Path) -> None:
+    published_payload = _wheel_payload(published)
+    rebuilt_payload = _wheel_payload(rebuilt)
+    if published_payload == rebuilt_payload:
+        return
+    published_names = set(published_payload)
+    rebuilt_names = set(rebuilt_payload)
+    missing = sorted(published_names - rebuilt_names)
+    extra = sorted(rebuilt_names - published_names)
+    changed = sorted(
+        name
+        for name in published_names & rebuilt_names
+        if published_payload[name] != rebuilt_payload[name]
+    )
+    raise ArtifactSmokeError(
+        "published wheel differs from wheel rebuilt without Node: "
+        f"missing={missing}, extra={extra}, changed={changed}"
+    )
 
 
 def _write_node_blockers(
@@ -314,8 +362,18 @@ def smoke_release_artifact(
     python: Path,
     server_timeout: float,
 ) -> Path:
+    published_wheel = _resolve_published_wheel(sdist_candidate)
     sdist = _resolve_sdist(sdist_candidate)
     sdist_static = _assert_sdist_bundle(_sdist_members(sdist))
+    if published_wheel is not None:
+        published_static = _assert_wheel_bundle(published_wheel)
+        if published_static != sdist_static:
+            missing = sorted(sdist_static - published_static)
+            extra = sorted(published_static - sdist_static)
+            raise ArtifactSmokeError(
+                "published wheel static tree differs from release sdist: "
+                f"missing={missing}, extra={extra}"
+            )
 
     with tempfile.TemporaryDirectory(prefix="napflow-artifact-smoke-") as raw_temp:
         temp = Path(raw_temp)
@@ -355,6 +413,8 @@ def smoke_release_artifact(
                 "wheel static tree differs from release sdist: "
                 f"missing={missing}, extra={extra}"
             )
+        if published_wheel is not None:
+            _assert_matching_wheel_payloads(published_wheel, wheel)
 
         venv = temp / "venv"
         _run(
@@ -450,7 +510,7 @@ print('installed public API passed:', functional.state)
 
         print(
             "artifact smoke passed: release sdist -> no-Node wheel -> "
-            "isolated public API + real napf ui",
+            "published-payload match -> isolated public API + real napf ui",
             flush=True,
         )
         return sdist
@@ -461,7 +521,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "sdist",
         type=Path,
-        help="release sdist file, or a directory containing exactly one sdist",
+        help=(
+            "release sdist file, or a directory containing exactly one sdist "
+            "and one published wheel"
+        ),
     )
     parser.add_argument(
         "--uv",

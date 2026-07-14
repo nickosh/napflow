@@ -170,9 +170,7 @@ class _ReplayViewBuilder:
         return record["value"] if "value" in record else record.get("value_preview")
 
     @staticmethod
-    def _traffic(
-        ports: dict[str, Any], key: str, value: Any, ts: str | None
-    ) -> None:
+    def _traffic(ports: dict[str, Any], key: str, value: Any, ts: str | None) -> None:
         previous = ports.get(key)
         ports[key] = {
             "count": (previous.get("count", 0) if isinstance(previous, dict) else 0)
@@ -716,9 +714,7 @@ def _iter_replay_records(
 ) -> Iterator[dict[str, Any]]:
     """Validate the sequence contract needed by cursor-based REST replay."""
     expected_seq = 1
-    for record in _iter_records(
-        path, allow_empty=allow_empty, through_seq=through_seq
-    ):
+    for record in _iter_records(path, allow_empty=allow_empty, through_seq=through_seq):
         seq = record.get("seq")
         if type(seq) is not int or seq != expected_seq:
             raise HistoryFormatError(

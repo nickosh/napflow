@@ -158,9 +158,7 @@ class RunManager:
 
     def __init__(self) -> None:
         self._runs: OrderedDict[str, ActiveRun] = OrderedDict()
-        self._deferred_readers: dict[
-            Path, tuple[asyncio.TimerHandle, Path, int]
-        ] = {}
+        self._deferred_readers: dict[Path, tuple[asyncio.TimerHandle, Path, int]] = {}
 
     def get(self, run_id: str) -> ActiveRun | None:
         return self._runs.get(run_id)
@@ -198,9 +196,7 @@ class RunManager:
             try:
                 finalize_run_history(opened, completed=False)
             except Exception:
-                logger.exception(
-                    "run %s history abandonment failed", opened.run_id
-                )
+                logger.exception("run %s history abandonment failed", opened.run_id)
             if close_control_error is not None:
                 raise close_control_error from None
             raise
@@ -263,9 +259,7 @@ class RunManager:
                 try:
                     finalize_run_history(opened, completed=False)
                 except Exception:
-                    logger.exception(
-                        "run %s history abandonment failed", run.run_id
-                    )
+                    logger.exception("run %s history abandonment failed", run.run_id)
             else:
                 for log_path in deleted:
                     self._runs.pop(log_path.stem, None)

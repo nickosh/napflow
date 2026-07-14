@@ -2,7 +2,7 @@
 
 Status: adopted 2026-07-05 (S1 closeout); experimental-v0.x policy
 amended 2026-07-11 (D33); PyPI trusted publishing + dry-run path added
-2026-07-11.
+2026-07-11; reusable PR/tag gate and artifact refusal added 2026-07-14.
 
 ## Versioning
 
@@ -33,6 +33,11 @@ Single source of truth: `version` in `pyproject.toml`
   more direct commits to `main` — feature branches + PRs (conventional
   commits feed git-cliff), changelog regenerated per release. Per-PR
   CI also closes the NFR-10 batch-push blind spot.
+- **Later releases use final package versions.** A release tag must equal
+  `v<project.version>` exactly, and a package version containing a PEP 440
+  development segment cannot publish even when its tag matches. The stdlib-only
+  `tools/check_release_version.py` enforces both rules in the reusable tag gate;
+  unit tests exercise matching, mismatching, missing-`v`, and exact `.dev` tags.
 
 ## Release flow (automated — `.github/workflows/release.yml`)
 
@@ -40,7 +45,15 @@ Releases are tag-driven and publish to PyPI + a GitHub Release in one
 pass. `workflow_dispatch` is the **dry-run** path: trigger it manually
 (`gh workflow run release.yml` or the Actions tab) to run the full
 gate + UI bundle + build + wheel checks and upload the dist artifact —
-nothing is published. Validate the dry-run green before the first tag.
+nothing is published, even if the dispatch is deliberately run against a tag.
+Only a `push` event for an exact valid tag can enter either publishing job.
+Validate the dry-run green before every tag.
+
+The tag workflow calls `.github/workflows/ci.yml` through `workflow_call`, so
+the same three-platform Python, Vitest, production-build, Playwright, and
+dependency-compat jobs gate pull requests and releases. The release build then
+rebuilds and smokes the exact artifacts it uploads; it does not rely on an
+artifact produced by another job or workflow run.
 
 **Supported artifact boundary (D40).** The supported installation inputs are PyPI
 and the wheel or sdist attached to
@@ -64,8 +77,10 @@ wheel from the sdist, installs that wheel into an isolated environment, runs
 both public Python API forms against the scaffold smoke flow, executes the
 installed `napf ui --no-browser`, and fetches the compiled root, JavaScript
 and stylesheet assets (including referenced lazy chunks), and workspace API.
-It also requires the sdist and wheel static trees to match exactly. M7 wires
-this reusable check into the authoritative PR/tag gate.
+When passed a release directory, it also requires exactly one direct wheel and
+compares every non-`RECORD` payload byte with the no-Node sdist rebuild, in
+addition to requiring exact sdist/wheel static trees. The reusable PR gate runs
+the smoke on Linux, and the release build reruns it on the exact upload set.
 
 Frontend license notices are generated from the locked npm dependency tree.
 After `npm ci`—and whenever `ui/package-lock.json` changes—regenerate and audit
@@ -79,26 +94,29 @@ uv run python tools/generate_frontend_notices.py
 wheel's `.dist-info/licenses/` directory. The artifact smoke above checks both
 the notice and the UI bundle survive the release-sdist-to-wheel boundary.
 
-1. **Prepare** (one commit, `chore(release): v0.1.0`):
+1. **Prepare** (one commit, for example `chore(release): v0.2.0`):
    - bump `version` in `pyproject.toml` to the final number — the
-     workflow hard-fails unless `v<version>` equals the pushed tag
-     (automated gate; supersedes the old manual check)
-   - regenerate the changelog: `uvx git-cliff --tag v0.1.0 -o CHANGELOG.md`
+     workflow hard-fails unless `v<version>` equals the pushed tag and refuses
+     `.dev` versions (automated, independently tested gate)
+   - regenerate the changelog, for example:
+     `uvx git-cliff --tag v0.2.0 -o CHANGELOG.md`
    - release notes: the workflow prepends
      `docs/release-notes-preamble-v0.md` (developer preview,
      experimental v0.x compatibility, trusted workspace/localhost
      posture) to every `v0.*` release's git-cliff body — re-read the
      preamble each release and keep it honest
    - tick anything release-worthy in REQUIREMENTS/PLAN; journal entry
-2. **Flip the repo public** (owner call 2026-07-11: at the v0.1.0 tag,
-   not before). The sdist on PyPI exposes the source regardless; a
-   public repo makes the package's GitHub links, issues, and Releases
-   real and keeps Actions minutes free.
-3. **Tag & push**: `git tag v0.1.0 && git push && git push --tags`
-4. **The workflow** (on `v*` tag), three jobs:
-   - `build`: tag↔version gate, lint + tests, UI bundle, `uv build`,
-     wheel-carries-UI check (NFR-03), `git-cliff --latest` notes;
-     dist + notes become workflow artifacts
+2. **Repository visibility**: the v0.1.0 one-time public-repository flip is
+   historical and already complete. The sdist exposes source regardless;
+   keeping the repository public makes package links, issues, Releases, and
+   Actions behavior real.
+3. **Tag & push**, for example: `git tag v0.2.0 && git push && git push --tags`
+4. **The workflow** (on a pushed `v*` tag), four jobs:
+   - `gate`: invokes the exact reusable PR CI workflow. Its release-version job
+     refuses tag/package mismatch and `.dev` publication before build or OIDC.
+   - `build`: after that gate, audits notices, builds the UI once, runs
+     `uv build --clear`, smokes the exact sdist/direct-wheel set, and generates
+     `git-cliff --latest` notes; dist + notes become workflow artifacts.
    - `pypi`: publishes dist to PyPI via trusted publishing (OIDC,
      GitHub environment `pypi`, no tokens; isolated job holds the only
      `id-token: write`)
@@ -106,9 +124,10 @@ the notice and the UI bundle survive the release-sdist-to-wheel boundary.
      deliberately after PyPI, so a failed publish never leaves a
      Release page implying the version is installable; `v0.*` tags are
      auto-marked pre-release (D33)
-5. **Verify**: `uv tool install napflow` from real PyPI;
-   `napf init && napf check` first-touch (later: `napf run flows/smoke`
-   offline, EC34).
+5. **Verify**: `uv tool install napflow` from real PyPI; then in a fresh
+   directory run `napf init`, `napf check`, and `napf run flows/smoke` offline
+   (EC34), plus open `napf ui` when release verification requires the browser
+   path beyond the automated artifact smoke.
 
 A tag is the immutable working checkpoint, not certification that the
 known v0.2 hardening backlog is complete. Do not advertise direct Git or raw
