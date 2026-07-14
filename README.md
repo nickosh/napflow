@@ -9,16 +9,15 @@ file-based, Python-powered, and composable."* Built for QA and dev teams
 who test APIs and want their flows reviewed, diffed, and run in CI like
 any other code.
 
-**Status: v0.1.0 released; v0.2.0 release candidate in M7 — developer preview.**
-The first working milestone:
-file format, validator, CLI, headless engine (full node catalog), and
+**Status: v0.2.0 — usable full-fidelity developer preview.**
+The file format, validator, CLI, headless engine (full node catalog), and
 the visual canvas (edit, run, inspect, history) work end to end on
 macOS, Windows, and Linux. All `v0.x` formats—including the current
 `schema: napflow/v1` marker—are experimental and may change before
 v1.0. napflow assumes trusted workspaces (flows run real Python on
-your machine) and is localhost-only. The v0.2 implementation and reusable
-release gate are complete; final promotion still requires the prepared-artifact
-dry-run, merge, and exact `v0.2.0` tag. See the
+your machine) and is localhost-only. The v0.2 implementation, reusable
+release gate, compatibility audit, and prepared-artifact dry-run are complete.
+See the
 [v0.2 compatibility notes](docs/release-notes-v0.2.0.md) and
 [plan](docs/PLAN.md) (D33–D40).
 

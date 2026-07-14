@@ -1,7 +1,7 @@
 # napflow — Product Definition
 
-Status: v0.x product direction, amended through the v0.2 release candidate on
-2026-07-14. Companions: `REQUIREMENTS.md` (what to build),
+Status: v0.x product direction, amended through the v0.2 release closeout on
+2026-07-15. Companions: `REQUIREMENTS.md` (what to build),
 the spec files (how it behaves), `DECISIONS.md` (why).
 
 ## One-liner
@@ -141,9 +141,9 @@ rather than a compatibility promise (D33).
   masking; basic paged/lazy replay and child-frame drilldown; functional and
   Workspace/Flow public APIs including the runtime `workspace.flows` catalog;
   release-built artifact distribution (not arbitrary Git/source installs)
-  and a focused release gate. Implementation is complete; the prepared
-  artifact dry-run, merge, and exact `v0.2.0` tag are the remaining promotion
-  actions.
+  and a focused release gate. The implementation, compatibility audit,
+  three-OS gate, and prepared-artifact dry-run are complete; release uses the
+  exact tag-driven flow in `RELEASING.md`.
 - **After v0.2 candidates:** pause/resume/step and wire breakpoints (D30),
   pack-selection-to-subflow (D31), `poll`/`duplicate`, inline loop bodies,
   marker-based `collect`, `napf check --write-env-example`, worker-pool
