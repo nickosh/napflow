@@ -6,8 +6,8 @@ and added EC42–EC51. M1 closed EC38, EC46, and EC51 on 2026-07-12; M2
 closed EC09, EC43, and EC48 on 2026-07-13; M4 closed EC32 and EC50, M5
 closed EC47, and M6 closed EC42 and EC49 the same day. M7 closed EC44,
 added then fixed EC53–EC54 on 2026-07-14, and fixed EC55 on 2026-07-15.
-Four cases remain open: EC10,
-EC22, EC27, and EC35; EC27's cooperative half is complete.
+EC56 was added open on 2026-07-15. Five cases remain open: EC10, EC22,
+EC27, EC35, and EC56; EC27's cooperative half is complete.
 Documentation or explicit risk acceptance alone does not mean the
 underlying behavior is resolved. The full original analyses for
 EC01–EC23 are preserved in `archive/EDGE_CASES.md`.
@@ -74,6 +74,8 @@ explicit statement), **PARTIAL** (one independently tested half landed),
 | EC53 | The canonical YAML profile promised no anchors/aliases, but the round-trip loader accepted them and the emitter could synthesize them from repeated object identities. | **fix 2026-07-14:** the production composer rejects anchor/alias events with positioned load diagnostics, while quoted `&`/`*` remain data. Canonical emit rejects explicit anchor metadata, repeated aliasable identity, and cycles before ruamel can synthesize references; flow-load and emit regressions cover anchors, aliases, containers, and YAML-native scalars. FR-204/YP. |
 | EC54 | JSON/JUnit report generation used a weaker history-header check than REST/WS replay, so explicit `format: null`, a non-`run_started` first record, or an empty/malformed history could bypass the promised format gate. | **fix 2026-07-14:** one core `validate_history_envelope` now serves replay and reports. Both report formats require `run_started` at integer `seq: 1`, reject malformed/null/newer formats and unknown features, and preserve only genuinely markerless v0.1 headers as best-effort; focused JSON/JUnit/replay regressions pin the shared boundary. EN §7a/TR-22. |
 | EC55 | Palette click-add placed a collision-free node below the graph but did not refit the viewport. On macOS the node could remain beneath the fixed flow list, so a serial Playwright retry inherited the unfinished edit and made a later navigation-flush case look like a second failure. | **fix 2026-07-15:** click-add keeps the below-graph placement, waits until xyflow measures the rebuilt node set, then refits all nodes into the canvas. Playwright asserts the Switch is inside the canvas before interaction and proves a drag entered the dirty state before testing immediate navigation; CI retains failure-only Playwright traces/reports. The complete 43-test browser suite and 20 repeated implicated cases passed locally; PR #2 and release dispatch #29352493848 then passed the macOS browser path and full reusable gate. TR-20/TR-22. |
+
+| EC56 | Brownfield `napf init` (directory already has `.gitignore`/`.gitattributes`, no `napflow.yaml`) silently skips both files — the napflow rules (`envs/*.env`, `.napflow/`, YAML `eol=lf`) are never added, so real credential profiles and raw run history are committable with only a one-line `exists` notice; README's "napf init gitignores `.napflow/`" holds only when init created the file (found 2026-07-15 by code review of `scaffold_workspace`) | **OPEN, scheduled 2026-07-15 as PLAN §Rolling delivery F6:** interactive per-file prompt (default append, marked block, only missing rules, exact-semantics check via `git check-ignore`/`check-attr` with line-presence fallback); missing files still created silently; non-TTY never mutates — skip + loud warning + `--git-meta append\|skip` flags (owner call). Close only with the prompt/append/no-TTY/CRLF tests landed. |
 
 Related watch items (not defects): see *Known open risks* in
 `DECISIONS.md` — notably W103 chattiness and D18 `required: false`

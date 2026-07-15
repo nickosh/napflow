@@ -897,8 +897,8 @@ Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
 Current order: **F2 first** (small enabler, days), then the **F1 track**
-as the headline work, with **F3** and **F4** interleaved between F1
-slices as small core branches. **F5** is unscheduled/low.
+as the headline work, with **F3**, **F4**, and **F6** interleaved
+between F1 slices as small core/CLI branches. **F5** is unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
@@ -1051,6 +1051,46 @@ Not a gate. A scheduled (weekly) GitHub Actions workflow runs the opt-in
 workflow artifacts, so the future D39 100k-event evaluation has a trend
 line instead of two points. Manual inspection only; thresholds/alerts
 only if drift is actually observed.
+
+### F6 — `napf init` git-metadata handling for existing files (EC56; owner-designed 2026-07-15)
+
+Brownfield init (target directory already has `.gitignore` or
+`.gitattributes`, no `napflow.yaml`) currently skips both files with a
+one-line `exists` notice, leaving `envs/*.env`, `.napflow/`, and YAML
+`eol=lf` rules absent — committable credentials/raw history (EC56).
+`napf init`'s refusal when `napflow.yaml` exists stays exactly as is.
+
+Owner-decided behavior (2026-07-15):
+
+- [ ] Missing files: created silently — unchanged.
+- [ ] Existing file with all napflow rules already effective: report
+      `exists (rules covered)`; no prompt, no change.
+- [ ] Existing file missing rules, interactive TTY: per-file prompt
+      showing exactly the lines that would be added; **default =
+      append**. Decline ⇒ `skipped` + the warning below.
+- [ ] Existing file missing rules, no TTY (CI/scripts): **never
+      mutate** — report `skipped` plus a loud warning listing the exact
+      missing lines; `--git-meta append|skip` makes the choice explicit
+      and also suppresses/forces the prompt interactively.
+- [ ] Append mechanics: one clearly marked `# napflow` block containing
+      only the missing rules; idempotent (re-append adds nothing);
+      matches the file's predominant line-ending style (CRLF-safe);
+      whole-file atomic rewrite via `atomic_write_text`.
+- [ ] Rule-coverage check: exact semantics via `git check-ignore` /
+      `git check-attr` when git is available (handles negations and
+      inherited excludes); conservative line-presence fallback
+      otherwise.
+- [ ] Status vocabulary extends to created / exists / appended /
+      skipped; `scaffold_workspace`'s "never overwrites" contract keeps
+      holding — append never rewrites user content, only adds the block.
+- [ ] Same-PR docs: workspace-manifest spec (`napf init` CLI section);
+      README raw-history wording ("napf init gitignores `.napflow/`")
+      updated to describe both greenfield and brownfield outcomes;
+      EC56 closed.
+- [ ] Tests: block construction + idempotency + partial-rules cases;
+      CliRunner prompt flows (accept/decline/default); no-TTY skip+warn;
+      `--git-meta` both values; git-absent fallback; Windows CRLF
+      append; existing three-OS CI covers platforms.
 
 ### Unscheduled backlog
 

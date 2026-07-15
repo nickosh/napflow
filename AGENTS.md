@@ -187,8 +187,9 @@ either were the accepted v0.2 design.
    cuts releases when accumulated value warrants. Invariant: `main`
    stays releasable at every merge — slice large features accordingly.
    Current order: F2 `server/app.py` pure-move split first, then the F1
-   UI-rework track, with F3 (EC22 tree-kill) and F4 (EC27/EC35 render
-   guards) interleaved; F5 perf drift job unscheduled.
+   UI-rework track, with F3 (EC22 tree-kill), F4 (EC27/EC35 render
+   guards), and F6 (EC56 brownfield-init git metadata) interleaved; F5
+   perf drift job unscheduled.
 
 ## Testing priorities (in order of bug-risk)
 

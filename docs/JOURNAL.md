@@ -12,7 +12,9 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   F1 UI rework track (headline; demos/screenshots wait for it; Slice 2 =
   in-memory canvas undo/redo, owner call: never a workspace file), F2 approved
   `server/app.py` pure-move split (replay/ws/boundary), F3 EC22 tree-kill,
-  F4 EC27/EC35 render guards (perf-neutral by design), F5 perf drift job.
+  F4 EC27/EC35 render guards (perf-neutral by design), F5 perf drift job,
+  F6 brownfield-init git-metadata prompt/append (EC56 recorded open;
+  owner calls: default append on TTY, never mutate without TTY).
 - Docs only on `docs/rolling-feature-plan`: AGENTS.md build history item 6;
   EC22/EC27/EC35 rows point at their scheduled F-entries, still OPEN.
 - Next: merge this branch, then start F2 as its own feature branch.
