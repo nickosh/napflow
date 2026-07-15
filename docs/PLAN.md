@@ -1113,17 +1113,19 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
       root itself.
 - [ ] Discovery in the configured root — same rules for every root
       value, not special-cased to `"."`, non-recursive as today:
-      collect `<name>.env`, `.env`, and `.env.<name>`; keep regular
-      files only (directories and unreadable/invalid-format entries are
-      skipped with a warning, never fatal at discovery). Profile names:
-      `<name>.env` → `<name>` (existing rule); `.env` → `default`;
-      `.env.<name>` → `<name>` (dotenv-style host conventions like
-      `.env.local`).
-- [ ] Name collisions resolve by deterministic precedence, not error
-      (owner call 2026-07-15): native `<name>.env` / `.env` wins over
-      dotenv-style `.env.<name>`; the shadowed file is reported with a
-      warning naming both files. Rationale: an embedded workspace may
-      sit next to host-owned `.env.*` files the user cannot rename.
+      collect `*.env`, `.env`, and `.env.*`; keep regular files only
+      (directories and unreadable/invalid-format entries are skipped
+      with a warning, never fatal at discovery).
+- [ ] **Profile identifier = the literal filename** (owner call
+      2026-07-15): `.env` is picked as `.env`, `.env.staging` as
+      `.env.staging`, `dev.env` as `dev.env` — in `--env`,
+      `environments.default`, and the UI picker alike. No stem mapping,
+      no invented names; filenames are unique per directory, so name
+      collisions/precedence/shadowing cannot exist. **Breaking change**
+      to the v0.2 stem convention (`--env dev` → `--env dev.env`),
+      accepted under D33/criterion 5 while the user base is small: the
+      scaffolded manifest (`environments.default`), FR-103 spec text,
+      and a release-notes entry update in the same PR.
 - [ ] Skip-with-warning applies to listing only: explicitly selecting a
       skipped or invalid profile (`--env`, `environments.default`, or a
       flow's `env.required`) is a hard, clearly-worded error at run
@@ -1145,11 +1147,11 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
       is cut (`.env`/`.env.*` discovery is a behavior addition in the
       default `envs/` layout too).
 - [ ] Tests: nested root; `"."` and `"./"`; containment rejections;
-      `.env` → `default` and `.env.<name>` naming; shadowing precedence
-      + warning; invalid-file skip warning vs hard error on explicit
-      selection; `example.env` convention and process-env-overrides
-      precedence unchanged; W108 fires / stays silent without git;
-      three-OS CI.
+      literal-filename selection for all three patterns (incl. the
+      `--env dev.env` break); invalid-file skip warning vs hard error
+      on explicit selection; `example.env` convention and
+      process-env-overrides precedence unchanged; W108 fires / stays
+      silent without git; three-OS CI.
 
 Estimate: small (~day). Interleavable; lands best immediately after F6
 to reuse the fresh `git check-ignore` probe.
