@@ -1111,14 +1111,24 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
       OK; absolute, `..`, backslash, outside-workspace rejected);
       `"."` and `"./"` are explicit special cases meaning the workspace
       root itself.
-- [ ] Discovery patterns in the configured root — same set for every
-      root value, not special-cased to `"."`, non-recursive as today:
-      `<name>.env` → profile `<name>` (existing rule); `.env` → profile
-      `default`; `.env.<name>` → profile `<name>` (dotenv-style host
-      conventions like `.env.local`).
-- [ ] Duplicate profile names from different files (e.g. `dev.env` +
-      `.env.dev`) fail env discovery with a clear error naming both
-      files — credential sources must never be silently ambiguous.
+- [ ] Discovery in the configured root — same rules for every root
+      value, not special-cased to `"."`, non-recursive as today:
+      collect `<name>.env`, `.env`, and `.env.<name>`; keep regular
+      files only (directories and unreadable/invalid-format entries are
+      skipped with a warning, never fatal at discovery). Profile names:
+      `<name>.env` → `<name>` (existing rule); `.env` → `default`;
+      `.env.<name>` → `<name>` (dotenv-style host conventions like
+      `.env.local`).
+- [ ] Name collisions resolve by deterministic precedence, not error
+      (owner call 2026-07-15): native `<name>.env` / `.env` wins over
+      dotenv-style `.env.<name>`; the shadowed file is reported with a
+      warning naming both files. Rationale: an embedded workspace may
+      sit next to host-owned `.env.*` files the user cannot rename.
+- [ ] Skip-with-warning applies to listing only: explicitly selecting a
+      skipped or invalid profile (`--env`, `environments.default`, or a
+      flow's `env.required`) is a hard, clearly-worded error at run
+      preparation — a run must never proceed silently without the
+      credentials the user asked for.
 - [ ] **No `.gitignore`/`.gitattributes` mutation outside `napf init`**
       (owner call 2026-07-15): users who change default paths own their
       host project's ignore rules; napflow warns, never edits. Safety =
@@ -1135,9 +1145,11 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
       is cut (`.env`/`.env.*` discovery is a behavior addition in the
       default `envs/` layout too).
 - [ ] Tests: nested root; `"."` and `"./"`; containment rejections;
-      `.env` → `default` and `.env.<name>` naming; collision error;
-      `example.env` convention and process-env-overrides precedence
-      unchanged; W108 fires / stays silent without git; three-OS CI.
+      `.env` → `default` and `.env.<name>` naming; shadowing precedence
+      + warning; invalid-file skip warning vs hard error on explicit
+      selection; `example.env` convention and process-env-overrides
+      precedence unchanged; W108 fires / stays silent without git;
+      three-OS CI.
 
 Estimate: small (~day). Interleavable; lands best immediately after F6
 to reuse the fresh `git check-ignore` probe.
