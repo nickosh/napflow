@@ -4,6 +4,18 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-15 — rolling delivery adopted (D41) + F1–F5 backlog
+
+- Decided D41: no version-scoped milestone plans after v0.2.0; features merge
+  independently via PR, owner cuts releases; `main` stays releasable per merge.
+- Done: PLAN §Rolling delivery with ordered priority criteria and backlog —
+  F1 UI rework track (headline; demos/screenshots wait for it), F2 approved
+  `server/app.py` pure-move split (replay/ws/boundary), F3 EC22 tree-kill,
+  F4 EC27/EC35 render guards (perf-neutral by design), F5 perf drift job.
+- Docs only on `docs/rolling-feature-plan`: AGENTS.md build history item 6;
+  EC22/EC27/EC35 rows point at their scheduled F-entries, still OPEN.
+- Next: merge this branch, then start F2 as its own feature branch.
+
 ## 2026-07-15 — v0.2.0 release-memory closeout
 
 - Done: PR #2 and release dispatch #29352493848 passed the full three-OS gate;

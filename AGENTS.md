@@ -176,17 +176,19 @@ either were the accepted v0.2 design.
 3. Remaining nodes (python + worker subprocess, merge, guards, loop,
    flow, set/get, switch, delay, log, fixture, note)
 4. server/ + UI canvas (last)
-5. **v0.2 usable full-fidelity prototype**, sequenced only
-   by `docs/PLAN.md` M0–M7: regression/format baseline → workspace and
-   durable saves → lifecycle/worker → bounded execution/history →
-   full-fidelity blobs/prepared requests → basic paged/lazy replay →
-   public Workspace/Flow catalog, packaging, and UI contracts → focused
-   release gate. M0/M1 completed 2026-07-12 and M2/M3/M4/M5/M6 completed
-   2026-07-13. M7's reusable gate, exact version contract, compatibility
-   notes, remote three-OS gate, and prepared-artifact dry-run are complete;
-   the exact `v0.2.0` tag is the immutable promotion boundary.
+5. **v0.2 usable full-fidelity prototype** — shipped as `v0.2.0` on
+   2026-07-15 (tag + PyPI) after the `docs/PLAN.md` M0–M7 sequence.
    Timeline playback, 100k-event replay performance, run bundles, and
-   security-grade history are future work (D39).
+   security-grade history remain future work (D39).
+6. **Rolling delivery (current, D41)**: no version-scoped milestone
+   plans after `v0.2.0`. Features are planned and prioritized in
+   `docs/PLAN.md` §"Rolling delivery" (F-numbered entries + ordered
+   priority criteria), delivered as PR-gated feature branches; the owner
+   cuts releases when accumulated value warrants. Invariant: `main`
+   stays releasable at every merge — slice large features accordingly.
+   Current order: F2 `server/app.py` pure-move split first, then the F1
+   UI-rework track, with F3 (EC22 tree-kill) and F4 (EC27/EC35 render
+   guards) interleaved; F5 perf drift job unscheduled.
 
 ## Testing priorities (in order of bug-risk)
 

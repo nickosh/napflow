@@ -858,6 +858,32 @@ continuing to imply that an arbitrary Git checkout is an install artifact. M7
 wired the reusable smoke, notice check, frontend suites, and exact tag/version
 refusal into the authoritative PR/tag gate.
 
+## D41 — Rolling feature delivery; owner-triggered releases
+
+(2026-07-15, owner decision at the v0.2.0 closeout review.)
+
+After `v0.2.0`, development stops planning version-scoped milestone
+blocks. Work is planned as independent features in `PLAN.md`
+("Rolling delivery" section) with explicit ordered priority criteria:
+real-use pull, trust protection, enabler leverage, cost fit, compat
+window. Features are delivered as PR-gated branches and merge when
+complete; no version number is assigned in advance. The owner cuts a
+release whenever accumulated merged value warrants one, using the
+existing tag-driven gate (D33/D40, `RELEASING.md`) unchanged.
+
+The invariant that replaces "milestone done" is: **`main` stays
+releasable at every merge.** The full PR gate is the mergeability bar;
+features too large for one green PR are sliced into increments that each
+preserve that invariant. First scheduled features: the UI rework track
+(F1), the `server/app.py` pure-move split (F2), EC22 descendant-process
+cleanup (F3), EC27/EC35 render guards (F4), and an unscheduled perf
+drift trend job (F5).
+
+Rejected: continuing M-numbered version-scoped plans (planning overhead
+without a fixed release target to justify it); a long-lived `develop`
+integration branch (`main` + the PR gate already provide the integration
+point, and a second branch would break the always-releasable invariant).
+
 ## Known open risks (watch during implementation)
 - EC10/EC22/EC27/EC35 remain open post-v0.2 limitations. EC44's distribution,
   exact-version, and authoritative-gate defect is fixed; its ledger row names

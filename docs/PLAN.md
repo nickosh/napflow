@@ -1,9 +1,13 @@
 # napflow — Development Plan (v0.x)
 
 Status: v0.1 build stages adopted 2026-07-02 and completed 2026-07-09;
-v0.2 plan adopted 2026-07-11. `REQUIREMENTS.md` defines testable scope;
-this file defines order and definition-of-done. Tick boxes as milestones
-land; append course corrections, don't rewrite history.
+v0.2 plan adopted 2026-07-11 and shipped as `v0.2.0` on 2026-07-15.
+From 2026-07-15 planning is **rolling** (D41): see the
+"Rolling delivery" section below — features are prioritized and delivered
+independently; the owner cuts releases when accumulated value warrants.
+`REQUIREMENTS.md` defines testable scope; this file defines order and
+definition-of-done. Tick boxes as work lands; append course corrections,
+don't rewrite history.
 
 ## S1 — loader, models, `napf check`  ✅ done 2026-07-05
 
@@ -861,6 +865,180 @@ release stays bounded:
     encryption/key management, and secure sharing belong to one explicit
     future security design. v0.2 relies on ordinary OS permissions and makes
     no secure-storage or safe-export guarantee.
+
+## Rolling delivery — from 2026-07-15 (D41)
+
+`v0.2.0` shipped 2026-07-15 (tag + PyPI). From this point the plan is not
+version-scoped: features are planned and prioritized here, delivered as
+feature branches merged by PR when complete, and the owner cuts a release
+whenever accumulated merged value warrants one — the existing tag-driven
+gate (`RELEASING.md`, D33/D40) is unchanged. M-numbered version-scoped
+milestone blocks end at `v0.2.0`.
+
+**The invariant replacing "milestone done": `main` stays releasable at
+every merge.** The full PR gate is the mergeability bar; anything too
+large to merge green in one PR must be sliced into increments that each
+keep `main` releasable.
+
+### Priority criteria (ordered; earlier criterion wins ties)
+
+1. **Real-use pull** — removes something that blocks or embarrasses real
+   daily use (the owner's own QA work first, then early adopters).
+2. **Trust protection** — prevents a silent failure or foot-gun (hangs,
+   orphaned processes, data loss) that would burn a user's trust once.
+3. **Enabler leverage** — makes already-planned work cheaper or cleaner;
+   structural splits land before the features that would pile onto them.
+4. **Cost fit** — prefer branches that merge within days; large features
+   must be sliceable per the invariant above.
+5. **Compat window** — wanted format/API breaks are cheapest early in
+   v0.x (D33); prefer sooner over later.
+
+Demos, screenshots, and README media wait until F1 ships (owner call
+2026-07-15).
+
+Current order: **F2 first** (small enabler, days), then the **F1 track**
+as the headline work, with **F3** and **F4** interleaved between F1
+slices as small core branches. **F5** is unscheduled/low.
+
+### F1 — UI rework for real use + visual styling (headline track)
+
+Owner direction 2026-07-15: adapt the canvas UI for real daily use and
+apply a coherent visual style. Proceeds as sliced feature branches
+(invariant above); Slice 0 produces the authoritative slice list — the
+slices named here are the expected shape, not commitments.
+
+- [ ] Slice 0 — UX audit + design foundation: walk every surface (canvas,
+      node config forms, run panel, replay drilldown, in-browser
+      `nodes.py` editor, flow navigation) through a real API-testing
+      task; record friction; choose design tokens (typography, spacing,
+      color, dark/light) and component conventions; produce the concrete
+      slice list for owner sign-off. Output is a short doc + tokens,
+      minimal behavior change.
+- [ ] Slice 1 — split `ui/src/store.ts` (1,302 lines, one Zustand store)
+      into slices (canvas / persistence / run-replay) as a pure-move
+      enabler, mirroring F2 on the frontend, before feature slices pile
+      onto it. `RunPanel.tsx` (778 lines) may split along the same seams.
+- [ ] Slices 2+ — per the audit, expected order of daily-use value:
+      canvas interaction + node config forms; run panel + replay
+      drilldown; workspace/flow navigation; `nodes.py` editing ergonomics.
+- [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
+      updates are deliberate, named in the PR); production build and the
+      frontend notices audit stay in the gate.
+
+Exit: the owner completes a real API-testing task in the UI without
+dropping to hand-editing YAML for routine operations; only then do README
+demos/screenshots land (deferred owner call above).
+
+### F2 — `server/app.py` split by pure moves (approved 2026-07-15)
+
+`server/app.py` is 1,810 lines mixing four separable concerns. Split by
+pure moves — no behavior, route, contract, or logic changes — so later
+work (F1 server touches, D30 controls) lands in small files.
+
+- [ ] `server/replay.py` — the replay read/view layer:
+      `_ReplayQueryError`, `_ReplayMetadata`, `_ReplaySnapshot`,
+      `_ReplayViewBuilder`; replay record iteration and paging
+      (`_iter_replay_records`, `_parse_replay_integer`,
+      `_parse_replay_page_query`, `_parse_frame_query`,
+      `_metadata_from_header`, `_read_replay_page`, `_read_replay_event`,
+      `_replay_envelope`, `_replay_run_summary`, `_replay_frame_summary`,
+      `_capture_replay_snapshot`, `_replay_history_state`,
+      `_has_external_active_marker`).
+- [ ] `server/ws.py` — live websocket streaming: `_ws_close_reason`,
+      `_SlowSubscriber`, `_send_ws_record`, `_send_history_range`,
+      `_close_ws`, `_stream_run_websocket`, plus the `WS_*` constants
+      they own.
+- [ ] `server/boundary.py` — the local-request trust boundary (D37) and
+      write serialization: `_Authority`, `_request_scheme`,
+      `_parse_authority`, `_is_loopback_host`, `_request_authority`,
+      `_origin_matches`, `_LocalRequestBoundary`,
+      `_SourceWriteCoordinator`.
+- [ ] `app.py` keeps `build_app`, route handlers, and small response
+      helpers (`_diag_payload`, `_prep_error`, `_etag`, `_bad_request`,
+      `_json_object`, …).
+
+Rules and definition of done:
+
+- Pure moves + import updates only. Moved names drop the leading
+  underscore (the module boundary now provides the privacy); no other
+  renames, no signature or logic changes.
+- Import direction unchanged: new server modules import `core` and each
+  other downward only; import-linter contracts stay green.
+- `tests/test_server.py` imports `_read_records`, `_send_ws_record`,
+  `_send_history_range`, `_SourceWriteCoordinator`, `WS_HISTORY_FORMAT`,
+  and `WS_REQUEST_ORIGIN` from `napflow.server.app`, and
+  `tests/test_perf_baselines.py` imports `_read_records`; those imports
+  are updated mechanically — no test logic changes.
+- DoD: `app.py` well under ~700 lines; the diff reads as moves; the full
+  gate is green with no behavior diff.
+- Optional follow-up branch (not part of this one): split
+  `tests/test_server.py` (2,151 lines) along the same seams.
+
+### F3 — EC22 descendant-process cleanup
+
+Python-node workers must own their whole process tree so timeout, abort,
+and shutdown cannot leak grandchildren. QA-authored nodes shell out
+(subprocess calls are normal in this audience); orphaned processes in CI
+are a trust burn. This is the cheapest fix in the ledger relative to its
+risk. Closure bar is EC22's stated one: cross-platform child + grandchild
+tree-kill tests.
+
+- [ ] POSIX: spawn workers with `start_new_session=True` (own process
+      group); replace single-PID kill with `os.killpg` on the worker's
+      group at timeout-kill, cancellation cleanup, and lifecycle
+      shutdown. Guard: never signal the server's own group.
+- [ ] Windows: assign the worker to a Job Object with
+      `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` via ctypes (no new
+      dependency); close the job handle on the same three paths.
+      Breakaway-flag children are best-effort — document that boundary.
+- [ ] Tests: a python node spawns a grandchild that heartbeats to a temp
+      file; assert child and grandchild both die on (a) per-node timeout,
+      (b) external cancellation, (c) shutdown — green on all three OS
+      CI jobs.
+- [ ] Close EC22 in `EDGE_CASES.md` in the landing PR; until then its
+      "only the worker process is covered" wording stays accurate.
+
+### F4 — EC27/EC35 template render guards (narrows, does not close)
+
+Cooperative deadlines cannot preempt a synchronous Jinja render, so a
+pathological template still produces the worst failure shape: a hung CI
+job with no report. Land the cheap guards that convert most hang shapes
+into clear errors; full preemptible rendering stays in the unscheduled
+backlog under EC35's stated bar.
+
+Performance position (evaluated 2026-07-15): the guards are a pre-render
+size check plus periodic checks *between* output chunks — not per-opcode
+instrumentation — so the cost is O(1) per check and must be invisible
+next to render cost itself. The full killable-boundary isolation is the
+expensive design and is exactly what stays deferred.
+
+- [ ] Pre-render input budget: refuse to render when the combined size of
+      the template's declared inputs exceeds a generous cap; emit a clear
+      templating error routed by existing error semantics (error ports,
+      never data ports).
+- [ ] Chunked rendering: render via `Template.generate()` instead of one
+      blocking `render()`; every N chunks (batched, e.g. 256) check the
+      monotonic deadline/abort state and an output-size cap.
+- [ ] Perf evidence in the PR: the guarded inline throughput baseline
+      (≈44.6k laps/s, `docs/perf-baselines.md`) must not measurably
+      regress — record a before/after opt-in perf run.
+- [ ] Honesty: a template loop that emits no output between iterations
+      still cannot be preempted. EC27/EC35 stay OPEN with narrowed
+      wording; the ledger update lands in the same PR.
+
+### F5 — perf drift trend job (unscheduled, low)
+
+Not a gate. A scheduled (weekly) GitHub Actions workflow runs the opt-in
+`-m perf` suite and the UI perf harness on one OS and uploads results as
+workflow artifacts, so the future D39 100k-event evaluation has a trend
+line instead of two points. Manual inspection only; thresholds/alerts
+only if drift is actually observed.
+
+### Unscheduled backlog
+
+The "Explicitly after v0.2" list above is the unscheduled backlog. Items
+promote into F-numbered entries here (F6+) when prioritized by the
+criteria; nothing is dropped by not being scheduled.
 
 ## Working agreements
 
