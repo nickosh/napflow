@@ -14,7 +14,11 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   `server/app.py` pure-move split (replay/ws/boundary), F3 EC22 tree-kill,
   F4 EC27/EC35 render guards (perf-neutral by design), F5 perf drift job,
   F6 brownfield-init git-metadata prompt/append (EC56 recorded open;
-  owner calls: default append on TTY, never mutate without TTY).
+  owner calls: default append on TTY, never mutate without TTY),
+  F7 `environments.root` + dotenv-style `.env`/`.env.<name>` profiles +
+  W108 not-ignored warning (verified live: `flows.root` + free fixture
+  paths already work — document, don't rebuild; no gitignore mutation
+  outside init).
 - Docs only on `docs/rolling-feature-plan`: AGENTS.md build history item 6;
   EC22/EC27/EC35 rows point at their scheduled F-entries, still OPEN.
 - Next: merge this branch, then start F2 as its own feature branch.

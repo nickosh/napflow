@@ -897,8 +897,9 @@ Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
 Current order: **F2 first** (small enabler, days), then the **F1 track**
-as the headline work, with **F3**, **F4**, and **F6** interleaved
-between F1 slices as small core/CLI branches. **F5** is unscheduled/low.
+as the headline work, with **F3**, **F4**, **F6**, and **F7** interleaved
+between F1 slices as small core/CLI branches (F7 right after F6 — they
+share the `git check-ignore` probe helper). **F5** is unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
@@ -1091,6 +1092,55 @@ Owner-decided behavior (2026-07-15):
       CliRunner prompt flows (accept/decline/default); no-TTY skip+warn;
       `--git-meta` both values; git-absent fallback; Windows CRLF
       append; existing three-OS CI covers platforms.
+
+### F7 — configurable environments root + dotenv-style profiles (owner-designed 2026-07-15)
+
+Context: napflow workspaces embedded inside host projects need locations
+that fit the host layout. Verified 2026-07-15 in a live workspace:
+`flows.root` is **already** a manifest key honored by discovery and the
+resolver (nested paths work; `.` is already rejected for flows by
+identity rules — correct, discovery would otherwise scan `.napflow/`
+and the whole host project), and fixture `file:` paths are **already**
+free workspace-relative paths (root-level fixture ran green). Document
+both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
+(`core/workspace.py`).
+
+- [ ] New manifest key `environments.root` (default `"envs"`) inside
+      the existing `environments:` block. Values validated like
+      `flows.root` (workspace-relative identity + containment: nested
+      OK; absolute, `..`, backslash, outside-workspace rejected);
+      `"."` and `"./"` are explicit special cases meaning the workspace
+      root itself.
+- [ ] Discovery patterns in the configured root — same set for every
+      root value, not special-cased to `"."`, non-recursive as today:
+      `<name>.env` → profile `<name>` (existing rule); `.env` → profile
+      `default`; `.env.<name>` → profile `<name>` (dotenv-style host
+      conventions like `.env.local`).
+- [ ] Duplicate profile names from different files (e.g. `dev.env` +
+      `.env.dev`) fail env discovery with a clear error naming both
+      files — credential sources must never be silently ambiguous.
+- [ ] **No `.gitignore`/`.gitattributes` mutation outside `napf init`**
+      (owner call 2026-07-15): users who change default paths own their
+      host project's ignore rules; napflow warns, never edits. Safety =
+      new **W108** in `napf check`: a discovered env profile file is
+      not git-ignored — probed via `git check-ignore` (shared helper
+      with F6), silent when git is absent or the workspace is not in a
+      repo. W108 also catches hand-broken ignore rules in default
+      layouts.
+- [ ] Same-PR docs: manifest spec §environments / FR-103 (patterns,
+      naming, collision rule, root values, W108); a separate short
+      "embedding napflow in an existing project" note covering
+      `flows.root`, free fixture paths, `environments.root`, and the
+      you-own-your-gitignore stance; release-notes entry when a release
+      is cut (`.env`/`.env.*` discovery is a behavior addition in the
+      default `envs/` layout too).
+- [ ] Tests: nested root; `"."` and `"./"`; containment rejections;
+      `.env` → `default` and `.env.<name>` naming; collision error;
+      `example.env` convention and process-env-overrides precedence
+      unchanged; W108 fires / stays silent without git; three-OS CI.
+
+Estimate: small (~day). Interleavable; lands best immediately after F6
+to reuse the fresh `git check-ignore` probe.
 
 ### Unscheduled backlog
 
