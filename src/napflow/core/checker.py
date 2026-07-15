@@ -1,9 +1,9 @@
-"""`napf check` rules: E001–E012, W101–W107 (engine spec §8, FR-301–309).
+"""`napf check` rules: E001–E012, W101–W107/W109 (engine spec §8).
 
-Errors block `napf run`; warnings print and proceed. Every diagnostic
-carries file path, best-effort line/column (ruamel marks via
-`loader.locate`), the offending node id, and a one-line fix hint (EC29:
-diagnostic quality is product surface).
+Errors block `napf run`; warnings print and proceed. Every diagnostic carries
+a file path and one-line fix hint; flow/YAML diagnostics add best-effort
+line/column (ruamel marks via `loader.locate`) and node id where applicable
+(EC29: diagnostic quality is product surface).
 
 Rule ownership: per-field structure is model territory (loader raises
 LoadError, mapped here to E001/E002/E011); everything spanning nodes,
@@ -19,6 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from napflow.core.gitmeta import (
+    GitMetadataInspection,
+    GitMetadataState,
+    default_git_metadata_rules,
+    inspect_git_metadata,
+)
 from napflow.core.loader import LoadedFlow, LoadError, load_flow, locate
 from napflow.core.models import (
     CounterNode,
@@ -79,7 +85,7 @@ def _python_callable_problem(
 
 @dataclass(frozen=True)
 class CheckDiagnostic:
-    code: str  # "E001".."E012" / "W101".."W107"
+    code: str  # "E001".."E012" / "W101".."W109" (W108 reserved for F7)
     message: str
     path: Path
     hint: str
@@ -926,9 +932,56 @@ def python_functions(flow_dir: Path) -> list[str] | None:
     return None if functions is None else list(functions)
 
 
-def check_workspace(workspace: Workspace) -> list[CheckDiagnostic]:
+def _git_metadata_message(inspection: GitMetadataInspection) -> str:
+    missing = inspection.missing_rules
+    if inspection.state is GitMetadataState.MISSING:
+        missing = inspection.rules.required_rules
+        lead = f"root {inspection.path.name} is missing"
+    elif inspection.state is GitMetadataState.NEEDS_APPEND:
+        lead = f"root {inspection.path.name} lacks canonical napflow rules"
+    elif inspection.state is GitMetadataState.NON_LF:
+        lead = f"root {inspection.path.name} uses CRLF or CR line endings"
+    elif inspection.state is GitMetadataState.INVALID_UTF8:
+        lead = f"root {inspection.path.name} is not valid UTF-8"
+    elif inspection.state is GitMetadataState.INVALID_PATH:
+        lead = (
+            f"root {inspection.path.name} is a "
+            f"{inspection.detail or 'non-regular path'}"
+        )
+    else:
+        lead = f"root {inspection.path.name} could not be read"
+
+    if missing:
+        return f"{lead}; expected lines: {', '.join(repr(line) for line in missing)}"
+    return lead
+
+
+def _git_metadata_diagnostics(workspace: Workspace) -> list[CheckDiagnostic]:
+    diagnostics: list[CheckDiagnostic] = []
+    for rules in default_git_metadata_rules():
+        inspection = inspect_git_metadata(workspace.root, rules)
+        if inspection.state is GitMetadataState.COVERED:
+            continue
+        diagnostics.append(
+            CheckDiagnostic(
+                code="W109",
+                message=_git_metadata_message(inspection),
+                path=inspection.path,
+                hint=(
+                    "edit the root file manually; napflow only modifies Git "
+                    "metadata during init, or use --no-git-meta-check"
+                ),
+            )
+        )
+    return diagnostics
+
+
+def check_workspace(
+    workspace: Workspace, *, check_git_metadata: bool = True
+) -> list[CheckDiagnostic]:
     """`napf check`: every discovered flow, the closure of referenced
-    flows (FR-308), reference-DAG validation (E007), env coverage (W105)."""
+    flows (FR-308), reference-DAG validation (E007), env coverage (W105),
+    and advisory root Git-metadata coverage (W109)."""
     resolver = _SurfaceResolver(workspace)
     diags: list[CheckDiagnostic] = []
     loaded_flows: dict[str, LoadedFlow] = {}
@@ -966,6 +1019,8 @@ def check_workspace(workspace: Workspace) -> list[CheckDiagnostic]:
 
     diags.extend(_reference_cycles(references, loaded_flows))
     diags.extend(_env_coverage(workspace, loaded_flows))
+    if check_git_metadata:
+        diags.extend(_git_metadata_diagnostics(workspace))
     return sorted(diags, key=lambda d: (str(d.path), d.line or 0, d.code))
 
 

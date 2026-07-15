@@ -42,17 +42,20 @@ See the
 
 | Command      | Status | Does |
 |--------------|--------|------|
-| `napf init`  | ✅     | scaffold a workspace (demo + offline smoke flow included) |
+| `napf init`  | ✅     | scaffold a workspace; consent-based root metadata handling for brownfield dirs |
 | `napf list`  | ✅     | discovered flows with their input/output ports |
-| `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with `file:line` diagnostics and CI exit codes |
+| `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with path-specific diagnostics and CI exit codes |
 | `napf run`   | ✅     | headless engine — full node catalog incl. python worker, full-value JSONL/blob history, prepared requests, exit codes 0/1/2/130 |
 | `napf ui`    | ✅     | visual canvas on localhost — edit flows (autosaved through the canonical serializer, clean diffs), edit `nodes.py` in-browser, run with live animated events + full request/response detail, replay bounded history pages with lazy blob detail, drill into completed frame canvases, clone shared flows |
 
 > **Raw history warning:** `.napflow/runs/` may contain complete request and
 > response headers/bodies, cookies, credentials, bearer tokens, log values,
-> and flow outputs. `napf init` gitignores `.napflow/`, but that is not
-> sanitization or access control. Do not commit, upload, attach, publish, or
-> otherwise share this directory unless you have inspected its contents.
+> and flow outputs. Greenfield `napf init` creates the root ignore rule;
+> interactive brownfield init asks before appending to an existing LF
+> `.gitignore` (or accepts explicit `--git-meta append`) and leaves
+> skipped/CRLF files unchanged. `napf check` warns with advisory W109,
+> but Git metadata is not sanitization or access control. Do not commit,
+> upload, attach, publish, or otherwise share this directory unless inspected.
 > Terminal/report masking does not modify the canonical JSONL or blob files.
 
 ## Try it

@@ -25,6 +25,10 @@ Amended 2026-07-13 for v0.2/M4: raw local full-value history activates
 body/run capture settings. Schema-aware terminal/report redaction remains
 opt-in through non-empty secret patterns; D39 defers export and secure-history
 policy.
+Amended 2026-07-15 for rolling feature F6/D43: brownfield init now
+inspects only workspace-root Git metadata, offers LF-only canonical appends,
+never changes CR/CRLF or unsafe paths, and exposes advisory read-only W109
+checks with explicit CLI opt-outs.
 
 v0.2 upgrade note: there is no automatic manifest migration. Existing files
 that still validate load best-effort, but `defaults.run.body_capture_mb` and
@@ -106,7 +110,9 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    identity, avoiding ambiguity when a legal first segment equals the root
    name. A flow directory may also be a namespace containing child flows (D38).
 2. **Env discovery** — every `envs/*.env` file is a profile; profile name =
-   filename stem. All env files are gitignored by `napf init`. No file
+   filename stem. A greenfield `napf init` writes `envs/*.env` plus the
+   `!envs/example.env` template exception into the root `.gitignore`; an
+   existing file remains user-owned under D43 and may be skipped. No file
    registry in the manifest — drop a file in `envs/`, it appears in the UI.
    Dialect (EC36): `KEY=VALUE` per line; `#` comments and blank lines
    ignored; optional single/double quotes stripped from values; no
@@ -146,8 +152,10 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
 
    **Raw-history warning:** `.napflow/runs/` may contain complete request and
    response headers/bodies, cookies, credentials, bearer tokens, log values,
-   Python-node content, and End outputs. The scaffolded `.gitignore` reduces
-   accidental commits but is not sanitization or access control. Do not commit,
+   Python-node content, and End outputs. A greenfield scaffold creates the
+   `.napflow/` ignore rule; brownfield init may append it only with consent to
+   an LF root file, and W109 remains advisory. Git metadata reduces accidental
+   commits but is not sanitization or access control. Do not commit,
    upload, attach, publish, or otherwise share this directory without inspecting
    its contents. Terminal/JSON/JUnit masking creates presentation views only;
    it does not rewrite the canonical JSONL, referenced blobs, or local UI data.
@@ -204,10 +212,32 @@ the HTTP demo against httpbin (network required); it is deliberately NOT
 the smoke check, so a proxy, a firewall, or httpbin having a bad day
 cannot break a user's first five minutes (nor napflow's own CI).
 
+Brownfield Git-metadata behavior (F6/D43): when the target has no
+`napflow.yaml` but already contains root `.gitignore` or `.gitattributes`,
+`napf init` checks only that file for napflow's canonical lines. Parent
+metadata, `.git/info/*`, global configuration, and a Git executable never
+count. A covered LF file reports `exists ... (rules covered)`. A missing-rule
+LF file prompts per file on a TTY, displays the exact `# napflow` block, and
+defaults to append; `--git-meta append|skip` makes that choice noninteractive.
+Without a TTY, the default is `skipped` plus an exact warning. Appends contain
+only required additions, are idempotent, preserve existing content/mode, and
+use the shared atomic LF write path.
+
+Any CR/CRLF, invalid UTF-8, unreadable, symlink, or non-regular existing
+metadata file is warned about and never modified, including under
+`--git-meta append`. `--no-git-meta-check` bypasses inspection, prompts, and
+warnings for existing files (and conflicts with explicit append), while still
+creating either metadata file when it is missing. Only `napf init` may append;
+`napf check` reports the same policy as read-only W109 and can suppress it with
+`--no-git-meta-check`. The statuses are `created`, `exists`, `appended`, and
+`skipped`.
+
 ## CLI surface (current experimental v0.x)
 
 ```
-napf init [dir]               scaffold workspace
+napf init [dir] [--git-meta append|skip]
+     [--no-git-meta-check]    scaffold workspace; existing Git metadata is
+                              consent-based and LF-only
 napf ui [--port] [--no-browser]  serve editor + engine on one localhost
                               port (default 6273), open browser
 napf run <flow> [--env NAME]  headless run, exit code from asserts
@@ -217,15 +247,18 @@ napf run <flow> [--env NAME]  headless run, exit code from asserts
                               defaults.run.run_timeout_s; expiry → exit 2)
                               End outputs → stdout as JSON; logs → stderr
 napf list                     discovered flows + their Start/End ports
-napf check                    validate all flows (schema, edges, env.required,
+napf check [--no-git-meta-check]
+                              validate all flows (schema, edges, env.required,
                               guard analysis of cycles, subflow-reference DAG)
 ```
 
 Exit codes for `napf run`: 0 passed · 1 failed · 2 error · 130 aborted.
 `napf check` (pinned at S1/M5): 0 clean or warnings-only · 1 any E-code ·
-2 operational error (no workspace found). `napf init` refuses a
-directory that already has a `napflow.yaml` (exit 2) and never
-overwrites individual files.
+2 operational error (no workspace found). `napf init` refuses a directory
+that already has a `napflow.yaml` (exit 2). Scaffold content is never
+overwritten; the sole existing-file mutation is an explicitly authorized LF
+append to root `.gitignore`/`.gitattributes`. W109 is warning-class, so it does
+not change `napf check`'s exit status.
 
 `napf run` pins (S2/M5, 2026-07-05):
 - **Run gate** = `check_flow` on the target flow (E-codes → exit 2
@@ -242,9 +275,9 @@ overwrites individual files.
   overrides per key; `-i` values arrive as strings and BIND coerces
   them against the port's declared type.
 - **Env**: explicit `--env NAME` must exist (exit 2 otherwise); the
-  manifest `environments.default` is best-effort — profiles are
-  gitignored, so a fresh clone falls back to process env with a stderr
-  note.
+  manifest `environments.default` is best-effort — real profiles are normally
+  machine-local (greenfield init adds their root ignore rule), so a fresh clone
+  without that profile falls back to process env with a stderr note.
 - **Reports** (`defaults.run.report`) are written next to the JSONL:
   `<run-id>.report.json` / `<run-id>.junit.xml`, built as schema-aware
   declared-secret redacted views over the raw local JSONL (junit: testcase

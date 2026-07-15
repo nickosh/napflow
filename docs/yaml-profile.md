@@ -103,8 +103,9 @@ ever written back to disk. Edits — canvas or CLI — mutate the loaded
 document surgically; the Pydantic models are validated **read-only
 views** for the checker/engine and are never serialized back (dumping a
 model would silently delete every comment). The loader also retains
-ruamel's line/column marks through validation so every `napf check`
-diagnostic points at file:line (engine spec §8).
+ruamel's line/column marks through validation so flow/YAML `napf check`
+diagnostics point at file:line (engine spec §8). Workspace-level diagnostics
+such as W109 carry a path and hint but have no source line or node.
 
 As of v0.2/M1 (2026-07-12), `save_document` emits to a same-directory
 temporary file as UTF-8/LF, flushes and `fsync`s it, preserves existing
@@ -159,8 +160,10 @@ For a corpus of representative flows, assert:
 2. `parse(emit(flow))` deep-equals `flow`.
 
 Wire both into CI so the emitter config cannot drift and quietly bring
-back noisy diffs. `napf init` writes `*.yaml text eol=lf` (and `*.yml`)
-into `.gitattributes` so line endings stay clean cross-platform.
+back noisy diffs. Greenfield `napf init` writes `*.yaml text eol=lf` (and
+`*.yml`) into root `.gitattributes`; brownfield init offers the exact LF-only
+append with consent. It never normalizes or appends to an existing file that
+contains CR/CRLF (D43), and read-only W109 reports absent/non-LF coverage.
 
 ## Consequences
 
