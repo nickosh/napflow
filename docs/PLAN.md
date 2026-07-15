@@ -1,9 +1,13 @@
 # napflow — Development Plan (v0.x)
 
 Status: v0.1 build stages adopted 2026-07-02 and completed 2026-07-09;
-v0.2 plan adopted 2026-07-11. `REQUIREMENTS.md` defines testable scope;
-this file defines order and definition-of-done. Tick boxes as milestones
-land; append course corrections, don't rewrite history.
+v0.2 plan adopted 2026-07-11 and shipped as `v0.2.0` on 2026-07-15.
+From 2026-07-15 planning is **rolling** (D41): see the
+"Rolling delivery" section below — features are prioritized and delivered
+independently; the owner cuts releases when accumulated value warrants.
+`REQUIREMENTS.md` defines testable scope; this file defines order and
+definition-of-done. Tick boxes as work lands; append course corrections,
+don't rewrite history.
 
 ## S1 — loader, models, `napf check`  ✅ done 2026-07-05
 
@@ -861,6 +865,305 @@ release stays bounded:
     encryption/key management, and secure sharing belong to one explicit
     future security design. v0.2 relies on ordinary OS permissions and makes
     no secure-storage or safe-export guarantee.
+
+## Rolling delivery — from 2026-07-15 (D41)
+
+`v0.2.0` shipped 2026-07-15 (tag + PyPI). From this point the plan is not
+version-scoped: features are planned and prioritized here, delivered as
+feature branches merged by PR when complete, and the owner cuts a release
+whenever accumulated merged value warrants one — the existing tag-driven
+gate (`RELEASING.md`, D33/D40) is unchanged. M-numbered version-scoped
+milestone blocks end at `v0.2.0`.
+
+**The invariant replacing "milestone done": `main` stays releasable at
+every merge.** The full PR gate is the mergeability bar; anything too
+large to merge green in one PR must be sliced into increments that each
+keep `main` releasable.
+
+### Priority criteria (ordered; earlier criterion wins ties)
+
+1. **Real-use pull** — removes something that blocks or embarrasses real
+   daily use (the owner's own QA work first, then early adopters).
+2. **Trust protection** — prevents a silent failure or foot-gun (hangs,
+   orphaned processes, data loss) that would burn a user's trust once.
+3. **Enabler leverage** — makes already-planned work cheaper or cleaner;
+   structural splits land before the features that would pile onto them.
+4. **Cost fit** — prefer branches that merge within days; large features
+   must be sliceable per the invariant above.
+5. **Compat window** — wanted format/API breaks are cheapest early in
+   v0.x (D33); prefer sooner over later.
+
+Demos, screenshots, and README media wait until F1 ships (owner call
+2026-07-15).
+
+Current order: **F2 first** (small enabler, days), then the **F1 track**
+as the headline work, with **F3**, **F4**, **F6**, and **F7** interleaved
+between F1 slices as small core/CLI branches (F7 right after F6 — they
+share the `git check-ignore` probe helper). **F5** is unscheduled/low.
+
+### F1 — UI rework for real use + visual styling (headline track)
+
+Owner direction 2026-07-15: adapt the canvas UI for real daily use and
+apply a coherent visual style. Proceeds as sliced feature branches
+(invariant above); Slice 0 produces the authoritative slice list — the
+slices named here are the expected shape, not commitments.
+
+- [ ] Slice 0 — UX audit + design foundation: walk every surface (canvas,
+      node config forms, run panel, replay drilldown, in-browser
+      `nodes.py` editor, flow navigation) through a real API-testing
+      task; record friction; choose design tokens (typography, spacing,
+      color, dark/light) and component conventions; produce the concrete
+      slice list for owner sign-off. Output is a short doc + tokens,
+      minimal behavior change.
+- [ ] Slice 1 — split `ui/src/store.ts` (1,302 lines, one Zustand store)
+      into slices (canvas / persistence / run-replay) as a pure-move
+      enabler, mirroring F2 on the frontend, before feature slices pile
+      onto it. `RunPanel.tsx` (778 lines) may split along the same seams.
+- [ ] Slice 2 — canvas undo/redo (owner request 2026-07-15). In-memory,
+      per-open-canvas bounded snapshot stack over the *document* slice
+      only (nodes/edges/config/layout/Start/End ports) — depends on
+      Slice 1's document/session state boundary; zundo-or-equivalent
+      temporal middleware. Bounds: stack cap (~100 steps) + coalescing
+      (drag commits on release; config typing groups; multi-delete is
+      one step); memory is per-step deltas via immutable structural
+      sharing — no serialization, no server round-trips. Guards: hidden/
+      disabled in run mode (D29); external-change reload clears the
+      stack; autosave needs no special handling (an undo is an ordinary
+      state change through the save coordinator). Shortcuts scoped by
+      focus — CodeMirror keeps its own native text undo for `nodes.py`
+      and config editors. **Owner call 2026-07-15: undo history is
+      never a workspace file** (git-friendliness + conflict semantics;
+      git is the durable history). Snapshots stay JSON-serializable by
+      construction, so optional future persistence — browser IndexedDB
+      or a `.napflow/` local-history seam, never `flows/` — remains a
+      cheap additive extension, not a redesign.
+- [ ] Slices 3+ — per the audit, expected order of daily-use value:
+      canvas interaction + node config forms; run panel + replay
+      drilldown; workspace/flow navigation; `nodes.py` editing ergonomics.
+- [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
+      updates are deliberate, named in the PR); production build and the
+      frontend notices audit stay in the gate.
+
+Exit: the owner completes a real API-testing task in the UI without
+dropping to hand-editing YAML for routine operations; only then do README
+demos/screenshots land (deferred owner call above).
+
+### F2 — `server/app.py` split by pure moves (approved 2026-07-15)
+
+`server/app.py` is 1,810 lines mixing four separable concerns. Split by
+pure moves — no behavior, route, contract, or logic changes — so later
+work (F1 server touches, D30 controls) lands in small files.
+
+- [ ] `server/replay.py` — the replay read/view layer:
+      `_ReplayQueryError`, `_ReplayMetadata`, `_ReplaySnapshot`,
+      `_ReplayViewBuilder`; replay record iteration and paging
+      (`_iter_replay_records`, `_parse_replay_integer`,
+      `_parse_replay_page_query`, `_parse_frame_query`,
+      `_metadata_from_header`, `_read_replay_page`, `_read_replay_event`,
+      `_replay_envelope`, `_replay_run_summary`, `_replay_frame_summary`,
+      `_capture_replay_snapshot`, `_replay_history_state`,
+      `_has_external_active_marker`).
+- [ ] `server/ws.py` — live websocket streaming: `_ws_close_reason`,
+      `_SlowSubscriber`, `_send_ws_record`, `_send_history_range`,
+      `_close_ws`, `_stream_run_websocket`, plus the `WS_*` constants
+      they own.
+- [ ] `server/boundary.py` — the local-request trust boundary (D37) and
+      write serialization: `_Authority`, `_request_scheme`,
+      `_parse_authority`, `_is_loopback_host`, `_request_authority`,
+      `_origin_matches`, `_LocalRequestBoundary`,
+      `_SourceWriteCoordinator`.
+- [ ] `app.py` keeps `build_app`, route handlers, and small response
+      helpers (`_diag_payload`, `_prep_error`, `_etag`, `_bad_request`,
+      `_json_object`, …).
+
+Rules and definition of done:
+
+- Pure moves + import updates only. Moved names drop the leading
+  underscore (the module boundary now provides the privacy); no other
+  renames, no signature or logic changes.
+- Import direction unchanged: new server modules import `core` and each
+  other downward only; import-linter contracts stay green.
+- `tests/test_server.py` imports `_read_records`, `_send_ws_record`,
+  `_send_history_range`, `_SourceWriteCoordinator`, `WS_HISTORY_FORMAT`,
+  and `WS_REQUEST_ORIGIN` from `napflow.server.app`, and
+  `tests/test_perf_baselines.py` imports `_read_records`; those imports
+  are updated mechanically — no test logic changes.
+- DoD: `app.py` well under ~700 lines; the diff reads as moves; the full
+  gate is green with no behavior diff.
+- Optional follow-up branch (not part of this one): split
+  `tests/test_server.py` (2,151 lines) along the same seams.
+
+### F3 — EC22 descendant-process cleanup
+
+Python-node workers must own their whole process tree so timeout, abort,
+and shutdown cannot leak grandchildren. QA-authored nodes shell out
+(subprocess calls are normal in this audience); orphaned processes in CI
+are a trust burn. This is the cheapest fix in the ledger relative to its
+risk. Closure bar is EC22's stated one: cross-platform child + grandchild
+tree-kill tests.
+
+- [ ] POSIX: spawn workers with `start_new_session=True` (own process
+      group); replace single-PID kill with `os.killpg` on the worker's
+      group at timeout-kill, cancellation cleanup, and lifecycle
+      shutdown. Guard: never signal the server's own group.
+- [ ] Windows: assign the worker to a Job Object with
+      `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` via ctypes (no new
+      dependency); close the job handle on the same three paths.
+      Breakaway-flag children are best-effort — document that boundary.
+- [ ] Tests: a python node spawns a grandchild that heartbeats to a temp
+      file; assert child and grandchild both die on (a) per-node timeout,
+      (b) external cancellation, (c) shutdown — green on all three OS
+      CI jobs.
+- [ ] Close EC22 in `EDGE_CASES.md` in the landing PR; until then its
+      "only the worker process is covered" wording stays accurate.
+
+### F4 — EC27/EC35 template render guards (narrows, does not close)
+
+Cooperative deadlines cannot preempt a synchronous Jinja render, so a
+pathological template still produces the worst failure shape: a hung CI
+job with no report. Land the cheap guards that convert most hang shapes
+into clear errors; full preemptible rendering stays in the unscheduled
+backlog under EC35's stated bar.
+
+Performance position (evaluated 2026-07-15): the guards are a pre-render
+size check plus periodic checks *between* output chunks — not per-opcode
+instrumentation — so the cost is O(1) per check and must be invisible
+next to render cost itself. The full killable-boundary isolation is the
+expensive design and is exactly what stays deferred.
+
+- [ ] Pre-render input budget: refuse to render when the combined size of
+      the template's declared inputs exceeds a generous cap; emit a clear
+      templating error routed by existing error semantics (error ports,
+      never data ports).
+- [ ] Chunked rendering: render via `Template.generate()` instead of one
+      blocking `render()`; every N chunks (batched, e.g. 256) check the
+      monotonic deadline/abort state and an output-size cap.
+- [ ] Perf evidence in the PR: the guarded inline throughput baseline
+      (≈44.6k laps/s, `docs/perf-baselines.md`) must not measurably
+      regress — record a before/after opt-in perf run.
+- [ ] Honesty: a template loop that emits no output between iterations
+      still cannot be preempted. EC27/EC35 stay OPEN with narrowed
+      wording; the ledger update lands in the same PR.
+
+### F5 — perf drift trend job (unscheduled, low)
+
+Not a gate. A scheduled (weekly) GitHub Actions workflow runs the opt-in
+`-m perf` suite and the UI perf harness on one OS and uploads results as
+workflow artifacts, so the future D39 100k-event evaluation has a trend
+line instead of two points. Manual inspection only; thresholds/alerts
+only if drift is actually observed.
+
+### F6 — `napf init` git-metadata handling for existing files (EC56; owner-designed 2026-07-15)
+
+Brownfield init (target directory already has `.gitignore` or
+`.gitattributes`, no `napflow.yaml`) currently skips both files with a
+one-line `exists` notice, leaving `envs/*.env`, `.napflow/`, and YAML
+`eol=lf` rules absent — committable credentials/raw history (EC56).
+`napf init`'s refusal when `napflow.yaml` exists stays exactly as is.
+
+Owner-decided behavior (2026-07-15):
+
+- [ ] Missing files: created silently — unchanged.
+- [ ] Existing file with all napflow rules already effective: report
+      `exists (rules covered)`; no prompt, no change.
+- [ ] Existing file missing rules, interactive TTY: per-file prompt
+      showing exactly the lines that would be added; **default =
+      append**. Decline ⇒ `skipped` + the warning below.
+- [ ] Existing file missing rules, no TTY (CI/scripts): **never
+      mutate** — report `skipped` plus a loud warning listing the exact
+      missing lines; `--git-meta append|skip` makes the choice explicit
+      and also suppresses/forces the prompt interactively.
+- [ ] Append mechanics: one clearly marked `# napflow` block containing
+      only the missing rules; idempotent (re-append adds nothing);
+      matches the file's predominant line-ending style (CRLF-safe);
+      whole-file atomic rewrite via `atomic_write_text`.
+- [ ] Rule-coverage check: exact semantics via `git check-ignore` /
+      `git check-attr` when git is available (handles negations and
+      inherited excludes); conservative line-presence fallback
+      otherwise.
+- [ ] Status vocabulary extends to created / exists / appended /
+      skipped; `scaffold_workspace`'s "never overwrites" contract keeps
+      holding — append never rewrites user content, only adds the block.
+- [ ] Same-PR docs: workspace-manifest spec (`napf init` CLI section);
+      README raw-history wording ("napf init gitignores `.napflow/`")
+      updated to describe both greenfield and brownfield outcomes;
+      EC56 closed.
+- [ ] Tests: block construction + idempotency + partial-rules cases;
+      CliRunner prompt flows (accept/decline/default); no-TTY skip+warn;
+      `--git-meta` both values; git-absent fallback; Windows CRLF
+      append; existing three-OS CI covers platforms.
+
+### F7 — configurable environments root + dotenv-style profiles (owner-designed 2026-07-15)
+
+Context: napflow workspaces embedded inside host projects need locations
+that fit the host layout. Verified 2026-07-15 in a live workspace:
+`flows.root` is **already** a manifest key honored by discovery and the
+resolver (nested paths work; `.` is already rejected for flows by
+identity rules — correct, discovery would otherwise scan `.napflow/`
+and the whole host project), and fixture `file:` paths are **already**
+free workspace-relative paths (root-level fixture ran green). Document
+both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
+(`core/workspace.py`).
+
+- [ ] New manifest key `environments.root` (default `"envs"`) inside
+      the existing `environments:` block. Values validated like
+      `flows.root` (workspace-relative identity + containment: nested
+      OK; absolute, `..`, backslash, outside-workspace rejected — D42);
+      `"."` and `"./"` are explicit special cases meaning the workspace
+      root itself.
+- [ ] Discovery in the configured root — same rules for every root
+      value, not special-cased to `"."`, non-recursive as today:
+      collect `*.env`, `.env`, and `.env.*`; keep regular files only
+      (directories and unreadable/invalid-format entries are skipped
+      with a warning, never fatal at discovery).
+- [ ] **Profile identifier = the literal filename** (owner call
+      2026-07-15): `.env` is picked as `.env`, `.env.staging` as
+      `.env.staging`, `dev.env` as `dev.env` — in `--env`,
+      `environments.default`, and the UI picker alike. No stem mapping,
+      no invented names; filenames are unique per directory, so name
+      collisions/precedence/shadowing cannot exist. **Breaking change**
+      to the v0.2 stem convention (`--env dev` → `--env dev.env`),
+      accepted under D33/criterion 5 while the user base is small: the
+      scaffolded manifest (`environments.default`), FR-103 spec text,
+      and a release-notes entry update in the same PR.
+- [ ] Skip-with-warning applies to listing only: explicitly selecting a
+      skipped or invalid profile (`--env`, `environments.default`, or a
+      flow's `env.required`) is a hard, clearly-worded error at run
+      preparation — a run must never proceed silently without the
+      credentials the user asked for.
+- [ ] **No `.gitignore`/`.gitattributes` mutation outside `napf init`**
+      (owner call 2026-07-15): users who change default paths own their
+      host project's ignore rules; napflow warns, never edits. Safety =
+      new **W108** in `napf check`: a discovered env profile file is
+      not git-ignored — probed via `git check-ignore` (shared helper
+      with F6), silent when git is absent or the workspace is not in a
+      repo. W108 also catches hand-broken ignore rules in default
+      layouts.
+- [ ] Same-PR docs: manifest spec §environments / FR-103 (patterns,
+      literal-filename selection, root values, W108); a separate short
+      "embedding napflow in an existing project" note covering
+      `flows.root`, free fixture paths, `environments.root`, the
+      you-own-your-gitignore stance, and D42 stated explicitly — `..`
+      and absolute roots stay rejected for every configurable
+      directory; the supported pattern for host-level files is raising
+      the workspace root (`napflow.yaml` at host level, keys pointing
+      down). Release-notes entry when a release is cut (literal-name
+      selection break + `.env`/`.env.*` discovery addition).
+- [ ] Tests: nested root; `"."` and `"./"`; containment rejections;
+      literal-filename selection for all three patterns (incl. the
+      `--env dev.env` break); invalid-file skip warning vs hard error
+      on explicit selection; `example.env` convention and
+      process-env-overrides precedence unchanged; W108 fires / stays
+      silent without git; three-OS CI.
+
+Estimate: small (~day). Interleavable; lands best immediately after F6
+to reuse the fresh `git check-ignore` probe.
+
+### Unscheduled backlog
+
+The "Explicitly after v0.2" list above is the unscheduled backlog. Items
+promote into F-numbered entries here (F6+) when prioritized by the
+criteria; nothing is dropped by not being scheduled.
 
 ## Working agreements
 
