@@ -9,7 +9,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 - Decided D41: no version-scoped milestone plans after v0.2.0; features merge
   independently via PR, owner cuts releases; `main` stays releasable per merge.
 - Done: PLAN §Rolling delivery with ordered priority criteria and backlog —
-  F1 UI rework track (headline; demos/screenshots wait for it), F2 approved
+  F1 UI rework track (headline; demos/screenshots wait for it; Slice 2 =
+  in-memory canvas undo/redo, owner call: never a workspace file), F2 approved
   `server/app.py` pure-move split (replay/ws/boundary), F3 EC22 tree-kill,
   F4 EC27/EC35 render guards (perf-neutral by design), F5 perf drift job.
 - Docs only on `docs/rolling-feature-plan`: AGENTS.md build history item 6;

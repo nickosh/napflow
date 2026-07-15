@@ -918,7 +918,25 @@ slices named here are the expected shape, not commitments.
       into slices (canvas / persistence / run-replay) as a pure-move
       enabler, mirroring F2 on the frontend, before feature slices pile
       onto it. `RunPanel.tsx` (778 lines) may split along the same seams.
-- [ ] Slices 2+ — per the audit, expected order of daily-use value:
+- [ ] Slice 2 — canvas undo/redo (owner request 2026-07-15). In-memory,
+      per-open-canvas bounded snapshot stack over the *document* slice
+      only (nodes/edges/config/layout/Start/End ports) — depends on
+      Slice 1's document/session state boundary; zundo-or-equivalent
+      temporal middleware. Bounds: stack cap (~100 steps) + coalescing
+      (drag commits on release; config typing groups; multi-delete is
+      one step); memory is per-step deltas via immutable structural
+      sharing — no serialization, no server round-trips. Guards: hidden/
+      disabled in run mode (D29); external-change reload clears the
+      stack; autosave needs no special handling (an undo is an ordinary
+      state change through the save coordinator). Shortcuts scoped by
+      focus — CodeMirror keeps its own native text undo for `nodes.py`
+      and config editors. **Owner call 2026-07-15: undo history is
+      never a workspace file** (git-friendliness + conflict semantics;
+      git is the durable history). Snapshots stay JSON-serializable by
+      construction, so optional future persistence — browser IndexedDB
+      or a `.napflow/` local-history seam, never `flows/` — remains a
+      cheap additive extension, not a redesign.
+- [ ] Slices 3+ — per the audit, expected order of daily-use value:
       canvas interaction + node config forms; run panel + replay
       drilldown; workspace/flow navigation; `nodes.py` editing ergonomics.
 - [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
