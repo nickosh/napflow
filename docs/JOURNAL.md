@@ -4,6 +4,12 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-15 — F6 completion evidence recorded
+
+- Done: PLAN now ties completed F6 to implementation commit `da245c8` and the
+  observed 99-focused/667-full local gates; PR cross-platform CI stays pending.
+- Next: open/finish the F6 PR, then F2; F7 remains deferred.
+
 ## 2026-07-15 — F6-only boundary; F7 deferred
 
 - Decided by owner: this branch implements F6 only; F7 remains planned but is

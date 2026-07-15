@@ -897,7 +897,7 @@ Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
 F6 was selected by the owner as the first rollout implementation and is
-implemented locally on `feat/f6-init-git-metadata` as of 2026-07-15. Current
+complete on `feat/f6-init-git-metadata` at `da245c8` as of 2026-07-15. Current
 order resumes with **F2** (small enabler, days), then the
 **F1 track** as headline work, with **F3** and **F4** interleaved between F1
 slices as small core/CLI branches. **F7** remains planned but is deferred by
@@ -1056,6 +1056,10 @@ line instead of two points. Manual inspection only; thresholds/alerts
 only if drift is actually observed.
 
 ### F6 — `napf init` git-metadata handling for existing files ✅ done 2026-07-15 (EC56; D43)
+
+Completion evidence: implementation commit `da245c8`; 99 focused tests and
+667 full-suite tests pass locally (11 deselected), with Ruff lint/format and
+diff hygiene clean. The PR's macOS/Windows/Linux gate remains pending.
 
 Brownfield init (target directory already has `.gitignore` or
 `.gitattributes`, no `napflow.yaml`) previously skipped both files with a
