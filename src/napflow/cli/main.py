@@ -10,8 +10,10 @@ import asyncio
 import json
 import signal
 import socket
+import sys
 import webbrowser
 from contextlib import suppress
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -19,9 +21,10 @@ import typer
 
 import napflow
 from napflow.cli.report import write_report
-from napflow.cli.scaffold import scaffold_workspace
+from napflow.cli.scaffold import ScaffoldResult, scaffold_workspace
 from napflow.core.checker import check_workspace
 from napflow.core.engine import FlowRun
+from napflow.core.gitmeta import GitMetadataInspection, GitMetadataState
 from napflow.core.loader import LoadError, load_flow
 from napflow.core.models import EndNode, StartNode
 from napflow.core.runprep import (
@@ -74,18 +77,112 @@ def _workspace() -> Workspace:
         raise typer.Exit(2) from e
 
 
+class _GitMetadataMode(StrEnum):
+    APPEND = "append"
+    SKIP = "skip"
+
+
+def _stdin_is_tty() -> bool:
+    return sys.stdin.isatty()
+
+
+def _show_git_metadata_warning(result: ScaffoldResult) -> None:
+    inspection = result.metadata
+    if inspection is None or inspection.state is GitMetadataState.COVERED:
+        return
+
+    match inspection.state:
+        case GitMetadataState.NEEDS_APPEND:
+            message = "napflow rules were not added"
+        case GitMetadataState.NON_LF:
+            message = (
+                "uses CRLF or CR line endings; napflow only appends to LF files "
+                "and left it unchanged"
+            )
+        case GitMetadataState.INVALID_UTF8:
+            message = "is not valid UTF-8 and was left unchanged"
+        case GitMetadataState.INVALID_PATH:
+            message = (
+                f"is a {inspection.detail or 'non-regular path'} and was left unchanged"
+            )
+        case GitMetadataState.UNREADABLE:
+            message = "could not be read and was left unchanged"
+        case _:
+            return
+
+    typer.echo(f"WARNING: {inspection.path.name} {message}.", err=True)
+    if inspection.missing_rules:
+        typer.echo("  Missing napflow lines:", err=True)
+        for line in inspection.missing_rules:
+            typer.echo(f"    {line}", err=True)
+    typer.echo(
+        "  Edit the root file manually, or use --no-git-meta-check when this "
+        "workspace policy is intentional.",
+        err=True,
+    )
+
+
 @app.command()
 def init(
     directory: Annotated[
         Path, typer.Argument(help="Workspace directory (created if missing).")
     ] = Path(),
+    git_meta: Annotated[
+        _GitMetadataMode | None,
+        typer.Option(
+            "--git-meta",
+            help="Existing root metadata: append or skip missing napflow rules.",
+        ),
+    ] = None,
+    git_meta_check: Annotated[
+        bool,
+        typer.Option(
+            "--git-meta-check/--no-git-meta-check",
+            help="Inspect existing root .gitignore/.gitattributes files.",
+        ),
+    ] = True,
 ) -> None:
     """Scaffold a workspace: manifest, flows/{main,example,smoke}, envs."""
     if (directory / "napflow.yaml").exists():
         typer.echo(f"error: {directory / 'napflow.yaml'} already exists", err=True)
         raise typer.Exit(2)
-    for rel, status in scaffold_workspace(directory):
-        typer.echo(f"  {status:<8} {rel}")
+    if not git_meta_check and git_meta is _GitMetadataMode.APPEND:
+        typer.echo(
+            "error: --git-meta append cannot be used with --no-git-meta-check",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    interactive = _stdin_is_tty()
+
+    def decide_git_metadata(inspection: GitMetadataInspection) -> bool:
+        if git_meta is _GitMetadataMode.APPEND:
+            return True
+        if git_meta is _GitMetadataMode.SKIP or not interactive:
+            return False
+        typer.echo(f"\n{inspection.path.name} is missing this napflow block:")
+        typer.echo(inspection.append_block.rstrip("\n"))
+        return typer.confirm("Append it?", default=True)
+
+    try:
+        results = scaffold_workspace(
+            directory,
+            check_git_metadata=git_meta_check,
+            decide_git_metadata=decide_git_metadata,
+        )
+    except OSError as error:
+        typer.echo(f"error: could not initialize {directory}: {error}", err=True)
+        raise typer.Exit(2) from error
+    for result in results:
+        inspection = result.metadata
+        covered = (
+            inspection is not None
+            and not inspection.missing_rules
+            and inspection.state in {GitMetadataState.COVERED, GitMetadataState.NON_LF}
+        )
+        suffix = " (rules covered)" if result.status == "exists" and covered else ""
+        typer.echo(f"  {result.status:<8} {result.relative_path}{suffix}")
+        _show_git_metadata_warning(result)
     typer.echo("\nfirst touch: cd into the workspace, then `napf check`")
 
 
@@ -434,10 +531,18 @@ def ui(
 
 
 @app.command()
-def check() -> None:
+def check(
+    git_meta_check: Annotated[
+        bool,
+        typer.Option(
+            "--git-meta-check/--no-git-meta-check",
+            help="Check root .gitignore/.gitattributes napflow rules.",
+        ),
+    ] = True,
+) -> None:
     """Validate all flows (schema, edges, guards, references, env)."""
     ws = _workspace()
-    diagnostics = check_workspace(ws)
+    diagnostics = check_workspace(ws, check_git_metadata=git_meta_check)
     for diag in diagnostics:
         typer.echo(diag.render())
     errors = sum(1 for d in diagnostics if d.severity == "error")

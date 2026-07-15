@@ -80,8 +80,8 @@ def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> Prep
     """LOAD + CHECK + ENV (EN §2): E-codes block, warnings proceed. The
     gate covers the entry flow plus its reference closure (E007) — a
     broken subflow blocks like a broken entry. An explicit `env` must
-    exist; the manifest default is best-effort (profiles are gitignored
-    — fresh clones have none)."""
+    exist; the manifest default is best-effort (real profiles are normally
+    machine-local, so fresh clones may have none)."""
     try:
         identity = workspace.resolver.normalize_identity(flow)
         file = workspace.resolver.flow_file(identity)

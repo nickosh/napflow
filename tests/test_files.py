@@ -4,7 +4,7 @@ import stat
 import pytest
 
 import napflow.core.files as files
-from napflow.core.files import atomic_write_text
+from napflow.core.files import atomic_create_text, atomic_write_text
 
 
 def _temporary_files(path):
@@ -55,4 +55,72 @@ def test_atomic_write_failure_preserves_original_and_cleans_temp(
         atomic_write_text(path, "replacement\n")
 
     assert path.read_bytes() == original
+    assert _temporary_files(path) == []
+
+
+def test_atomic_create_is_lf_and_never_replaces_an_existing_path(tmp_path):
+    path = tmp_path / ".gitignore"
+
+    assert atomic_create_text(path, "first\r\n")
+    assert path.read_bytes() == b"first\n"
+    assert not atomic_create_text(path, "replacement\n")
+    assert path.read_bytes() == b"first\n"
+    assert _temporary_files(path) == []
+
+
+def test_atomic_create_falls_back_when_hard_links_are_unavailable(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / ".gitattributes"
+
+    def unsupported(*_args):
+        raise OSError(errno.ENOTSUP, "hard links unavailable")
+
+    monkeypatch.setattr(files, "_link", unsupported)
+
+    assert atomic_create_text(path, "*.yaml text eol=lf\r\n")
+    assert path.read_bytes() == b"*.yaml text eol=lf\n"
+    assert _temporary_files(path) == []
+
+
+def test_atomic_create_fallback_never_replaces_an_existing_path(tmp_path, monkeypatch):
+    path = tmp_path / ".gitattributes"
+    original = b"# owner bytes\r\n"
+    path.write_bytes(original)
+
+    def unsupported(*_args):
+        raise OSError(errno.ENOTSUP, "hard links unavailable")
+
+    monkeypatch.setattr(files, "_link", unsupported)
+
+    assert not atomic_create_text(path, "replacement\n")
+    assert path.read_bytes() == original
+    assert _temporary_files(path) == []
+
+
+def test_atomic_create_fallback_failure_cleans_destination_and_temp(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / ".gitattributes"
+    real_fsync = files.os.fsync
+    fsync_calls = 0
+
+    def unsupported(*_args):
+        raise OSError(errno.ENOTSUP, "hard links unavailable")
+
+    def fail_fallback_fsync(fd):
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 2:
+            raise OSError(errno.ENOSPC, "simulated create failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(files, "_link", unsupported)
+    monkeypatch.setattr(files.os, "fsync", fail_fallback_fsync)
+
+    with pytest.raises(OSError, match="simulated create failure"):
+        atomic_create_text(path, "*.yaml text eol=lf\n")
+
+    assert fsync_calls == 2
+    assert not path.exists()
     assert _temporary_files(path) == []

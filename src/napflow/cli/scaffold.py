@@ -7,11 +7,23 @@ scaffolded workspace must pass `napf check` with zero diagnostics and
 (EC34: first-touch check).
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from ruamel.yaml.comments import CommentedMap
 
-from napflow.core.files import atomic_write_text
+from napflow.core.files import atomic_create_text, atomic_write_text
+from napflow.core.gitmeta import (
+    GITIGNORE,
+    GitMetadataAppendError,
+    GitMetadataInspection,
+    GitMetadataRules,
+    GitMetadataState,
+    append_git_metadata,
+    default_git_metadata_rules,
+    inspect_git_metadata,
+)
 from napflow.core.loader import save_document
 
 MAIN_FLOW = {
@@ -208,17 +220,26 @@ EXAMPLE_ENV = """\
 BASE_URL=https://httpbin.org
 """
 
-GITIGNORE = """\
-# napflow: real env profiles stay local; run history is per-machine
-envs/*.env
-!envs/example.env
-.napflow/
-"""
+GITIGNORE_PREAMBLE = (
+    "# napflow: real env profiles stay local; run history is per-machine\n"
+)
 
-GITATTRIBUTES = """\
-*.yaml text eol=lf
-*.yml text eol=lf
-"""
+
+@dataclass(frozen=True)
+class ScaffoldResult:
+    """One scaffold entry plus optional existing-metadata inspection."""
+
+    relative_path: str
+    status: str
+    metadata: GitMetadataInspection | None = None
+
+
+GitMetadataDecision = Callable[[GitMetadataInspection], bool]
+
+
+def _new_metadata_content(rules: GitMetadataRules) -> str:
+    preamble = GITIGNORE_PREAMBLE if rules.filename == GITIGNORE else ""
+    return preamble + "\n".join(rules.required_rules) + "\n"
 
 
 def _manifest(name: str) -> dict:
@@ -239,9 +260,96 @@ def _manifest(name: str) -> dict:
     }
 
 
-def scaffold_workspace(directory: Path) -> list[tuple[str, str]]:
-    """Create the FR-107 scaffold; returns (relative path, status) per
-    entry, status in {"created", "exists"}. Never overwrites."""
+def scaffold_workspace(
+    directory: Path,
+    *,
+    check_git_metadata: bool = True,
+    decide_git_metadata: GitMetadataDecision | None = None,
+) -> list[ScaffoldResult]:
+    """Create the FR-107 scaffold without overwriting user content.
+
+    Existing root Git metadata is inspected before any scaffold write so an
+    interactive caller can collect every append decision safely. Missing files
+    retain the greenfield behavior and are created even when inspection is
+    disabled. Existing metadata is appended only through an explicit decision.
+    """
+    metadata_rules = default_git_metadata_rules()
+    metadata_preflight: dict[str, GitMetadataInspection] = {}
+    metadata_decisions: dict[str, bool] = {}
+    if check_git_metadata:
+        for rules in metadata_rules:
+            inspection = inspect_git_metadata(directory, rules)
+            metadata_preflight[rules.filename] = inspection
+            if (
+                inspection.state is GitMetadataState.NEEDS_APPEND
+                and decide_git_metadata is not None
+            ):
+                # All callbacks run before napflow.yaml or any other scaffold
+                # file is created. EOF/Ctrl-C therefore cannot strand an init
+                # that the existing-manifest refusal would make unretryable.
+                metadata_decisions[rules.filename] = decide_git_metadata(inspection)
+
+    # Apply metadata decisions before creating napflow.yaml. A metadata I/O
+    # failure therefore cannot make init refuse its own retry, and exclusive
+    # creation never replaces a path that appears after preflight.
+    directory.mkdir(parents=True, exist_ok=True)
+    metadata_results: list[ScaffoldResult] = []
+    for rules in metadata_rules:
+        rel = rules.filename
+        path = directory / rel
+        content = _new_metadata_content(rules)
+
+        if not check_git_metadata:
+            created = atomic_create_text(path, content)
+            metadata_results.append(
+                ScaffoldResult(rel, "created" if created else "exists")
+            )
+            continue
+
+        inspection = inspect_git_metadata(directory, rules)
+        if inspection.state is GitMetadataState.MISSING:
+            if atomic_create_text(path, content):
+                metadata_results.append(ScaffoldResult(rel, "created"))
+                continue
+            inspection = inspect_git_metadata(directory, rules)
+
+        if inspection.state is GitMetadataState.COVERED:
+            metadata_results.append(ScaffoldResult(rel, "exists", inspection))
+            continue
+
+        prompted = metadata_preflight.get(rel)
+        if (
+            inspection.state is GitMetadataState.NEEDS_APPEND
+            and prompted is not None
+            and metadata_decisions.get(rel, False)
+        ):
+            try:
+                inspection = append_git_metadata(prompted)
+            except GitMetadataAppendError:
+                inspection = inspect_git_metadata(directory, rules)
+            else:
+                metadata_results.append(ScaffoldResult(rel, "appended", inspection))
+                continue
+
+            # The owner may have changed the file after the prompt. Respect
+            # that new state instead of applying the stale decision.
+            if inspection.state is GitMetadataState.MISSING:
+                if atomic_create_text(path, content):
+                    metadata_results.append(ScaffoldResult(rel, "created"))
+                    continue
+                inspection = inspect_git_metadata(directory, rules)
+            if inspection.state is GitMetadataState.COVERED:
+                metadata_results.append(ScaffoldResult(rel, "exists", inspection))
+                continue
+
+        status = (
+            "exists"
+            if not inspection.missing_rules
+            and inspection.state is GitMetadataState.NON_LF
+            else "skipped"
+        )
+        metadata_results.append(ScaffoldResult(rel, status, inspection))
+
     yaml_files: dict[str, dict] = {
         "napflow.yaml": _manifest(directory.resolve().name),
         "flows/main/flow.yaml": MAIN_FLOW,
@@ -255,28 +363,28 @@ def scaffold_workspace(directory: Path) -> list[tuple[str, str]]:
         "fixtures/smoke.json": SMOKE_FIXTURE,
         "envs/dev.env": DEV_ENV,
         "envs/example.env": EXAMPLE_ENV,
-        ".gitignore": GITIGNORE,
-        ".gitattributes": GITATTRIBUTES,
     }
 
-    results = []
+    results: list[ScaffoldResult] = []
     for rel, doc in yaml_files.items():
         path = directory / rel
         if path.exists():
-            results.append((rel, "exists"))
+            results.append(ScaffoldResult(rel, "exists"))
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         save_document(doc, path)  # the ONE canonical serializer (FR-204)
-        results.append((rel, "created"))
+        results.append(ScaffoldResult(rel, "created"))
     for rel, content in text_files.items():
         path = directory / rel
         if path.exists():
-            results.append((rel, "exists"))
+            results.append(ScaffoldResult(rel, "exists"))
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(path, content)
-        results.append((rel, "created"))
+        results.append(ScaffoldResult(rel, "created"))
+
+    results.extend(metadata_results)
 
     (directory / ".napflow").mkdir(parents=True, exist_ok=True)
-    results.append((".napflow/", "created"))
+    results.append(ScaffoldResult(".napflow/", "created"))
     return results

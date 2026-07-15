@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from napflow.core.checker import check_workspace, template_refs, used_by
+from napflow.core.gitmeta import default_git_metadata_rules
 from napflow.core.runprep import RunPrepError, prepare_run
 from napflow.core.workspace import load_workspace
 
@@ -12,9 +13,17 @@ from napflow.core.workspace import load_workspace
 # Workspace builder
 
 
-def make_ws(tmp_path: Path, files: dict[str, str]):
+def make_ws(tmp_path: Path, files: dict[str, str], *, git_metadata: bool = True):
     if "napflow.yaml" not in files:
         files = {"napflow.yaml": "schema: napflow/v1\n", **files}
+    if git_metadata:
+        files = {
+            **{
+                rules.filename: "\n".join(rules.required_rules) + "\n"
+                for rules in default_git_metadata_rules()
+            },
+            **files,
+        }
     for rel, content in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -584,6 +593,89 @@ def test_w107_implicit_coercion_lint(tmp_path: Path) -> None:
     w107 = [d for d in check_workspace(ws) if d.code == "W107"]
     assert len(w107) == 2
     assert {d.node_id for d in w107} == {"l", "s"}
+
+
+def test_w109_missing_root_git_metadata_is_path_specific(tmp_path: Path) -> None:
+    ws = make_ws(
+        tmp_path,
+        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+        git_metadata=False,
+    )
+
+    diagnostics = [d for d in check_workspace(ws) if d.code == "W109"]
+
+    assert [d.path.name for d in diagnostics] == [".gitattributes", ".gitignore"]
+    assert "*.yaml text eol=lf" in diagnostics[0].message
+    assert "envs/*.env" in diagnostics[1].message
+    assert all(d.severity == "warning" and d.node_id is None for d in diagnostics)
+    assert all(d.hint and d.path.as_posix() in d.render() for d in diagnostics)
+
+
+def test_w109_lists_only_canonical_additions_and_check_is_read_only(
+    tmp_path: Path,
+) -> None:
+    gitignore = "# owner\n.napflow/\n"
+    ws = make_ws(
+        tmp_path,
+        {
+            "flows/main/flow.yaml": OK_FLOW,
+            "envs/dev.env": DEV_ENV,
+            ".gitignore": gitignore,
+        },
+    )
+    path = tmp_path / ".gitignore"
+    before = path.read_bytes()
+
+    diagnostic = next(d for d in check_workspace(ws) if d.path == path)
+
+    assert diagnostic.code == "W109"
+    assert "envs/*.env" in diagnostic.message
+    assert "!envs/example.env" in diagnostic.message
+    assert ".napflow/" not in diagnostic.message
+    assert path.read_bytes() == before
+
+
+def test_w109_non_lf_warns_even_when_rules_are_covered(tmp_path: Path) -> None:
+    ws = make_ws(
+        tmp_path,
+        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+    )
+    path = tmp_path / ".gitattributes"
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+
+    diagnostic = next(d for d in check_workspace(ws) if d.path == path)
+
+    assert diagnostic.code == "W109"
+    assert "CRLF or CR" in diagnostic.message
+    assert "expected lines" not in diagnostic.message
+
+
+def test_w109_invalid_utf8_warns_without_crashing(tmp_path: Path) -> None:
+    ws = make_ws(
+        tmp_path,
+        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+    )
+    path = tmp_path / ".gitignore"
+    path.write_bytes(b"owner=\xff\n")
+
+    diagnostic = next(d for d in check_workspace(ws) if d.path == path)
+
+    assert diagnostic.code == "W109"
+    assert "not valid UTF-8" in diagnostic.message
+
+
+def test_w109_can_be_disabled_for_intentional_workspace_policy(
+    tmp_path: Path,
+) -> None:
+    ws = make_ws(
+        tmp_path,
+        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+        git_metadata=False,
+    )
+
+    assert not any(
+        d.code == "W109" for d in check_workspace(ws, check_git_metadata=False)
+    )
 
 
 # --------------------------------------------------------------------------

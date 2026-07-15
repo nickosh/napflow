@@ -54,11 +54,11 @@ my-workspace/
       nodes.py
   fixtures/              # test data for fixture nodes (committed)
     users.json
-  envs/                  # ALL real env files gitignored
+  envs/                  # scaffold intends real profiles to stay local (D43)
     dev.env
     example.env          # committed onboarding template (maintained manually;
                          #   future: `napf check --write-env-example`)
-  .napflow/              # run history & cache, gitignored
+  .napflow/              # raw run history/cache; scaffold adds an advisory ignore
 ```
 
 **Every canvas is a flow.** `flows/main` is simply the default entry flow.

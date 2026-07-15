@@ -128,11 +128,13 @@ increments `in_flight`, no decrement ever enqueues QUIESCENT; `pump`
 finalizes immediately when the post-seed count is zero (EC08).
 
 ## D15 — Env model
-All real envs/*.env gitignored; profiles auto-discovered (filename stem);
-process env overrides files (CI overrides need no file edits);
-env.required per flow fails fast; secret masking by name pattern at
-workspace level. napf sync was designed then DROPPED — no registry
-exists, so nothing needs syncing; napf check covers broken references.
+Profiles are auto-discovered (filename stem); process env overrides files
+(CI overrides need no file edits); env.required per flow fails fast; secret
+masking is by name pattern at workspace level. The scaffold intends to keep
+real default `envs/*.env` profiles local while retaining `example.env`, but
+Git metadata is advisory and user-owned rather than an unconditional guarantee
+(D43). napf sync was designed then DROPPED — no registry exists, so nothing
+needs syncing; napf check covers broken references.
 
 ## D16 — Licensing: Apache-2.0, NOTICE, no CLA
 Priority: adoption by QA teams inside companies (AGPL ban-lists would
@@ -912,6 +914,39 @@ Rejected: per-key trusted parent paths (forks the resolver into
 trusted/untrusted modes and reopens EC38's traversal class); absolute
 paths for shared env directories (breaks relocatability and the
 one-folder promise).
+
+## D43 — Git metadata is root-local, init-owned, LF-only, and advisory
+
+(2026-07-15, owner decision during F6 implementation.)
+
+Only `.gitignore` and `.gitattributes` directly beside `napflow.yaml` count
+toward napflow's canonical Git-metadata coverage. Parent files,
+`.git/info/*`, global/system configuration, and the presence or absence of a
+Git executable do not count: protection must be visible in the workspace
+folder that teammates clone. Coverage is a deterministic check for napflow's
+canonical root lines (including wildcard-before-template-exception order),
+not an attempt to interpret every arbitrary Git pattern a user may own.
+
+`napf init` is the only command allowed to offer or perform a metadata edit.
+For an existing LF file it shows the exact missing `# napflow` block and asks
+per file on a TTY (append by default); non-TTY use never mutates without
+`--git-meta append`. Files containing CR/CRLF, invalid UTF-8, symlinks,
+non-regular entries, and unreadable files are warned about and never changed.
+`--no-git-meta-check` opts out of inspection; missing metadata files still use
+the unchanged greenfield scaffold behavior.
+
+`napf check` is read-only and reports advisory W109 for missing canonical
+root coverage or non-LF/invalid metadata; its matching opt-out suppresses that
+policy warning. F6 implements only the current nested default:
+`envs/*.env` plus `!envs/example.env`. Configurable-root handling and W108
+remain deferred F7 work; when implemented, they must use the same root-only
+authority, never repair files outside init, and ignore only exact sensitive
+root profiles created by init—never a broad root wildcard or the example
+template.
+
+Rejected: counting machine-local/inherited Git state as portable coverage;
+mutating or prompting from `napf check`; silently normalizing a user's CRLF
+file; and a root `*.env` rule that captures unrelated host-project files.
 
 ## Known open risks (watch during implementation)
 - EC10/EC22/EC27/EC35 remain open post-v0.2 limitations. EC44's distribution,

@@ -4,6 +4,25 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-15 — F6-only boundary; F7 deferred
+
+- Decided by owner: this branch implements F6 only; F7 remains planned but is
+  skipped for now.
+- Removed the unused configurable environment-root rule builder/tests; F6 now
+  exposes only the fixed `envs/*.env` + `!envs/example.env` contract.
+- Verified: 99 focused and 667 full tests pass (11 deselected); Ruff lint and
+  format checks pass. Next: open the F6 PR, pass its cross-platform gate, then F2.
+
+## 2026-07-15 — F6 brownfield init Git metadata complete
+
+- Done: D43 root-only/LF-only metadata handling adds consent-based init
+  appends, safe non-TTY/CRLF behavior, explicit opt-outs, and read-only W109.
+- Closed EC56 with partial/order/idempotency, unsafe-path, prompt/EOF/snapshot,
+  exclusive-create, root-source, and read-only-check regressions.
+- Verified: 102 focused tests and full 670-test pytest suite pass (11 deselected);
+  Ruff lint and format checks pass across all Python sources/tests.
+- Uncommitted on `feat/f6-init-git-metadata`; next review/commit/PR, then F2.
+
 ## 2026-07-15 — rolling delivery adopted (D41) + F1–F7 backlog + D42
 
 - Decided D41: no version-scoped milestone plans after v0.2.0; features merge

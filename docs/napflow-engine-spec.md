@@ -19,7 +19,9 @@ core/report/server/UI consumers preserve lazy descriptor boundaries. Amended
 2026-07-13 for v0.2/M5: versioned REST pages bound event/frame responses,
 browser rows resolve one record's blobs only when expanded, and direct-child
 summary pages reconstruct completed frame trees. Exports, advanced replay,
-and the 100k-event performance target remain deferred.
+and the 100k-event performance target remain deferred. Amended 2026-07-15 for
+F6/D43: W109 adds advisory, root-only Git-metadata coverage to the full
+workspace check without changing run preparation.
 
 ### v0.2 compatibility and format summary
 
@@ -137,7 +139,7 @@ is the **single write source** — edits mutate it surgically and it alone
 is emitted back to disk; the Pydantic models are validated *read-only
 views* for checker/engine and are never serialized back (dumping a model
 would silently delete comments). ruamel's line/column marks are retained
-through validation so every diagnostic can point at file:line (§8).
+through validation so flow/YAML diagnostics can point at file:line (§8).
 
 ## 1. Core objects
 
@@ -1220,15 +1222,21 @@ W105 env.required key missing from ALL discovered profiles
 W106 guard exhaustion/timeout port unconnected (loop exit produces no output)
 W107 unquoted scalar in a string-typed field matching YAML's
      implicit-coercion danger set (hand-edited files; see yaml-profile.md)
+W108 reserved for F7 per-discovered-environment-profile coverage
+W109 workspace-root .gitignore/.gitattributes lacks canonical napflow lines,
+     uses CR/CRLF, or is invalid/non-regular/unreadable (D43)
 ```
 
-Errors block `napf run`; warnings print and proceed (UI shows both on
-canvas).
+Errors block `napf run`; warnings print and proceed. Flow diagnostics appear
+on the canvas; workspace-level W109 is emitted by `napf check` only and is not
+part of run preparation or per-flow server/UI diagnostics.
 
 Diagnostic quality is product surface (EC29): every E/W message carries
-the file path, line/column (ruamel source marks threaded through
-validation — a day-one loader requirement, painful to retrofit), the
-offending node id, and a one-line fix hint.
+the file path and a one-line fix hint. Flow/YAML diagnostics additionally
+carry best-effort line/column (ruamel source marks threaded through validation
+— a day-one loader requirement, painful to retrofit) and the offending node
+id where applicable. A missing root metadata file or line has no node/source
+position to report.
 
 - **W101 scope (EC16)**: the guarantee is strict — *every simple cycle
   contains a guard*. Checked in linear time: delete guard nodes from the
@@ -1259,6 +1267,13 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   scalars parse as ints/dates, never strings — date-typed values are
   warned as parsed-date objects; the string-form lint fires on the
   bool/null word set and sexagesimals.
+- **W109 root-only policy (D43/F6)**: only exact canonical lines in
+  workspace-root `.gitignore`/`.gitattributes` count; parent files,
+  `.git/info/*`, global configuration, and Git executable state are ignored.
+  The check recognizes CRLF-covered lines but still warns because init never
+  appends to or normalizes a file containing CR. W109 is read-only/advisory,
+  suppressible with `napf check --no-git-meta-check`, and never appears in
+  `check_run_closure`.
 
 ## 9. Resolved (was: open questions)
 

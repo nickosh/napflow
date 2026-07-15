@@ -896,10 +896,12 @@ keep `main` releasable.
 Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
-Current order: **F2 first** (small enabler, days), then the **F1 track**
-as the headline work, with **F3**, **F4**, **F6**, and **F7** interleaved
-between F1 slices as small core/CLI branches (F7 right after F6 — they
-share the `git check-ignore` probe helper). **F5** is unscheduled/low.
+F6 was selected by the owner as the first rollout implementation and is
+implemented locally on `feat/f6-init-git-metadata` as of 2026-07-15. Current
+order resumes with **F2** (small enabler, days), then the
+**F1 track** as headline work, with **F3** and **F4** interleaved between F1
+slices as small core/CLI branches. **F7** remains planned but is deferred by
+owner direction; **F5** is unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
@@ -1053,47 +1055,58 @@ workflow artifacts, so the future D39 100k-event evaluation has a trend
 line instead of two points. Manual inspection only; thresholds/alerts
 only if drift is actually observed.
 
-### F6 — `napf init` git-metadata handling for existing files (EC56; owner-designed 2026-07-15)
+### F6 — `napf init` git-metadata handling for existing files ✅ done 2026-07-15 (EC56; D43)
 
 Brownfield init (target directory already has `.gitignore` or
-`.gitattributes`, no `napflow.yaml`) currently skips both files with a
+`.gitattributes`, no `napflow.yaml`) previously skipped both files with a
 one-line `exists` notice, leaving `envs/*.env`, `.napflow/`, and YAML
 `eol=lf` rules absent — committable credentials/raw history (EC56).
 `napf init`'s refusal when `napflow.yaml` exists stays exactly as is.
 
-Owner-decided behavior (2026-07-15):
+Owner-decided and implemented behavior (2026-07-15):
 
-- [ ] Missing files: created silently — unchanged.
-- [ ] Existing file with all napflow rules already effective: report
+- [x] Missing files: created silently — unchanged, including when existing-file
+      inspection is disabled.
+- [x] Coverage authority is only the canonical lines in workspace-root
+      `.gitignore` and `.gitattributes`. Parent files, `.git/info/*`, global
+      configuration, and a Git executable never count. The evaluator also
+      preserves the required wildcard→template-exception order; arbitrary
+      user patterns remain user policy rather than a second Git interpreter.
+- [x] Existing LF file with all canonical napflow rules covered: report
       `exists (rules covered)`; no prompt, no change.
-- [ ] Existing file missing rules, interactive TTY: per-file prompt
+- [x] Existing LF file missing rules, interactive TTY: per-file prompt
       showing exactly the lines that would be added; **default =
       append**. Decline ⇒ `skipped` + the warning below.
-- [ ] Existing file missing rules, no TTY (CI/scripts): **never
+- [x] Existing file missing rules, no TTY (CI/scripts): **never
       mutate** — report `skipped` plus a loud warning listing the exact
       missing lines; `--git-meta append|skip` makes the choice explicit
       and also suppresses/forces the prompt interactively.
-- [ ] Append mechanics: one clearly marked `# napflow` block containing
+- [x] Existing file containing any CR/CRLF is never appended or normalized,
+      even under `--git-meta append`: leave its bytes exact and warn. Invalid
+      UTF-8, unreadable, symlink, and non-regular paths are likewise untouched.
+- [x] Append mechanics: one clearly marked `# napflow` block containing
       only the missing rules; idempotent (re-append adds nothing);
-      matches the file's predominant line-ending style (CRLF-safe);
-      whole-file atomic rewrite via `atomic_write_text`.
-- [ ] Rule-coverage check: exact semantics via `git check-ignore` /
-      `git check-attr` when git is available (handles negations and
-      inherited excludes); conservative line-presence fallback
-      otherwise.
-- [ ] Status vocabulary extends to created / exists / appended /
+      LF-only whole-file atomic rewrite via `atomic_write_text` with existing
+      mode and user content preserved.
+- [x] `--no-git-meta-check` on init bypasses inspection/prompt/warnings for
+      existing files; `--git-meta append` conflicts with it, while explicit
+      `skip` may be redundant. `napf check --no-git-meta-check` suppresses the
+      advisory read-only metadata diagnostics.
+- [x] `napf check` emits W109 for missing canonical root rules, non-LF or
+      invalid metadata, and missing/non-regular files. It never prompts or
+      writes; only `napf init` can offer or perform an append.
+- [x] Status vocabulary extends to created / exists / appended /
       skipped; `scaffold_workspace`'s "never overwrites" contract keeps
       holding — append never rewrites user content, only adds the block.
-- [ ] Same-PR docs: workspace-manifest spec (`napf init` CLI section);
-      README raw-history wording ("napf init gitignores `.napflow/`")
-      updated to describe both greenfield and brownfield outcomes;
-      EC56 closed.
-- [ ] Tests: block construction + idempotency + partial-rules cases;
+- [x] Same-change docs: workspace-manifest/checker specs, D43, requirements,
+      README raw-history wording, and EC56 closure reconciled.
+- [x] Tests: block construction + idempotency + partial/order cases;
       CliRunner prompt flows (accept/decline/default); no-TTY skip+warn;
-      `--git-meta` both values; git-absent fallback; Windows CRLF
-      append; existing three-OS CI covers platforms.
+      `--git-meta` both values; root-only authority; both opt-outs; CRLF
+      refusal; invalid/non-regular paths; read-only W109. The PR gate will
+      confirm the implementation on the macOS/Windows/Linux matrix.
 
-### F7 — configurable environments root + dotenv-style profiles (owner-designed 2026-07-15)
+### F7 — configurable environments root + dotenv-style profiles (deferred; owner-designed 2026-07-15)
 
 Context: napflow workspaces embedded inside host projects need locations
 that fit the host layout. Verified 2026-07-15 in a live workspace:
@@ -1135,10 +1148,14 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
       (owner call 2026-07-15): users who change default paths own their
       host project's ignore rules; napflow warns, never edits. Safety =
       new **W108** in `napf check`: a discovered env profile file is
-      not git-ignored — probed via `git check-ignore` (shared helper
-      with F6), silent when git is absent or the workspace is not in a
-      repo. W108 also catches hand-broken ignore rules in default
-      layouts.
+      not covered by the workspace-root `.gitignore`; parent/global/info
+      rules do not count. F6's W109 separately covers the canonical root
+      scaffold block and non-LF/invalid metadata. Both remain advisory and
+      `--no-git-meta-check` suppresses them. `napf init` has no
+      environment-root choice today. If F7 adds one, a root layout must ignore
+      only root-anchored exact sensitive profiles init creates (for example
+      `/dev.env`), never a broad root `*.env` or the `example.env` template;
+      changing the manifest root after init must never edit Git metadata.
 - [ ] Same-PR docs: manifest spec §environments / FR-103 (patterns,
       literal-filename selection, root values, W108); a separate short
       "embedding napflow in an existing project" note covering
@@ -1153,16 +1170,17 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
       literal-filename selection for all three patterns (incl. the
       `--env dev.env` break); invalid-file skip warning vs hard error
       on explicit selection; `example.env` convention and
-      process-env-overrides precedence unchanged; W108 fires / stays
-      silent without git; three-OS CI.
+      process-env-overrides precedence unchanged; W108 root-only coverage
+      and opt-out; three-OS CI.
 
-Estimate: small (~day). Interleavable; lands best immediately after F6
-to reuse the fresh `git check-ignore` probe.
+Estimate: small (~day), currently deferred. It can reuse F6's root-file
+inspection and authority, but W108 still needs semantic ignore matching for
+arbitrary discovered profiles.
 
 ### Unscheduled backlog
 
 The "Explicitly after v0.2" list above is the unscheduled backlog. Items
-promote into F-numbered entries here (F6+) when prioritized by the
+promote into F-numbered entries here (F8+) when prioritized by the
 criteria; nothing is dropped by not being scheduled.
 
 ## Working agreements
@@ -1173,8 +1191,8 @@ criteria; nothing is dropped by not being scheduled.
 - Run `$napflow-closeout` after each state-changing session and milestone; add
   one dated `docs/JOURNAL.md` entry (done / decided / next) when the closeout
   produced a durable change or useful handoff.
-- New edge cases → `EDGE_CASES.md` (EC55+); new decisions →
-  `DECISIONS.md` (D41+).
+- New edge cases → `EDGE_CASES.md` (EC57+); new decisions →
+  `DECISIONS.md` (D44+).
 - v0.x releases are experimental (D33), tag-driven, and require exact
   tag/package version agreement (`RELEASING.md`). Breaking changes are
   permitted with clear release notes until v1.0.
