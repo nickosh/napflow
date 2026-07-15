@@ -4,6 +4,16 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-15 — F7 configurable roots and deterministic init complete
+
+- Done: configurable `flows`/`data`/environment roots, literal dotenv profiles,
+  W108, minimal init, and opt-in `init --example` are implemented under D42/D44.
+- Fixed: EC57 Windows xyflow measurement/retry isolation and EC58–EC59 stable
+  environment/init boundaries, including complete no-write scaffold preflight.
+- Verified: 760 pytest + 80 Vitest + 43 Playwright pass; Ruff and both import
+  contracts pass; UI, wheel/sdist, and isolated installed-artifact smoke pass.
+- Next: review/commit/open the F7 PR and confirm its Linux/macOS/Windows gate.
+
 ## 2026-07-15 — F6 Windows CI portability fix
 
 - Fixed LF-intended Git-metadata fixtures and a path-render assertion so the

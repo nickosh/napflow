@@ -52,6 +52,7 @@ const buttonStyle: React.CSSProperties = {
 export default function RunControls() {
   const {
     workspace,
+    workspaceNotice,
     detail,
     runEnv,
     runLive,
@@ -71,6 +72,8 @@ export default function RunControls() {
       | StartPort[]
       | undefined) ?? []
   ).filter((p) => p.name !== "");
+  const notice = runNotice ?? workspaceNotice;
+  const noticeIsWarning = notice?.startsWith("warning:") ?? false;
 
   const launch = (inputs: Record<string, unknown>) => {
     setPopoverOpen(false);
@@ -94,20 +97,20 @@ export default function RunControls() {
 
   return (
     <span style={{ position: "relative", display: "flex", gap: 6 }}>
-      {runNotice && (
+      {notice && (
         <span
           data-testid="run-notice"
-          title={runNotice}
+          title={notice}
           style={{
             fontSize: 12,
-            color: "#c62828",
+            color: noticeIsWarning ? "#ef6c00" : "#c62828",
             maxWidth: 320,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
         >
-          {runNotice}
+          {notice}
         </span>
       )}
       {(workspace?.env_profiles.length ?? 0) > 0 && (

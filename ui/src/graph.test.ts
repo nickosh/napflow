@@ -7,6 +7,7 @@ import {
   GHOST_TARGET_HANDLE,
   drillTarget,
   freshNodeId,
+  reconcileGraphNodes,
   toGraph,
   typeMismatch,
 } from "./graph";
@@ -191,6 +192,70 @@ describe("toGraph", () => {
     expect(summarize.data.warnings).toBe(1);
     expect(summarize.data.errors).toBe(1);
     expect(nodes.find((n) => n.id === "users")!.data.warnings).toBe(0);
+  });
+});
+
+describe("reconcileGraphNodes", () => {
+  it("keeps measured dimensions for matching ids in the same flow", () => {
+    const current = toGraph(detail()).nodes.map((node) =>
+      node.id === "start"
+        ? { ...node, measured: { width: 180, height: 72 }, selected: true }
+        : node.id === "end"
+          ? { ...node, measured: { width: 144, height: 64 } }
+          : node,
+    );
+    const next = toGraph(
+      detail({
+        flow: {
+          ...detail().flow,
+          nodes: [
+            ...detail().flow.nodes,
+            { id: "new_log", type: "log", config: {} },
+          ],
+        },
+      }),
+    ).nodes;
+
+    const reconciled = reconcileGraphNodes(
+      current,
+      next,
+      "flows/smoke",
+      "flows/smoke",
+    );
+
+    expect(reconciled.find((node) => node.id === "start")?.measured).toEqual({
+      width: 180,
+      height: 72,
+    });
+    expect(reconciled.find((node) => node.id === "end")?.measured).toEqual({
+      width: 144,
+      height: 64,
+    });
+    // Reconciliation is intentionally dimensions-by-id only; interactive
+    // state from the old controlled node is not copied into the model rebuild.
+    expect(
+      reconciled.find((node) => node.id === "start")?.selected,
+    ).toBeUndefined();
+    expect(
+      reconciled.find((node) => node.id === "new_log")?.measured,
+    ).toBeUndefined();
+  });
+
+  it("does not carry measurements across flow identities", () => {
+    const current = toGraph(detail()).nodes.map((node) => ({
+      ...node,
+      measured: { width: 200, height: 80 },
+    }));
+    const next = toGraph(detail({ identity: "flows/other" })).nodes;
+
+    const reconciled = reconcileGraphNodes(
+      current,
+      next,
+      "flows/smoke",
+      "flows/other",
+    );
+
+    expect(reconciled.every((node) => node.measured === undefined)).toBe(true);
   });
 });
 

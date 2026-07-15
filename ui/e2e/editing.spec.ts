@@ -22,6 +22,7 @@ async function flowModel(page: Page, identity: string) {
 }
 
 async function expectNodeInsideCanvas(page: Page, testId: string) {
+  await expect(page.getByTestId(testId)).toBeVisible();
   await expect
     .poll(async () => {
       const [node, canvas] = await Promise.all([
@@ -38,6 +39,37 @@ async function expectNodeInsideCanvas(page: Page, testId: string) {
     })
     .toBe(true);
 }
+
+const EDITING_BASELINE = "e2e-baselines/editing";
+
+test.beforeAll(async ({ request }) => {
+  // serial suites are retried in a fresh worker, but the real web server and
+  // workspace survive that retry. Restore immutable, out-of-catalog snapshots
+  // before every worker so a failed attempt can never become the next
+  // attempt's starting model (the 2026-07-15 Windows retry failure).
+  for (const identity of ["flows/main", "flows/smoke", "flows/hint"]) {
+    const name = identity.slice("flows/".length);
+    const baseline = await request.get(
+      `/api/flows/${EDITING_BASELINE}/${name}`,
+    );
+    expect(baseline.ok()).toBeTruthy();
+    const { flow } = await baseline.json();
+    const restored = await request.put(`/api/flows/${identity}`, {
+      data: { flow, force: true },
+    });
+    expect(restored.ok()).toBeTruthy();
+  }
+
+  const codeBaseline = await request.get(
+    `/api/code/${EDITING_BASELINE}/smoke`,
+  );
+  expect(codeBaseline.ok()).toBeTruthy();
+  const { code } = await codeBaseline.json();
+  const codeRestored = await request.put("/api/code/flows/smoke", {
+    data: { code, force: true },
+  });
+  expect(codeRestored.ok()).toBeTruthy();
+});
 
 test.describe.configure({ mode: "serial" }); // shared workspace state
 
@@ -311,7 +343,7 @@ test("start/end port editors edit flow inputs and outputs (FR-1006)", async ({
   // selecting the other side of the graph; React Flow virtualizes nodes that
   // move outside the current viewport after a dimension change.
   await page.getByRole("button", { name: "Fit View" }).click();
-  await expect(page.getByTestId("node-end")).toBeVisible();
+  await expectNodeInsideCanvas(page, "node-end");
   await page.getByTestId("node-end").click();
   await page.getByTestId("end-port-required-0").uncheck();
   await waitSaved(page);

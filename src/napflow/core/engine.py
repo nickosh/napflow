@@ -318,7 +318,12 @@ class FlowRun:
         self._flow_dir = flow_dir
         self._workspace_resolver = workspace_resolver
         if self._workspace_resolver is None and workspace_root is not None:
-            self._workspace_resolver = WorkspaceResolver(workspace_root)
+            self._workspace_resolver = WorkspaceResolver(
+                workspace_root,
+                flows_root_identity=manifest.flows.root,
+                environments_root_identity=manifest.environments.root,
+                data_root_identity=manifest.data.root,
+            )
         self._workspace_root = (
             self._workspace_resolver.root
             if self._workspace_resolver is not None
@@ -1320,7 +1325,7 @@ class FlowRun:
         return outputs
 
     def _load_fixture(self, node: FixtureNode) -> Any:
-        """FR-514: workspace-relative json/csv, read once and cached
+        """FR-514: data.root-relative json/csv, read once and cached
         per RUN (keyed by resolved path — a mid-run file change or
         deletion never splits the data). CSV → list of dicts, header
         row required, values stay strings (no inference)."""

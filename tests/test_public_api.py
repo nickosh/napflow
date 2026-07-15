@@ -160,13 +160,10 @@ def test_custom_flows_root_catalog_strips_only_configured_root(tmp_path: Path) -
 
 
 def test_reusable_handles_isolate_inputs_env_and_workspaces(tmp_path: Path) -> None:
-    root_a = _workspace(tmp_path / "a", default_env="one")
-    root_b = _workspace(tmp_path / "b", default_env="two")
+    root_a = _workspace(tmp_path / "a", default_env="one.env")
+    root_b = _workspace(tmp_path / "b", default_env="two.env")
     for root, profile, value in ((root_a, "one", "A"), (root_b, "two", "B")):
-        (root / "envs").mkdir()
-        (root / "envs" / f"{profile}.env").write_text(
-            f"VALUE={value}\n", encoding="utf-8"
-        )
+        (root / f"{profile}.env").write_text(f"VALUE={value}\n", encoding="utf-8")
         _echo_flow(root, "flows/echo", default="{{ env.VALUE }}")
 
     flow_a = load_workspace(root_a).flow("flows/echo")

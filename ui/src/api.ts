@@ -16,8 +16,11 @@ export type WorkspaceInfo = {
   description: string | null;
   root: string;
   flows_root: string;
+  environments_root: string;
+  data_root: string;
   main: string;
   env_profiles: string[];
+  env_profile_warnings: { name: string; path: string; message: string }[];
   env_default: string | null;
   version: string;
 };

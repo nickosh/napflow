@@ -1,19 +1,19 @@
 """`napf init` workspace scaffold (FR-107, WM §napf init output).
 
-YAML files are written through the one canonical serializer
-(`core.loader.save_document`) — the scaffold IS canonical output. The
-scaffolded workspace must pass `napf check` with zero diagnostics and
-`napf run flows/smoke` must pass offline once the S3 node set lands
-(EC34: first-touch check).
+YAML files are emitted through the one canonical serializer
+(`core.loader.emit_document`) — the scaffold IS canonical output. The
+minimal scaffold is ready for real work with one empty main flow. The
+offline smoke flow and HTTP demo are creation-time opt-in examples.
 """
 
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from ruamel.yaml.comments import CommentedMap
 
-from napflow.core.files import atomic_create_text, atomic_write_text
+from napflow.core.files import atomic_create_text
 from napflow.core.gitmeta import (
     GITIGNORE,
     GitMetadataAppendError,
@@ -22,11 +22,24 @@ from napflow.core.gitmeta import (
     GitMetadataState,
     append_git_metadata,
     default_git_metadata_rules,
+    example_git_metadata_rules,
     inspect_git_metadata,
 )
-from napflow.core.loader import save_document
+from napflow.core.loader import emit_document
+from napflow.core.workspace import WorkspaceResolver
 
 MAIN_FLOW = {
+    "schema": "napflow/v1",
+    "flow": {"name": "main", "description": "Default canvas — every canvas is a flow."},
+    "nodes": [
+        {"id": "start", "type": "start"},
+        {"id": "end", "type": "end"},
+    ],
+    "edges": [],
+    "layout": {"start": [40, 120], "end": [260, 120]},
+}
+
+EXAMPLE_MAIN_FLOW = {
     "schema": "napflow/v1",
     "flow": {"name": "main", "description": "Default canvas — every canvas is a flow."},
     "nodes": [
@@ -42,7 +55,7 @@ EXAMPLE_FLOW = {
     "flow": {
         "name": "example",
         "description": "HTTP demo against httpbin — network required (the "
-        "offline first-touch check is flows/smoke).",
+        "offline first-touch check is the smoke flow).",
     },
     "env": {"required": ["BASE_URL"]},
     "nodes": [
@@ -126,7 +139,7 @@ SMOKE_FLOW = {
         # E006: every flow declares exactly one start/end; this flow is
         # fixture-driven, so start carries no ports and no edges
         {"id": "start", "type": "start"},
-        {"id": "users", "type": "fixture", "config": {"file": "fixtures/smoke.json"}},
+        {"id": "users", "type": "fixture", "config": {"file": "smoke.json"}},
         {
             "id": "summarize",
             "type": "python",
@@ -191,7 +204,7 @@ via AST — write literal `def`s, not dynamically built ones.
 '''
 
 SMOKE_NODES_PY = '''\
-"""Python node functions for flows/smoke (offline first-touch check)."""
+"""Python node functions for the offline smoke example."""
 
 
 def summarize(users):
@@ -211,18 +224,16 @@ SMOKE_FIXTURE = """\
 """
 
 DEV_ENV = """\
-# local profile - gitignored; teammates copy example.env to get started
+# local profile - gitignored; teammates copy .env.example to get started
 BASE_URL=https://httpbin.org
 """
 
 EXAMPLE_ENV = """\
-# committed onboarding template - copy to dev.env and fill in real values
+# committed onboarding template - copy to .env and fill in real values
 BASE_URL=https://httpbin.org
 """
 
-GITIGNORE_PREAMBLE = (
-    "# napflow: real env profiles stay local; run history is per-machine\n"
-)
+GITIGNORE_PREAMBLE = "# napflow: local runtime data stays local\n"
 
 
 @dataclass(frozen=True)
@@ -242,8 +253,19 @@ def _new_metadata_content(rules: GitMetadataRules) -> str:
     return preamble + "\n".join(rules.required_rules) + "\n"
 
 
-def _manifest(name: str) -> dict:
-    environments = CommentedMap({"default": "dev", "secrets": []})
+def _manifest(
+    name: str,
+    *,
+    example: bool,
+    flows_root: str,
+    data_root: str,
+    environments_root: str,
+) -> dict:
+    environment_values: dict[str, object] = {"root": environments_root}
+    if example:
+        environment_values["default"] = ".env"
+    environment_values["secrets"] = []
+    environments = CommentedMap(environment_values)
     environments.yaml_set_comment_before_after_key(
         "secrets",
         before=(
@@ -255,25 +277,198 @@ def _manifest(name: str) -> dict:
     return {
         "schema": "napflow/v1",
         "workspace": {"name": name, "description": "API flows workspace."},
-        "flows": {"root": "flows", "main": "flows/main"},
+        "flows": {"root": flows_root, "main": f"{flows_root}/main"},
+        "data": {"root": data_root},
         "environments": environments,
     }
+
+
+def _required_directories(
+    resolver: WorkspaceResolver, *, example: bool
+) -> tuple[Path, ...]:
+    paths = [
+        resolver.root,
+        resolver.flows_root,
+        resolver.flows_root / "main",
+        resolver.data_root,
+        resolver.root / ".napflow",
+    ]
+    if resolver.environments_root != resolver.root:
+        paths.append(resolver.environments_root)
+    if example:
+        paths.extend([resolver.flows_root / "example", resolver.flows_root / "smoke"])
+    return tuple(paths)
+
+
+def _relative_label(root: Path, path: Path) -> str:
+    return "." if path == root else path.relative_to(root).as_posix()
+
+
+def _preflight_scaffold_plan(
+    root: Path,
+    required_directories: tuple[Path, ...],
+    scaffold_files: tuple[Path, ...],
+    metadata_files: tuple[Path, ...],
+) -> None:
+    """Validate every planned file/directory role before the first write.
+
+    Brownfield scaffold entries remain untouched. Root Git metadata keeps F6's
+    separate consent/inspection policy; both still participate in the in-memory
+    role plan so a configured root cannot occupy a planned file location such
+    as ``flow.yaml``, ``.gitignore``, or ``.gitattributes``.
+    """
+
+    manifest_path = root / "napflow.yaml"
+    try:
+        manifest_path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise FileExistsError(f"{manifest_path} already exists")
+
+    planned_files = sorted(
+        {*scaffold_files, *metadata_files}, key=lambda path: (len(path.parts), path)
+    )
+    planned_directories = sorted(
+        set(required_directories), key=lambda path: (len(path.parts), path)
+    )
+
+    for directory in planned_directories:
+        if directory == root:
+            continue
+        for file in planned_files:
+            if directory == file or directory.is_relative_to(file):
+                raise OSError(
+                    f"planned directory {_relative_label(root, directory)!r} "
+                    f"conflicts with planned file {_relative_label(root, file)!r}"
+                )
+
+    for index, file in enumerate(planned_files):
+        for other in planned_files[index + 1 :]:
+            if file.is_relative_to(other) or other.is_relative_to(file):
+                raise OSError(
+                    f"planned file {_relative_label(root, file)!r} conflicts "
+                    f"with planned file {_relative_label(root, other)!r}"
+                )
+
+    # Existing brownfield source files are preserved byte-for-byte, but a
+    # non-regular path cannot fulfill a scaffold file role. Keep root Git
+    # metadata out of this check: D43 deliberately inspects and warns about
+    # symlinks/directories/other unsafe metadata paths without replacing them.
+    for path in scaffold_files:
+        if path == manifest_path:
+            continue
+        try:
+            path_stat = path.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(path_stat.st_mode):
+            if stat.S_ISLNK(path_stat.st_mode):
+                kind = "symlink"
+            elif stat.S_ISDIR(path_stat.st_mode):
+                kind = "directory"
+            else:
+                kind = "non-regular path"
+            raise OSError(
+                f"planned scaffold file {_relative_label(root, path)!r} is a {kind}"
+            )
+
+    candidates = {root}
+    for path in required_directories:
+        relative = path.relative_to(root)
+        for index in range(1, len(relative.parts) + 1):
+            candidates.add(root.joinpath(*relative.parts[:index]))
+
+    for path in sorted(candidates, key=lambda candidate: len(candidate.parts)):
+        label = _relative_label(root, path)
+        if path.is_symlink():
+            raise OSError(f"required directory {label!r} is a symlink")
+        if path.is_junction():
+            raise OSError(f"required directory {label!r} is a junction")
+        if path.exists() and not path.is_dir():
+            raise NotADirectoryError(f"required directory {label!r} is not a directory")
 
 
 def scaffold_workspace(
     directory: Path,
     *,
+    example: bool = False,
+    flows_root: str = "flows",
+    data_root: str = "data",
+    environments_root: str = ".",
     check_git_metadata: bool = True,
     decide_git_metadata: GitMetadataDecision | None = None,
 ) -> list[ScaffoldResult]:
-    """Create the FR-107 scaffold without overwriting user content.
+    """Create the minimal scaffold, optionally including runnable examples.
 
     Existing root Git metadata is inspected before any scaffold write so an
     interactive caller can collect every append decision safely. Missing files
     retain the greenfield behavior and are created even when inspection is
     disabled. Existing metadata is appended only through an explicit decision.
     """
-    metadata_rules = default_git_metadata_rules()
+    resolver = WorkspaceResolver(
+        directory,
+        flows_root_identity=flows_root,
+        data_root_identity=data_root,
+        environments_root_identity=environments_root,
+    )
+    directory = resolver.root
+    metadata_rules = (
+        example_git_metadata_rules(resolver.environments_root_identity)
+        if example
+        else default_git_metadata_rules()
+    )
+    flows_identity = resolver.flows_root_identity
+    data_identity = resolver.data_root_identity
+    environments_identity = resolver.environments_root_identity
+    environment_prefix = (
+        "" if environments_identity == "." else f"{environments_identity}/"
+    )
+
+    yaml_files: dict[str, dict] = {
+        "napflow.yaml": _manifest(
+            directory.name,
+            example=example,
+            flows_root=flows_identity,
+            data_root=data_identity,
+            environments_root=environments_identity,
+        ),
+        f"{flows_identity}/main/flow.yaml": (
+            EXAMPLE_MAIN_FLOW if example else MAIN_FLOW
+        ),
+    }
+    text_files: dict[str, str] = {
+        f"{flows_identity}/main/nodes.py": EMPTY_NODES_PY,
+    }
+    if example:
+        yaml_files.update(
+            {
+                f"{flows_identity}/example/flow.yaml": EXAMPLE_FLOW,
+                f"{flows_identity}/smoke/flow.yaml": SMOKE_FLOW,
+            }
+        )
+        text_files.update(
+            {
+                f"{flows_identity}/example/nodes.py": EMPTY_NODES_PY,
+                f"{flows_identity}/smoke/nodes.py": SMOKE_NODES_PY,
+                f"{data_identity}/smoke.json": SMOKE_FIXTURE,
+                f"{environment_prefix}.env": DEV_ENV,
+                f"{environment_prefix}.env.example": EXAMPLE_ENV,
+            }
+        )
+
+    required_directories = _required_directories(resolver, example=example)
+    scaffold_files = tuple(
+        directory / relative for relative in (*yaml_files, *text_files)
+    )
+    metadata_files = tuple(directory / rules.filename for rules in metadata_rules)
+    _preflight_scaffold_plan(
+        directory,
+        required_directories,
+        scaffold_files,
+        metadata_files,
+    )
+
     metadata_preflight: dict[str, GitMetadataInspection] = {}
     metadata_decisions: dict[str, bool] = {}
     if check_git_metadata:
@@ -350,41 +545,52 @@ def scaffold_workspace(
         )
         metadata_results.append(ScaffoldResult(rel, status, inspection))
 
-    yaml_files: dict[str, dict] = {
-        "napflow.yaml": _manifest(directory.resolve().name),
-        "flows/main/flow.yaml": MAIN_FLOW,
-        "flows/example/flow.yaml": EXAMPLE_FLOW,
-        "flows/smoke/flow.yaml": SMOKE_FLOW,
+    directory_existed = {
+        path: path.is_dir()
+        for path in {
+            resolver.data_root,
+            resolver.environments_root,
+            resolver.root / ".napflow",
+        }
     }
-    text_files: dict[str, str] = {
-        "flows/main/nodes.py": EMPTY_NODES_PY,
-        "flows/example/nodes.py": EMPTY_NODES_PY,
-        "flows/smoke/nodes.py": SMOKE_NODES_PY,
-        "fixtures/smoke.json": SMOKE_FIXTURE,
-        "envs/dev.env": DEV_ENV,
-        "envs/example.env": EXAMPLE_ENV,
-    }
+    for path in required_directories:
+        path.mkdir(parents=True, exist_ok=True)
 
     results: list[ScaffoldResult] = []
     for rel, doc in yaml_files.items():
         path = directory / rel
-        if path.exists():
-            results.append(ScaffoldResult(rel, "exists"))
-            continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        save_document(doc, path)  # the ONE canonical serializer (FR-204)
-        results.append(ScaffoldResult(rel, "created"))
+        created = atomic_create_text(
+            path,
+            emit_document(doc),  # the ONE canonical serializer (FR-204)
+        )
+        results.append(ScaffoldResult(rel, "created" if created else "exists"))
     for rel, content in text_files.items():
         path = directory / rel
-        if path.exists():
-            results.append(ScaffoldResult(rel, "exists"))
-            continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, content)
-        results.append(ScaffoldResult(rel, "created"))
+        created = atomic_create_text(path, content)
+        results.append(ScaffoldResult(rel, "created" if created else "exists"))
+
+    results.append(
+        ScaffoldResult(
+            f"{data_identity}/",
+            "exists" if directory_existed[resolver.data_root] else "created",
+        )
+    )
+    if resolver.environments_root != resolver.root:
+        results.append(
+            ScaffoldResult(
+                f"{environments_identity}/",
+                "exists"
+                if directory_existed[resolver.environments_root]
+                else "created",
+            )
+        )
 
     results.extend(metadata_results)
 
-    (directory / ".napflow").mkdir(parents=True, exist_ok=True)
-    results.append(ScaffoldResult(".napflow/", "created"))
+    results.append(
+        ScaffoldResult(
+            ".napflow/",
+            "exists" if directory_existed[resolver.root / ".napflow"] else "created",
+        )
+    )
     return results

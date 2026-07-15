@@ -4,8 +4,9 @@ Why things are the way they are. Date format: 2026-06. D01–D17 decided
 during initial design (June 2026); D18–D22 in the 2026-06-14 edge-case
 review, confirmed 2026-07-02; D23–D25 adopted 2026-07-02; D26–D32
 during v0.1 implementation; D33–D37 from the 2026-07-11 v0.2 design
-review; D38–D40 from 2026-07-13 API, scope, and distribution reviews. Reversing any
-of these requires understanding the rationale first.
+review; D38–D40 from 2026-07-13 API, scope, and distribution reviews;
+D41–D44 from 2026-07-15 rolling-delivery decisions. Reversing any of these
+requires understanding the rationale first.
 
 ## D01 — Build new instead of adopting existing tools
 No OSS project combines: node-based API flows + Python processing +
@@ -128,13 +129,14 @@ increments `in_flight`, no decrement ever enqueues QUIESCENT; `pump`
 finalizes immediately when the post-seed count is zero (EC08).
 
 ## D15 — Env model
-Profiles are auto-discovered (filename stem); process env overrides files
-(CI overrides need no file edits); env.required per flow fails fast; secret
-masking is by name pattern at workspace level. The scaffold intends to keep
-real default `envs/*.env` profiles local while retaining `example.env`, but
-Git metadata is advisory and user-owned rather than an unconditional guarantee
-(D43). napf sync was designed then DROPPED — no registry exists, so nothing
-needs syncing; napf check covers broken references.
+Profiles are auto-discovered without a registry; F7/D44 broadens the filename
+union to `.env`, `.env.*`, and `*.env` below `environments.root` and makes the
+literal filename the id. Process env overrides files (CI overrides need no
+file edits); `env.required` per flow fails fast; secret masking is by name
+pattern at workspace level. Git metadata is advisory/user-owned: example init
+ignores its exact `.env`, W108 checks actual profiles, and no broad host-root
+wildcard is added (D43). `napf sync` was designed then DROPPED—drop a valid
+file into the configured root and it appears.
 
 ## D16 — Licensing: Apache-2.0, NOTICE, no CLA
 Priority: adoption by QA teams inside companies (AGPL ban-lists would
@@ -890,8 +892,8 @@ point, and a second branch would break the always-releasable invariant).
 
 (2026-07-15, owner decision during F7 planning.)
 
-Every configurable location in `napflow.yaml` — `flows.root`,
-`environments.root` (F7), and any future directory key — accepts only
+Every configurable location in `napflow.yaml` — `flows.root`, `data.root`,
+`environments.root`, and any future directory key — accepts only
 workspace-relative paths that resolve inside the workspace root. `..`,
 absolute paths, and symlink escapes stay rejected by the single
 `WorkspaceResolver` containment rule (D37/EC38). Manifest-configured
@@ -904,7 +906,10 @@ The supported pattern for reaching host-project files from an embedded
 workspace is **raising the workspace root, not escaping it**:
 `napflow.yaml` sits at the host level (manifest discovery walks upward
 from cwd, FR-101) and the configurable keys point downward — e.g.
-`flows.root: "qa/flows"`, `environments.root: "."`. Anything nested is
+`flows.root: "qa/flows"`, `data.root: "tests/napflow-data"`,
+`environments.root: "."`. `flows.root` and `data.root` must remain proper
+subdirectories; only the environment root accepts `.`/`./`, because discovering
+host-project dotenv files is intentional. Anything nested is
 expressible; needing `..` means the manifest sits one level too low.
 If `.napflow/` placement at a raised root ever becomes a real
 annoyance, a downward-only location knob is an acceptable future
@@ -923,9 +928,9 @@ Only `.gitignore` and `.gitattributes` directly beside `napflow.yaml` count
 toward napflow's canonical Git-metadata coverage. Parent files,
 `.git/info/*`, global/system configuration, and the presence or absence of a
 Git executable do not count: protection must be visible in the workspace
-folder that teammates clone. Coverage is a deterministic check for napflow's
-canonical root lines (including wildcard-before-template-exception order),
-not an attempt to interpret every arbitrary Git pattern a user may own.
+folder that teammates clone. W109 coverage is a deterministic check for
+napflow's fixed canonical root lines; W108 separately interprets the root
+`.gitignore` semantically for actual configured environment profiles.
 
 `napf init` is the only command allowed to offer or perform a metadata edit.
 For an existing LF file it shows the exact missing `# napflow` block and asks
@@ -937,16 +942,66 @@ the unchanged greenfield scaffold behavior.
 
 `napf check` is read-only and reports advisory W109 for missing canonical
 root coverage or non-LF/invalid metadata; its matching opt-out suppresses that
-policy warning. F6 implements only the current nested default:
-`envs/*.env` plus `!envs/example.env`. Configurable-root handling and W108
-remain deferred F7 work; when implemented, they must use the same root-only
-authority, never repair files outside init, and ignore only exact sensitive
-root profiles created by init—never a broad root wildcard or the example
-template.
+policy warning. After F7, the fixed `.gitignore` line owned by every scaffold
+is only `.napflow/`; environment coverage is dynamic W108 policy. Example init
+adds the one exact root-anchored `.env` path it creates and leaves
+`.env.example` visible. Changing manifest roots later never edits metadata.
 
 Rejected: counting machine-local/inherited Git state as portable coverage;
 mutating or prompting from `napf check`; silently normalizing a user's CRLF
 file; and a root `*.env` rule that captures unrelated host-project files.
+
+## D44 — Source roots are explicit; dotenv ids are literal; init is minimal
+
+(2026-07-15, owner decision during F7 implementation.)
+
+The built-in source layout is `flows/` plus `data/`, configured by
+`flows.root` and `data.root`. The existing `fixture` node remains the flow
+operation name, but its `file:` value is relative to `data.root`; “data” names
+the storage category without colliding conceptually with pytest fixture
+functions. Clear default names win over opaque `nflows`/`ndata` prefixes.
+Embedded host projects avoid real collisions explicitly with init/manifest
+roots such as `qa/flows` and `tests/napflow-data`.
+`flows.main` remains a workspace-relative identity below `flows.root`; when
+omitted, it follows a customized root as `<flows.root>/main`.
+F7 does not silently redefine the established FR-308/D38 access contract:
+`flows.root` is the discovery/catalog/scaffold/clone boundary, while explicit
+full workspace-relative entry and reference identities may still address a
+flow elsewhere inside the trusted workspace.
+
+`environments.root` defaults to the workspace root (`.`). Discovery is
+non-recursive and takes the union `.env`, `.env.*`, and `*.env`; the exact
+filename is the selectable id everywhere. Valid files created outside napflow
+are first-class profiles. Invalid/unreadable/non-regular candidates remain
+visible as warnings, while explicit/default selection is a hard preparation
+error. Process environment variables keep their winning layer.
+
+Default `napf init` creates one intentionally empty `flows/main` (Start and
+End only), its empty `nodes.py`, an empty `data/`, `.napflow/`, the manifest,
+and root Git metadata. It creates no profile or test/demo flow. `--example` is
+the opt-in complete reference used by smoke, artifact, server, and browser
+tests: connected main, offline smoke, HTTP example, `data/smoke.json`, `.env`,
+and `.env.example`. Root options configure all three locations at creation;
+custom non-root environment directories are created even when empty.
+
+Brownfield init reuses existing directories and never overwrites their files.
+A non-directory, symlink, or Windows-junction collision at a required
+directory fails preflight before the manifest or Git metadata is written; a
+dangling manifest symlink is likewise refused before any write. Napflow never
+lets a configured directory role overlap any planned scaffold file (including
+`napflow.yaml`, root Git metadata, flow sources, or example assets), even when
+neither path exists yet. A pre-existing scaffold source is preserved when it
+is a regular file; a directory, symlink, junction, or other non-regular object
+in a source-file role is rejected before metadata callbacks or writes. Root
+Git metadata remains the D43 exception: unsafe existing metadata is skipped
+with advice and never mutated. Napflow never invents an alternate directory
+name: callers choose roots explicitly and the resulting manifest remains the
+only authority.
+
+Rejected: root-level fixture data (indistinguishable from host files); a
+default `envs/` directory that fights conventional dotenv layouts; demo files
+in every first-use workspace; automatic collision suffixes; and broad root
+ignore patterns that can hide host-project files.
 
 ## Known open risks (watch during implementation)
 - EC10/EC22/EC27/EC35 remain open post-v0.2 limitations. EC44's distribution,

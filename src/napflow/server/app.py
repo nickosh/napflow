@@ -1133,14 +1133,25 @@ def build_app(workspace: Workspace) -> Application:
     @router.get("/api/workspace")
     async def get_workspace() -> Response:
         info = manifest.workspace
+        env_discovery = workspace.discover_env_profiles()
         return json_response(
             {
                 "name": info.name if info else None,
                 "description": info.description if info else None,
                 "root": str(root),
                 "flows_root": manifest.flows.root,
+                "environments_root": manifest.environments.root,
+                "data_root": manifest.data.root,
                 "main": manifest.flows.main,
-                "env_profiles": sorted(workspace.env_profiles()),
+                "env_profiles": sorted(env_discovery.profiles),
+                "env_profile_warnings": [
+                    {
+                        "name": issue.name,
+                        "path": str(issue.path),
+                        "message": issue.message,
+                    }
+                    for issue in env_discovery.issues.values()
+                ],
                 "env_default": manifest.environments.default,
                 "version": napflow.__version__,
             }

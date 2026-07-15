@@ -11,8 +11,12 @@ flows:
   main: flows/main
 
 environments:
-  default: dev
+  root: .
+  default: .env
   secrets: []
+
+data:
+  root: data
 
 defaults:
   request:

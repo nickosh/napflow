@@ -9,9 +9,12 @@ napflow only offers to append its small canonical block during ``napf init``.
 from __future__ import annotations
 
 import stat
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+
+from pathspec import GitIgnoreSpec
 
 from napflow.core.files import atomic_write_text
 
@@ -91,14 +94,36 @@ class GitMetadataAppendError(RuntimeError):
 
 
 def gitignore_rules() -> GitMetadataRules:
-    """Return F6's canonical rules for the current fixed ``envs/`` layout."""
+    """Return the canonical rules shared by every scaffold.
 
-    wildcard = "envs/*.env"
-    template_exception = "!envs/example.env"
+    Environment-profile coverage is semantic and workspace-specific (W108),
+    so F6's fixed W109 contract owns only napflow's local runtime directory.
+    """
+
+    return GitMetadataRules(GITIGNORE, (".napflow/",))
+
+
+def _gitignore_literal_path(path: str) -> str:
+    """Escape glob metacharacters in one already-normalized POSIX path."""
+
+    return "".join(f"\\{char}" if char in "*?[]" else char for char in path)
+
+
+def example_gitignore_rules(
+    environments_root: str = ".",
+) -> GitMetadataRules:
+    """Return the exact ignore rules for ``napf init --example``.
+
+    The generated ``.env`` path is deliberately workspace-root-anchored. A
+    broad ``*.env`` or ``.env.*`` pattern could hide unrelated files when
+    napflow is embedded in a larger repository; the committed ``.env.example``
+    template remains visible.
+    """
+
+    profile = ".env" if environments_root == "." else f"{environments_root}/.env"
     return GitMetadataRules(
         GITIGNORE,
-        (wildcard, template_exception, ".napflow/"),
-        ((wildcard, template_exception),),
+        (f"/{_gitignore_literal_path(profile)}", ".napflow/"),
     )
 
 
@@ -115,6 +140,14 @@ def default_git_metadata_rules() -> tuple[GitMetadataRules, GitMetadataRules]:
     """Return the two root-file rule sets in scaffold output order."""
 
     return (gitignore_rules(), gitattributes_rules())
+
+
+def example_git_metadata_rules(
+    environments_root: str = ".",
+) -> tuple[GitMetadataRules, GitMetadataRules]:
+    """Return the root metadata written by ``napf init --example``."""
+
+    return (example_gitignore_rules(environments_root), gitattributes_rules())
 
 
 def _missing_rules(text: str, rules: GitMetadataRules) -> tuple[str, ...]:
@@ -205,6 +238,38 @@ def inspect_git_metadata(
     else:
         state = GitMetadataState.COVERED
     return GitMetadataInspection(path, rules, state, missing, _text=text)
+
+
+def gitignore_covered_paths(
+    workspace_root: Path, paths: Iterable[str]
+) -> frozenset[str]:
+    """Return workspace-relative POSIX paths ignored by the root ``.gitignore``.
+
+    Only the napflow workspace's own root file is authoritative; parent,
+    nested, repository-local, and global Git configuration is never inspected.
+    The file is read through :func:`inspect_git_metadata`, so a missing,
+    unreadable, invalid-UTF-8, symlink, or other non-regular path provides no
+    coverage. LF and CRLF pattern lines are both evaluated, independently of
+    the line-ending state used by W109. An invalid pattern makes the whole file
+    provide no coverage. Git is never invoked and this function never writes.
+    """
+
+    inspection = inspect_git_metadata(workspace_root, gitignore_rules())
+    if inspection._text is None:
+        return frozenset()
+
+    # Split only the two line endings Git metadata supports here. In
+    # particular, Unicode line separators remain ordinary pattern characters,
+    # matching the exact-rule inspection behavior above.
+    pattern_lines = inspection._text.replace("\r\n", "\n").split("\n")
+    try:
+        spec = GitIgnoreSpec.from_lines(pattern_lines)
+    except Exception:
+        # Gitignore parser/backend errors must not make workspace checking
+        # depend on Git or turn advisory metadata coverage into a hard failure.
+        return frozenset()
+
+    return frozenset(path for path in paths if spec.match_file(path))
 
 
 def _with_append_block(text: str, block: str) -> str:

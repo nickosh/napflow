@@ -46,8 +46,9 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
       closure checking; file:line diagnostics + hints —
       `core/checker.py` (+ `core/templating.py` syntax half).
       Rule-scope pins recorded in engine spec §8. (FR-301–309)
-- [x] **M5 — CLI** (landed 2026-07-05): `napf init` (incl. `flows/smoke`
-      + `fixtures/smoke.json` scaffold, written through the canonical
+- [x] **M5 — CLI** (landed 2026-07-05): `napf init` (the historical
+      `flows/smoke` + fixture scaffold now lives behind `--example`, D44;
+      written through the canonical
       serializer, checks clean out of the box), `napf list`,
       `napf check` with exit codes 0/1/2. (FR-801/802/805, FR-107)
 
@@ -148,7 +149,7 @@ and guards follow; container frames close the stage.
       null), log (+ live stderr echo in `napf run`), fixture (per-run
       cache keyed by path, CSV pins, rule-6 auto-seed through the
       normal firing path), note runtime no-op. `napf run flows/smoke`
-      passes offline on a fresh `napf init` → EC34 first-touch test
+      passes offline on a fresh `napf init --example` → EC34 first-touch test
       green. Semantics pinned in EN §5. (FR-507/512/513/514/517)
 - [x] **M4 — guards** (landed 2026-07-06): counter (EC16
       check-then-decrement, `count: 0` exhausts everything) + timeout
@@ -169,7 +170,7 @@ and guards follow; container frames close the stage.
       close: 0.1.0.dev3. (D20/D21/D24)
 
 S3 DoD verified: flagship retry example runs (M4); `napf run
-flows/smoke` passes offline on a fresh `napf init` (M3, EC34);
+flows/smoke` passes offline on a fresh `napf init --example` (M3, EC34);
 TR-1/4/5/6/8/10 green + TR-9's protocol-integrity half (the
 through-the-server half is S4's, per the S3 DoD note above).
 
@@ -206,7 +207,7 @@ harness lands M2, suite grows M3–M6).
       `artifacts` forces the gitignored bundle into sdist+wheel; CI `ui`
       job (3-OS: build + wheel gate + Playwright chromium e2e) and
       release.yml bundle gate; Playwright harness (`e2e/serve.mjs`
-      scaffolds a fresh `napf init` workspace) + 2 smokes. (NFR-03;
+      scaffolds a fresh `napf init --example` workspace) + 2 smokes. (NFR-03;
       FR-806/1001 complete)
 - [x] **M3 — read-only canvas** (landed 2026-07-06): flow-detail API
       grew per-node port surfaces (`checker.node_surfaces`, AST-derived
@@ -900,8 +901,9 @@ F6 was selected by the owner as the first rollout implementation and is
 complete on `feat/f6-init-git-metadata` at `da245c8` as of 2026-07-15. Current
 order resumes with **F2** (small enabler, days), then the
 **F1 track** as headline work, with **F3** and **F4** interleaved between F1
-slices as small core/CLI branches. **F7** remains planned but is deferred by
-owner direction; **F5** is unscheduled/low.
+slices as small core/CLI branches. Owner direction then pulled **F7** forward;
+it is implemented on `feat/f7-configurable-data-roots`. **F5** remains
+unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
@@ -1058,12 +1060,13 @@ only if drift is actually observed.
 ### F6 — `napf init` git-metadata handling for existing files ✅ done 2026-07-15 (EC56; D43)
 
 Completion evidence: implementation commit `da245c8`; 99 focused tests and
-667 full-suite tests pass locally (11 deselected), with Ruff lint/format and
-diff hygiene clean. The PR's macOS/Windows/Linux gate remains pending.
+667 full-suite tests passed locally (11 deselected), with Ruff lint/format and
+diff hygiene clean. PR #5 merged; its Python matrix passed on all three OSes.
+The post-merge Windows browser flake is separately reproduced/fixed as EC57.
 
 Brownfield init (target directory already has `.gitignore` or
 `.gitattributes`, no `napflow.yaml`) previously skipped both files with a
-one-line `exists` notice, leaving `envs/*.env`, `.napflow/`, and YAML
+one-line `exists` notice, leaving then-current `envs/*.env`, `.napflow/`, and YAML
 `eol=lf` rules absent — committable credentials/raw history (EC56).
 `napf init`'s refusal when `napflow.yaml` exists stays exactly as is.
 
@@ -1074,8 +1077,9 @@ Owner-decided and implemented behavior (2026-07-15):
 - [x] Coverage authority is only the canonical lines in workspace-root
       `.gitignore` and `.gitattributes`. Parent files, `.git/info/*`, global
       configuration, and a Git executable never count. The evaluator also
-      preserves the required wildcard→template-exception order; arbitrary
-      user patterns remain user policy rather than a second Git interpreter.
+      checks exact fixed rules; arbitrary user patterns remain user policy.
+      F7 later narrows the fixed ignore line to `.napflow/` and assigns actual
+      environment-profile coverage to semantic W108.
 - [x] Existing LF file with all canonical napflow rules covered: report
       `exists (rules covered)`; no prompt, no change.
 - [x] Existing LF file missing rules, interactive TTY: per-file prompt
@@ -1110,76 +1114,50 @@ Owner-decided and implemented behavior (2026-07-15):
       refusal; invalid/non-regular paths; read-only W109. The PR gate will
       confirm the implementation on the macOS/Windows/Linux matrix.
 
-### F7 — configurable environments root + dotenv-style profiles (deferred; owner-designed 2026-07-15)
+### F7 — configurable source roots + dotenv-style profiles ✅ done 2026-07-15 (D42/D44)
 
-Context: napflow workspaces embedded inside host projects need locations
-that fit the host layout. Verified 2026-07-15 in a live workspace:
-`flows.root` is **already** a manifest key honored by discovery and the
-resolver (nested paths work; `.` is already rejected for flows by
-identity rules — correct, discovery would otherwise scan `.napflow/`
-and the whole host project), and fixture `file:` paths are **already**
-free workspace-relative paths (root-level fixture ran green). Document
-both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
-(`core/workspace.py`).
+Owner scope expanded during implementation: all user source categories need
+clear configurable roots, default init must be immediately usable without
+demo clutter, and the richer reference workspace belongs behind `--example`.
 
-- [ ] New manifest key `environments.root` (default `"envs"`) inside
-      the existing `environments:` block. Values validated like
-      `flows.root` (workspace-relative identity + containment: nested
-      OK; absolute, `..`, backslash, outside-workspace rejected — D42);
-      `"."` and `"./"` are explicit special cases meaning the workspace
-      root itself.
-- [ ] Discovery in the configured root — same rules for every root
-      value, not special-cased to `"."`, non-recursive as today:
-      collect `*.env`, `.env`, and `.env.*`; keep regular files only
-      (directories and unreadable/invalid-format entries are skipped
-      with a warning, never fatal at discovery).
-- [ ] **Profile identifier = the literal filename** (owner call
-      2026-07-15): `.env` is picked as `.env`, `.env.staging` as
-      `.env.staging`, `dev.env` as `dev.env` — in `--env`,
-      `environments.default`, and the UI picker alike. No stem mapping,
-      no invented names; filenames are unique per directory, so name
-      collisions/precedence/shadowing cannot exist. **Breaking change**
-      to the v0.2 stem convention (`--env dev` → `--env dev.env`),
-      accepted under D33/criterion 5 while the user base is small: the
-      scaffolded manifest (`environments.default`), FR-103 spec text,
-      and a release-notes entry update in the same PR.
-- [ ] Skip-with-warning applies to listing only: explicitly selecting a
-      skipped or invalid profile (`--env`, `environments.default`, or a
-      flow's `env.required`) is a hard, clearly-worded error at run
-      preparation — a run must never proceed silently without the
-      credentials the user asked for.
-- [ ] **No `.gitignore`/`.gitattributes` mutation outside `napf init`**
-      (owner call 2026-07-15): users who change default paths own their
-      host project's ignore rules; napflow warns, never edits. Safety =
-      new **W108** in `napf check`: a discovered env profile file is
-      not covered by the workspace-root `.gitignore`; parent/global/info
-      rules do not count. F6's W109 separately covers the canonical root
-      scaffold block and non-LF/invalid metadata. Both remain advisory and
-      `--no-git-meta-check` suppresses them. `napf init` has no
-      environment-root choice today. If F7 adds one, a root layout must ignore
-      only root-anchored exact sensitive profiles init creates (for example
-      `/dev.env`), never a broad root `*.env` or the `example.env` template;
-      changing the manifest root after init must never edit Git metadata.
-- [ ] Same-PR docs: manifest spec §environments / FR-103 (patterns,
-      literal-filename selection, root values, W108); a separate short
-      "embedding napflow in an existing project" note covering
-      `flows.root`, free fixture paths, `environments.root`, the
-      you-own-your-gitignore stance, and D42 stated explicitly — `..`
-      and absolute roots stay rejected for every configurable
-      directory; the supported pattern for host-level files is raising
-      the workspace root (`napflow.yaml` at host level, keys pointing
-      down). Release-notes entry when a release is cut (literal-name
-      selection break + `.env`/`.env.*` discovery addition).
-- [ ] Tests: nested root; `"."` and `"./"`; containment rejections;
-      literal-filename selection for all three patterns (incl. the
-      `--env dev.env` break); invalid-file skip warning vs hard error
-      on explicit selection; `example.env` convention and
-      process-env-overrides precedence unchanged; W108 root-only coverage
-      and opt-out; three-OS CI.
+- [x] `flows.root` remains a required proper workspace subdirectory;
+      `data.root` is added with default `data` and the same proper-subdirectory
+      rule. Fixture-node `file:` values now resolve relative to `data.root`.
+      `environments.root` defaults to `.` and uniquely accepts `.`/`./`.
+      Every root uses D42 lexical + symlink-aware containment.
+- [x] Environment discovery is non-recursive and uniform for every root:
+      collect `.env`, `.env.*`, and `*.env`; literal filename is the id in
+      manifest, CLI, server, and UI. Valid foreign-created files are first-class.
+- [x] Invalid/unreadable/non-regular candidates are skipped with W105/operator
+      notes; explicitly/default-selected invalid or missing filenames are hard
+      run-preparation errors. Process environment overrides remain unchanged.
+- [x] W108 uses Git-compatible pattern semantics over only the workspace-root
+      `.gitignore`. F6/W109 retains only fixed `.napflow/` + YAML attributes.
+      `--example` adds one exact anchored ignore for its configured `.env`;
+      `.env.example` stays visible and root changes never mutate metadata.
+- [x] Basic init creates the manifest, empty Start/End `flows/main`, empty
+      `nodes.py`, empty `data/`, `.napflow/`, and Git metadata—no env files,
+      smoke, fixture data, or HTTP demo. `napf init --example` creates the
+      complete offline/HTTP reference surface used by tests.
+- [x] Init accepts `--flows-root`, `--data-root`, and
+      `--environments-root`; validation and required-directory collision
+      preflight happen before writes. Existing directories/files are reused
+      without overwrite; non-directory/symlink/junction collisions and any
+      directory role that overlaps a planned scaffold file fail before writes.
+      Existing scaffold sources are preserved only when regular files; F6's
+      metadata-specific inspect/skip policy remains unchanged.
+- [x] Specs, README, D42/D44, requirements, EC34/EC56/EC58/EC59, and a dedicated
+      embedding guide describe the break and root-ownership policy.
+- [x] Tests cover defaults/custom/nested roots, root containment, literal
+      patterns, invalid selection, W108 semantics/opt-out, minimal vs example
+      scaffold, brownfield reuse/collisions, planned file/directory role
+      conflicts, and release/server/browser use of explicit `--example`.
+      Three-OS confirmation remains the branch PR gate.
 
-Estimate: small (~day), currently deferred. It can reuse F6's root-file
-inspection and authority, but W108 still needs semantic ignore matching for
-arbitrary discovered profiles.
+The same branch closes EC57, the linked Windows Playwright failure: same-flow
+xyflow rebuilds preserve stable-node measurements, the E2E assertion checks
+real post-Fit-View geometry, and every retry worker restores immutable editing
+seeds before the serial suite.
 
 ### Unscheduled backlog
 

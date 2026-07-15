@@ -58,8 +58,36 @@ export type SaveState = SavePhase;
 const AUTOSAVE_MS = 1000; // owner fork (2026-07-06): debounced autosave
 const ETAG_POLL_MS = 2000; // FR-1004 v1 shape: poll, reload/prompt on drift
 
+function joinOperatorNotices(parts: string[]): string | null {
+  const unique = [...new Set(parts.filter((part) => part !== ""))];
+  return unique.length > 0 ? unique.join(" · ") : null;
+}
+
+function workspaceEnvNotice(workspace: WorkspaceInfo): string | null {
+  return joinOperatorNotices(
+    workspace.env_profile_warnings.map(
+      (warning) =>
+        `warning: env profile ${JSON.stringify(warning.name)} skipped at ${warning.path}: ${warning.message}`,
+    ),
+  );
+}
+
+function startedRunNotice(
+  warnings: Diagnostic[],
+  notes: string[],
+): string | null {
+  return joinOperatorNotices([
+    ...warnings.map(
+      (warning) =>
+        `${warning.severity}: ${warning.code}: ${warning.message}`,
+    ),
+    ...notes,
+  ]);
+}
+
 type AppState = {
   workspace: WorkspaceInfo | null;
+  workspaceNotice: string | null; // persistent dotenv discovery warning
   flows: FlowSummary[];
   error: string | null;
   selectedFlow: string | null;
@@ -97,7 +125,7 @@ type AppState = {
   runPanelTab: "events" | "history" | null; // null = panel closed
   runHistory: RunListEntry[] | null;
   runEnv: string | null; // selected env profile for the next run
-  runNotice: string | null; // start/abort failures, shown by controls
+  runNotice: string | null; // run-prep warnings + start/abort failures
   runReplayLoading: boolean;
   runReplayError: string | null;
   runRootFrame: string;
@@ -536,6 +564,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
   return {
     workspace: null,
+    workspaceNotice: null,
     flows: [],
     error: null,
     selectedFlow: null,
@@ -580,7 +609,13 @@ export const useAppStore = create<AppState>((set, get) => {
           fetchWorkspace(),
           fetchFlows(),
         ]);
-        set({ workspace, flows, error: null, runEnv: workspace.env_default });
+        set({
+          workspace,
+          workspaceNotice: workspaceEnvNotice(workspace),
+          flows,
+          error: null,
+          runEnv: workspace.env_default,
+        });
         // deep link wins (SPA fallback serves index for /flow/<identity>);
         // otherwise the manifest's `main:` flow opens by default (WM)
         const fromPath = identityFromPath(window.location.pathname);
@@ -897,6 +932,7 @@ export const useAppStore = create<AppState>((set, get) => {
           runView: emptyRunView(),
           runId: started.run_id,
           runLive: true,
+          runNotice: startedRunNotice(started.warnings, started.notes),
           runSource: "live",
           runPanelTab: "events",
           runReplayLoading: false,

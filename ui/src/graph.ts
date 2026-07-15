@@ -30,6 +30,37 @@ export type CanvasNodeData = {
 
 export type CanvasNode = Node<CanvasNodeData>;
 
+/**
+ * Rebuild the model-derived graph without throwing away dimensions xyflow has
+ * already measured for nodes that still exist in the same flow.
+ *
+ * Controlled-node replacements that omit `measured` make xyflow hide the node
+ * until its observer measures it again. Structural edits rebuild every node,
+ * so retaining dimensions by stable node id keeps unchanged siblings visible
+ * during that hand-off. Dimensions must never leak across flow identities, and
+ * a genuinely new id must still go through xyflow's normal measurement path.
+ */
+export function reconcileGraphNodes(
+  current: CanvasNode[],
+  next: CanvasNode[],
+  currentIdentity: string | null,
+  nextIdentity: string,
+): CanvasNode[] {
+  if (currentIdentity !== nextIdentity) return next;
+
+  const measuredById = new Map(
+    current
+      .filter((node) => node.measured !== undefined)
+      .map((node) => [node.id, node.measured] as const),
+  );
+  return next.map((node) => {
+    const measured = measuredById.get(node.id);
+    return measured === undefined
+      ? node
+      : { ...node, measured: { ...measured } };
+  });
+}
+
 const COLUMN_X = 240;
 const ROW_Y = 130;
 const MARGIN = 40;

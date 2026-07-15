@@ -139,7 +139,8 @@ the notice and the UI bundle survive the release-sdist-to-wheel boundary.
      Release page implying the version is installable; `v0.*` tags are
      auto-marked pre-release (D33)
 5. **Verify**: `uv tool install napflow` from real PyPI; then in a fresh
-   directory run `napf init`, `napf check`, and `napf run flows/smoke` offline
+   directory run `napf init --example`, `napf check`, and
+   `napf run flows/smoke` offline
    (EC34), plus open `napf ui` when release verification requires the browser
    path beyond the automated artifact smoke.
 

@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
   abortRun: vi.fn(),
+  fetchFlows: vi.fn(),
   fetchRunEventPage: vi.fn(),
   fetchRunFramePage: vi.fn(),
   fetchFlowDetail: vi.fn(),
+  fetchWorkspace: vi.fn(),
+  openRunSocket: vi.fn(),
+  startRun: vi.fn(),
 }));
 
 vi.mock("./api", async (importOriginal) => {
@@ -12,17 +16,23 @@ vi.mock("./api", async (importOriginal) => {
   return {
     ...actual,
     abortRun: apiMocks.abortRun,
+    fetchFlows: apiMocks.fetchFlows,
     fetchRunEventPage: apiMocks.fetchRunEventPage,
     fetchRunFramePage: apiMocks.fetchRunFramePage,
     fetchFlowDetail: apiMocks.fetchFlowDetail,
+    fetchWorkspace: apiMocks.fetchWorkspace,
+    openRunSocket: apiMocks.openRunSocket,
+    startRun: apiMocks.startRun,
   };
 });
 
 import {
   REPLAY_API_FORMAT,
+  type Diagnostic,
   type FlowDetail,
   type RunEventPage,
   type RunFramePage,
+  type WorkspaceInfo,
 } from "./api";
 import {
   type NodeRunState,
@@ -39,6 +49,32 @@ const SUMMARY = {
   unhandled_error_count: 0,
   nodes_never_fired_count: 0,
 };
+
+function workspace(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
+  return {
+    name: "test workspace",
+    description: null,
+    root: "/workspace",
+    flows_root: "flows",
+    environments_root: ".",
+    data_root: "data",
+    main: FLOW,
+    env_profiles: [],
+    env_profile_warnings: [],
+    env_default: null,
+    version: "0.2.0",
+    ...overrides,
+  };
+}
+
+function fakeSocket(): WebSocket {
+  return {
+    close: vi.fn(),
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+  } as unknown as WebSocket;
+}
 
 function detail(identity = FLOW): FlowDetail {
   return {
@@ -149,6 +185,10 @@ function framePage(parentFrame: string): RunFramePage {
 beforeEach(() => {
   vi.clearAllMocks();
   useAppStore.setState({
+    workspace: null,
+    workspaceNotice: null,
+    flows: [],
+    error: null,
     selectedFlow: FLOW,
     detail: detail(),
     detailError: null,
@@ -157,6 +197,8 @@ beforeEach(() => {
     runId: null,
     runLive: false,
     runSource: null,
+    runEnv: null,
+    runNotice: null,
     runFramePath: [],
     runFrameDetail: null,
     runFrameView: null,
@@ -175,7 +217,23 @@ beforeEach(() => {
     ) => framePage(options.parentFrame),
   );
   apiMocks.fetchFlowDetail.mockResolvedValue(detail("flows/item"));
+  apiMocks.fetchFlows.mockResolvedValue([{ identity: FLOW, valid: true }]);
+  apiMocks.fetchWorkspace.mockResolvedValue(workspace());
+  apiMocks.openRunSocket.mockReturnValue(fakeSocket());
+  apiMocks.startRun.mockResolvedValue({
+    run_id: RUN_ID,
+    flow: FLOW,
+    state: "running",
+    log: `.napflow/runs/${FLOW}/${RUN_ID}.jsonl`,
+    warnings: [],
+    notes: [],
+  });
   apiMocks.abortRun.mockResolvedValue({ run_id: RUN_ID, state: "aborting" });
+});
+
+afterEach(() => {
+  useAppStore.getState().exitRun();
+  vi.unstubAllGlobals();
 });
 
 describe("bounded history store", () => {
@@ -262,6 +320,63 @@ describe("bounded history store", () => {
 });
 
 describe("run transport", () => {
+  it("surfaces workspace dotenv discovery warnings after initial flow load", async () => {
+    vi.stubGlobal("window", {
+      location: { pathname: `/flow/${FLOW}` },
+      history: {
+        state: null,
+        replaceState: vi.fn(),
+        pushState: vi.fn(),
+      },
+    });
+    apiMocks.fetchWorkspace.mockResolvedValueOnce(
+      workspace({
+        env_profile_warnings: [
+          {
+            name: "broken.env",
+            path: "/workspace/broken.env",
+            message: "expected KEY=VALUE",
+          },
+        ],
+      }),
+    );
+    apiMocks.fetchFlowDetail.mockResolvedValueOnce(detail());
+
+    await useAppStore.getState().load();
+
+    expect(useAppStore.getState().workspaceNotice).toBe(
+      'warning: env profile "broken.env" skipped at /workspace/broken.env: expected KEY=VALUE',
+    );
+    expect(useAppStore.getState().runNotice).toBeNull();
+  });
+
+  it("surfaces successful run preparation warnings and operator notes", async () => {
+    const warning: Diagnostic = {
+      severity: "warning",
+      code: "W103",
+      message: "error output is unconnected",
+      hint: "connect it",
+      file: "flows/large/flow.yaml",
+      line: 4,
+      column: 3,
+      node: "request",
+    };
+    apiMocks.startRun.mockResolvedValueOnce({
+      run_id: RUN_ID,
+      flow: FLOW,
+      state: "running",
+      log: `.napflow/runs/${FLOW}/${RUN_ID}.jsonl`,
+      warnings: [warning],
+      notes: ['warning: env profile "broken.env" was skipped'],
+    });
+
+    await useAppStore.getState().startRun({});
+
+    expect(useAppStore.getState().runNotice).toBe(
+      'warning: W103: error output is unconnected · warning: env profile "broken.env" was skipped',
+    );
+  });
+
   it("surfaces a failed abort response instead of treating it as a race", async () => {
     useAppStore.setState({
       runId: RUN_ID,

@@ -8,7 +8,7 @@ import textwrap
 
 import pytest
 
-from test_engine import end, events_of, flow, run, start
+from test_engine import end, events_of, flow, manifest, run, start
 
 
 def write_fixture(tmp_path, rel, content):
@@ -166,18 +166,35 @@ def test_fixture_json_auto_seeds_without_trigger(tmp_path):
     # D17/rule 6: unconnected trigger → one firing at frame start; the
     # start node here is fully unwired, so ONLY the fixture drives the
     # run (the EC08 empty-seed guard must not finalize early)
-    write_fixture(tmp_path, "fixtures/users.json", '[{"name": "Ada"}]')
-    result, records = run(fixture_flow("fixtures/users.json"), workspace_root=tmp_path)
+    write_fixture(tmp_path, "data/users.json", '[{"name": "Ada"}]')
+    result, records = run(fixture_flow("users.json"), workspace_root=tmp_path)
     assert result.state == "passed"
     assert result.end_outputs == {"x": [{"name": "Ada"}]}
     fired = [r["node"] for r in events_of(records, "node_fired")]
     assert fired.count("fx") == 1
 
 
+def test_fixture_file_is_relative_to_configured_data_root(tmp_path):
+    write_fixture(tmp_path, "testdata/users.json", '[{"name": "Grace"}]')
+    configured = manifest()
+    configured = configured.model_copy(
+        update={"data": configured.data.model_copy(update={"root": "testdata"})}
+    )
+
+    result, _ = run(
+        fixture_flow("users.json"),
+        workspace_root=tmp_path,
+        mani=configured,
+    )
+
+    assert result.state == "passed"
+    assert result.end_outputs == {"x": [{"name": "Grace"}]}
+
+
 def test_fixture_fires_per_delivery_when_trigger_wired(tmp_path):
-    write_fixture(tmp_path, "fixtures/one.json", '{"k": 1}')
+    write_fixture(tmp_path, "data/one.json", '{"k": 1}')
     result, records = run(
-        fixture_flow("fixtures/one.json", wire_trigger=True),
+        fixture_flow("one.json", wire_trigger=True),
         workspace_root=tmp_path,
     )
     assert result.state == "passed"
@@ -187,8 +204,8 @@ def test_fixture_fires_per_delivery_when_trigger_wired(tmp_path):
 
 
 def test_fixture_csv_parses_to_dicts_with_string_values(tmp_path):
-    write_fixture(tmp_path, "fixtures/rows.csv", "name,age\nAda,36\nLinus,54\n")
-    result, _ = run(fixture_flow("fixtures/rows.csv"), workspace_root=tmp_path)
+    write_fixture(tmp_path, "data/rows.csv", "name,age\nAda,36\nLinus,54\n")
+    result, _ = run(fixture_flow("rows.csv"), workspace_root=tmp_path)
     assert result.state == "passed"
     assert result.end_outputs == {
         "x": [{"name": "Ada", "age": "36"}, {"name": "Linus", "age": "54"}]
@@ -196,16 +213,16 @@ def test_fixture_csv_parses_to_dicts_with_string_values(tmp_path):
 
 
 def test_fixture_error_shapes(tmp_path):
-    write_fixture(tmp_path, "fixtures/empty.csv", "")
-    write_fixture(tmp_path, "fixtures/ragged.csv", "a,b\n1,2,3\n")
-    write_fixture(tmp_path, "fixtures/data.unknown", "{}")
-    write_fixture(tmp_path, "fixtures/bad.json", "{nope")
+    write_fixture(tmp_path, "data/empty.csv", "")
+    write_fixture(tmp_path, "data/ragged.csv", "a,b\n1,2,3\n")
+    write_fixture(tmp_path, "data/data.unknown", "{}")
+    write_fixture(tmp_path, "data/bad.json", "{nope")
     for file, needle in [
-        ("fixtures/empty.csv", "header row"),
-        ("fixtures/ragged.csv", "more fields than the header"),
-        ("fixtures/data.unknown", "cannot infer format"),
-        ("fixtures/bad.json", "invalid JSON"),
-        ("fixtures/missing.json", "cannot read fixture"),
+        ("empty.csv", "header row"),
+        ("ragged.csv", "more fields than the header"),
+        ("data.unknown", "cannot infer format"),
+        ("bad.json", "invalid JSON"),
+        ("missing.json", "cannot read fixture"),
     ]:
         result, _ = run(fixture_flow(file), workspace_root=tmp_path)
         assert result.state == "failed", file  # EC24: no error port
@@ -216,13 +233,13 @@ def test_fixture_error_shapes(tmp_path):
 def test_fixture_runtime_rejects_symlink_escape_when_checker_is_bypassed(tmp_path):
     outside = tmp_path.parent / f"{tmp_path.name}-outside.json"
     outside.write_text('["must not be read"]', encoding="utf-8")
-    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "data").mkdir()
     try:
-        (tmp_path / "fixtures" / "escape.json").symlink_to(outside)
+        (tmp_path / "data" / "escape.json").symlink_to(outside)
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable on this platform/privilege level")
 
-    result, _ = run(fixture_flow("fixtures/escape.json"), workspace_root=tmp_path)
+    result, _ = run(fixture_flow("escape.json"), workspace_root=tmp_path)
     assert result.state == "failed"
     error = result.unhandled_errors[0]
     assert error["kind"] == "fixture_error"
@@ -233,14 +250,14 @@ def test_fixture_cached_per_run_survives_file_deletion(tmp_path):
     # read once, cached per run (FR-514): a python node deletes the
     # file mid-run (also proving the worker cwd = workspace root pin),
     # then a second fixture node on the SAME path reads from cache
-    write_fixture(tmp_path, "fixtures/data.json", "[1, 2, 3]")
+    write_fixture(tmp_path, "data/data.json", "[1, 2, 3]")
     (tmp_path / "nodes.py").write_text(
         textwrap.dedent(
             """
             import os
 
             def nuke(rows):
-                os.remove("fixtures/data.json")
+                os.remove("data/data.json")
                 return {"out": rows}
             """
         ),
@@ -248,13 +265,13 @@ def test_fixture_cached_per_run_survives_file_deletion(tmp_path):
     )
     f = flow(
         start(),
-        {"id": "fx1", "type": "fixture", "config": {"file": "fixtures/data.json"}},
+        {"id": "fx1", "type": "fixture", "config": {"file": "data.json"}},
         {
             "id": "rm",
             "type": "python",
             "config": {"function": "nuke", "outputs": ["out"]},
         },
-        {"id": "fx2", "type": "fixture", "config": {"file": "fixtures/data.json"}},
+        {"id": "fx2", "type": "fixture", "config": {"file": "data.json"}},
         end({"name": "x"}),
         edges=[
             ("fx1.value", "rm.rows"),
@@ -265,4 +282,4 @@ def test_fixture_cached_per_run_survives_file_deletion(tmp_path):
     result, _ = run(f, flow_dir=tmp_path, workspace_root=tmp_path)
     assert result.state == "passed"
     assert result.end_outputs == {"x": [1, 2, 3]}
-    assert not (tmp_path / "fixtures" / "data.json").exists()
+    assert not (tmp_path / "data" / "data.json").exists()

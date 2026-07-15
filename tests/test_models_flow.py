@@ -116,7 +116,7 @@ KITCHEN_SINK_NODES = [
     _node("deadline", "timeout", {"seconds": 30.5}),
     _node("pause", "delay", {"seconds": "{{ inputs.wait_s }}"}),  # templatable
     _node("trace", "log", {}),  # label/level fully defaulted
-    _node("users", "fixture", {"file": "fixtures/users.json"}),
+    _node("users", "fixture", {"file": "users.json"}),
     _node("docs", "note", {"text": "## Retry pattern\nSee spec."}),
     _node("end", "end"),
 ]

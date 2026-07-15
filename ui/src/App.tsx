@@ -7,12 +7,13 @@ import {
   applyNodeChanges,
   useNodesInitialized,
   useReactFlow,
+  useUpdateNodeInternals,
   type Connection,
   type Edge,
   type EdgeChange,
   type NodeChange,
 } from "@xyflow/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import "@xyflow/react/dist/style.css";
 import "./run.css";
@@ -30,7 +31,12 @@ import RunInspector from "./components/RunInspector";
 import RunPanel from "./components/RunPanel";
 import SaveStatus from "./components/SaveStatus";
 import { PALETTE_DRAG_TYPE } from "./forms";
-import { drillTarget, toGraph, type CanvasNode } from "./graph";
+import {
+  drillTarget,
+  reconcileGraphNodes,
+  toGraph,
+  type CanvasNode,
+} from "./graph";
 import { identityFromPath } from "./identity";
 import { persistenceRegistry } from "./persistence";
 import { ETAG_POLL_MS, useAppStore } from "./store";
@@ -61,6 +67,7 @@ function Canvas() {
   const canvasDetail =
     runFramePath.length > 0 ? runFrameDetail : detail;
   const { fitView, screenToFlowPosition } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
   const nodesInitialized = useNodesInitialized();
 
   // xyflow holds interactive state (drag positions, selection); the
@@ -69,20 +76,57 @@ function Canvas() {
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [fitAfterAddCount, setFitAfterAddCount] = useState<number | null>(null);
+  const renderedIdentity = useRef<string | null>(null);
+  const internalsRefreshFrame = useRef<number | null>(null);
   const identity = canvasDetail?.identity ?? null;
+  const allNodesMeasured = nodes.every(
+    (node) =>
+      node.measured?.width !== undefined && node.measured.height !== undefined,
+  );
   useEffect(() => {
     if (canvasDetail !== null) {
       const graph = toGraph(canvasDetail);
-      setNodes(graph.nodes);
+      const previousIdentity = renderedIdentity.current;
+      setNodes((current) =>
+        reconcileGraphNodes(
+          current,
+          graph.nodes,
+          previousIdentity,
+          canvasDetail.identity,
+        ),
+      );
       setEdges(graph.edges);
+      renderedIdentity.current = canvasDetail.identity;
+
+      // Same-id nodes can also change their port/config-driven size. Preserve
+      // their last dimensions for the rebuild hand-off, then force a fresh
+      // measurement after React commits the rebuilt node contents.
+      if (internalsRefreshFrame.current !== null) {
+        cancelAnimationFrame(internalsRefreshFrame.current);
+      }
+      const nodeIds = graph.nodes.map((node) => node.id);
+      internalsRefreshFrame.current = requestAnimationFrame(() => {
+        updateNodeInternals(nodeIds);
+        internalsRefreshFrame.current = null;
+      });
     } else {
       setNodes([]);
       setEdges([]);
+      renderedIdentity.current = null;
     }
     // rebuild on flow switch or explicit invalidation only — NOT on
     // every autosaved detail replacement (drag positions would snap)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity, graphVersion, runFramePath.length]);
+  }, [identity, graphVersion, runFramePath.length, updateNodeInternals]);
+
+  useEffect(
+    () => () => {
+      if (internalsRefreshFrame.current !== null) {
+        cancelAnimationFrame(internalsRefreshFrame.current);
+      }
+    },
+    [],
+  );
 
   const onNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
@@ -144,13 +188,20 @@ function Canvas() {
     if (
       fitAfterAddCount === null ||
       nodes.length < fitAfterAddCount ||
+      !allNodesMeasured ||
       !nodesInitialized
     ) {
       return;
     }
     void fitView({ padding: 0.15 });
     setFitAfterAddCount(null);
-  }, [fitAfterAddCount, fitView, nodes.length, nodesInitialized]);
+  }, [
+    allNodesMeasured,
+    fitAfterAddCount,
+    fitView,
+    nodes.length,
+    nodesInitialized,
+  ]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
