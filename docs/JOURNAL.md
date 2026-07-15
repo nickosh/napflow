@@ -4,10 +4,13 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
-## 2026-07-15 — rolling delivery adopted (D41) + F1–F5 backlog
+## 2026-07-15 — rolling delivery adopted (D41) + F1–F7 backlog + D42
 
 - Decided D41: no version-scoped milestone plans after v0.2.0; features merge
   independently via PR, owner cuts releases; `main` stays releasable per merge.
+- Decided D42: configurable directories (`flows.root`, `environments.root`,
+  future keys) never escape the workspace root — no `..`/absolute; embedded
+  workspaces raise the root (manifest at host level, keys point down).
 - Done: PLAN §Rolling delivery with ordered priority criteria and backlog —
   F1 UI rework track (headline; demos/screenshots wait for it; Slice 2 =
   in-memory canvas undo/redo, owner call: never a workspace file), F2 approved
@@ -15,10 +18,10 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   F4 EC27/EC35 render guards (perf-neutral by design), F5 perf drift job,
   F6 brownfield-init git-metadata prompt/append (EC56 recorded open;
   owner calls: default append on TTY, never mutate without TTY),
-  F7 `environments.root` + dotenv-style `.env`/`.env.<name>` profiles +
-  W108 not-ignored warning (verified live: `flows.root` + free fixture
-  paths already work — document, don't rebuild; no gitignore mutation
-  outside init).
+  F7 `environments.root` + literal-filename env profiles (breaking:
+  `--env dev.env`; D33 window) + W108 not-ignored warning (verified live:
+  `flows.root` + free fixture paths already work — document, don't
+  rebuild; no gitignore mutation outside init).
 - Docs only on `docs/rolling-feature-plan`: AGENTS.md build history item 6;
   EC22/EC27/EC35 rows point at their scheduled F-entries, still OPEN.
 - Next: merge this branch, then start F2 as its own feature branch.

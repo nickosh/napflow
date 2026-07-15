@@ -884,6 +884,35 @@ without a fixed release target to justify it); a long-lived `develop`
 integration branch (`main` + the PR gate already provide the integration
 point, and a second branch would break the always-releasable invariant).
 
+## D42 — Configurable workspace directories never escape the workspace root
+
+(2026-07-15, owner decision during F7 planning.)
+
+Every configurable location in `napflow.yaml` — `flows.root`,
+`environments.root` (F7), and any future directory key — accepts only
+workspace-relative paths that resolve inside the workspace root. `..`,
+absolute paths, and symlink escapes stay rejected by the single
+`WorkspaceResolver` containment rule (D37/EC38). Manifest-configured
+roots are not a trusted escape channel: one uniform invariant keeps
+every consumer (engine, CLI, REST/WS, UI writes) safe from the
+crafted-identity traversal class EC38 closed, and keeps workspaces
+self-contained, relocatable, and CI-safe.
+
+The supported pattern for reaching host-project files from an embedded
+workspace is **raising the workspace root, not escaping it**:
+`napflow.yaml` sits at the host level (manifest discovery walks upward
+from cwd, FR-101) and the configurable keys point downward — e.g.
+`flows.root: "qa/flows"`, `environments.root: "."`. Anything nested is
+expressible; needing `..` means the manifest sits one level too low.
+If `.napflow/` placement at a raised root ever becomes a real
+annoyance, a downward-only location knob is an acceptable future
+additive change.
+
+Rejected: per-key trusted parent paths (forks the resolver into
+trusted/untrusted modes and reopens EC38's traversal class); absolute
+paths for shared env directories (breaks relocatability and the
+one-folder promise).
+
 ## Known open risks (watch during implementation)
 - EC10/EC22/EC27/EC35 remain open post-v0.2 limitations. EC44's distribution,
   exact-version, and authoritative-gate defect is fixed; its ledger row names

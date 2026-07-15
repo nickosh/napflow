@@ -1108,7 +1108,7 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
 - [ ] New manifest key `environments.root` (default `"envs"`) inside
       the existing `environments:` block. Values validated like
       `flows.root` (workspace-relative identity + containment: nested
-      OK; absolute, `..`, backslash, outside-workspace rejected);
+      OK; absolute, `..`, backslash, outside-workspace rejected — D42);
       `"."` and `"./"` are explicit special cases meaning the workspace
       root itself.
 - [ ] Discovery in the configured root — same rules for every root
@@ -1140,12 +1140,15 @@ both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
       repo. W108 also catches hand-broken ignore rules in default
       layouts.
 - [ ] Same-PR docs: manifest spec §environments / FR-103 (patterns,
-      naming, collision rule, root values, W108); a separate short
+      literal-filename selection, root values, W108); a separate short
       "embedding napflow in an existing project" note covering
-      `flows.root`, free fixture paths, `environments.root`, and the
-      you-own-your-gitignore stance; release-notes entry when a release
-      is cut (`.env`/`.env.*` discovery is a behavior addition in the
-      default `envs/` layout too).
+      `flows.root`, free fixture paths, `environments.root`, the
+      you-own-your-gitignore stance, and D42 stated explicitly — `..`
+      and absolute roots stay rejected for every configurable
+      directory; the supported pattern for host-level files is raising
+      the workspace root (`napflow.yaml` at host level, keys pointing
+      down). Release-notes entry when a release is cut (literal-name
+      selection break + `.env`/`.env.*` discovery addition).
 - [ ] Tests: nested root; `"."` and `"./"`; containment rejections;
       literal-filename selection for all three patterns (incl. the
       `--env dev.env` break); invalid-file skip warning vs hard error
