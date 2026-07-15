@@ -27,7 +27,7 @@ def make_ws(tmp_path: Path, files: dict[str, str], *, git_metadata: bool = True)
     for rel, content in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        p.write_text(content, encoding="utf-8", newline="")
     return load_workspace(tmp_path)
 
 
@@ -608,7 +608,7 @@ def test_w109_missing_root_git_metadata_is_path_specific(tmp_path: Path) -> None
     assert "*.yaml text eol=lf" in diagnostics[0].message
     assert "envs/*.env" in diagnostics[1].message
     assert all(d.severity == "warning" and d.node_id is None for d in diagnostics)
-    assert all(d.hint and d.path.as_posix() in d.render() for d in diagnostics)
+    assert all(d.hint and str(d.path) in d.render() for d in diagnostics)
 
 
 def test_w109_lists_only_canonical_additions_and_check_is_read_only(

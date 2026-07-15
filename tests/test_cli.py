@@ -230,8 +230,16 @@ def test_init_existing_covered_metadata_needs_no_prompt_or_change(
     ws.mkdir()
     gitignore = ws / ".gitignore"
     attributes = ws / ".gitattributes"
-    gitignore.write_text("envs/*.env\n!envs/example.env\n.napflow/\n", encoding="utf-8")
-    attributes.write_text("*.yaml text eol=lf\n*.yml text eol=lf\n", encoding="utf-8")
+    gitignore.write_text(
+        "envs/*.env\n!envs/example.env\n.napflow/\n",
+        encoding="utf-8",
+        newline="",
+    )
+    attributes.write_text(
+        "*.yaml text eol=lf\n*.yml text eol=lf\n",
+        encoding="utf-8",
+        newline="",
+    )
     before = (gitignore.read_bytes(), attributes.read_bytes())
     monkeypatch.setattr(cli_main, "_stdin_is_tty", lambda: True)
 
@@ -398,7 +406,7 @@ def test_init_prompts_before_writing_any_scaffold_file(
 ) -> None:
     ws = tmp_path / "abort"
     ws.mkdir()
-    (ws / ".gitignore").write_text("# owner\n", encoding="utf-8")
+    (ws / ".gitignore").write_text("# owner\n", encoding="utf-8", newline="")
     monkeypatch.setattr(cli_main, "_stdin_is_tty", lambda: True)
 
     result = runner.invoke(app, ["init", str(ws)], input="")

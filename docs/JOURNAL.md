@@ -4,6 +4,13 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-15 — F6 Windows CI portability fix
+
+- Fixed LF-intended Git-metadata fixtures and a path-render assertion so the
+  F6 tests preserve their intended semantics on Windows; runtime behavior is unchanged.
+- Verified: 92 focused and 667 full tests pass (11 deselected); Ruff format/lint
+  and import contracts pass. Next: push, then rerun PR #5's three-OS gate.
+
 ## 2026-07-15 — F6 completion evidence recorded
 
 - Done: PLAN now ties completed F6 to implementation commit `da245c8` and the
