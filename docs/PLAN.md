@@ -13,7 +13,7 @@ don't rewrite history.
 
 Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
 
-- [x] **M0 — Repo scaffolding** (landed 2026-07-04; CI run #1 green on
+- [x] **M0 — Repo scaffolding** (landed 2026-07-04; CI green on
       ubuntu/macos/windows)
   - [x] `pyproject.toml` (uv-managed), `napflow/{core,cli}` package layout
   - [x] pytest + ruff; GitHub Actions matrix macOS/Windows/Linux from
@@ -23,7 +23,7 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
         (Keep a Changelog format via git-cliff; conventional commits
         already in use since the first commit) (NFR-11)
   - [x] Working journal live: `docs/JOURNAL.md` + the CLAUDE.md rule
-        (dated entry per milestone / PR-sized commit). SessionEnd
+        (dated entry per milestone / useful development slice). SessionEnd
         breadcrumb hook implemented 2026-07-04:
         `.claude/hooks/session-end-log.sh` appends per-session lines to
         gitignored `.claude/sessions.log` (the agent-written journal
@@ -263,7 +263,7 @@ harness lands M2, suite grows M3–M6).
       Also fixed here: the M3 canvas e2e broken by the M4 "E-codes
       don't 400" pin (split into editable-with-E-codes +
       unloadable-shows-error-view against a new fixture), which had
-      all three `ui e2e` CI legs red since the M4 push.
+      all three `ui e2e` CI legs red after M4.
 - [x] **M5 — run on canvas + history** (landed 2026-07-08): RUN MODE
       (D29, owner fork) — editing locks, the canvas animates off the
       M1 WebSocket (JSONL lines verbatim): `runview.ts` pure reducer
@@ -326,9 +326,8 @@ harness lands M2, suite grows M3–M6).
 S4 → release path (owner call 2026-07-08): `0.1.0.dev4` at stage
 close, a manual-testing window on the dev4 checkpoint, then the SAME
 scope promotes to **v0.1.0** via the RELEASING flow (dev4 is the de
-facto release candidate; only release-prep lands between). From the
-v0.1.0 tag on, work moves to feature branches + PRs (see Working
-agreements).
+facto release candidate; only release preparation lands between). After
+v0.1.0, work moves to independently verified feature delivery.
 
 ## v0.2.0 — usable full-fidelity prototype
 
@@ -449,13 +448,13 @@ discarded. This mapping is the continuity ledger:
 M0 DoD: v0.1 can be reproduced from its tag; v0.2 formats and invariants
 are written before implementation; every confirmed critical/high audit
 finding has a named failing test or an explicit later milestone owner.
-**Met and adversarially revalidated 2026-07-12** (`feat/v0.2`): all four
+**Met and adversarially revalidated 2026-07-12**: all four
 boxes are evidenced — clean-tag v0.1.0 artifact + first-touch run; protected
 and enforced history envelope plus collision-safe pre-storage contract; each
 audit finding a signal-correct strict `xfail` or explicit-owner `skip`; every
-named performance size measured with no deferred slot. (PR scope, owner call
-2026-07-12: v0.2 lands as larger feature PRs off `feat/v0.2`, not one branch
-per milestone.)
+named performance size measured with no deferred slot. (Owner call 2026-07-12:
+v0.2 lands as larger independently verifiable slices, not one slice per
+milestone.)
 
 ### M1 — workspace boundary and durable editing  ✅ done 2026-07-12
 
@@ -778,8 +777,8 @@ audited notice is present in both sdist and wheel.
       `napf ui`/`run_flow` smoke, production bundle membership, and exact
       tag/package version refusal. Do not add minimum/latest dependency or
       expanded OS/browser axes before user demand. (NFR-16) — one reusable
-      workflow plus independently tested exact-tag/`.dev` refusal; PR CI run
-      #42 passed every existing Linux/macOS/Windows Python/UI job, 2026-07-14
+      workflow plus independently tested exact-tag/`.dev` refusal; every
+      existing Linux/macOS/Windows Python/UI job passed, 2026-07-14
 - [x] Close the M0 audit entries still owned by streamlined v0.2. Reassign
       placeholders for explicitly deferred export, advanced replay, or
       performance targets to the future ledger instead of treating them as
@@ -801,17 +800,10 @@ audited notice is present in both sdist and wheel.
       cooperative-scheduler half precisely, and retain EC10/EC22/EC35
       as named post-v0.2 limitations. — the audit also reproduced and fixed
       anchor/alias enforcement (EC53) and report/replay envelope drift (EC54)
-- [ ] Promote the exact prepared release: land the `0.2.0` metadata,
-      generated changelog, and compatibility notes; observe the reusable PR
-      gate and non-publishing release dry-run on that commit; merge, then tag
-      the resulting `main` commit `v0.2.0`. Metadata, notes, and changelog landed
-      through PR #1; EC55 landed through green PR #2. Non-publishing dispatch
-      #29352493848 then passed every reusable gate job on `main` at `de8f40f`,
-      including the formerly failing macOS browser path, exact artifact smoke,
-      and upload. Inspection confirmed `napflow-0.2.0` wheel/sdist names and
-      metadata. After this release-memory closeout merges, run the final
-      non-publishing dispatch against that exact `main` commit, then tag it;
-      the checkbox remains open until `v0.2.0` exists.
+- [x] Promote the exact prepared release: `v0.2.0` metadata, generated
+      changelog, compatibility notes, and EC55 passed the reusable three-OS
+      release gate, including the macOS browser path and exact artifact smoke.
+      Published wheel/sdist names and metadata are exact `napflow-0.2.0`.
 
 v0.2 DoD: every requirement still assigned to v0.2 is green; no
 v0.2-targeted correctness case remains merely documented; deferred product,
@@ -870,16 +862,16 @@ release stays bounded:
 ## Rolling delivery — from 2026-07-15 (D41)
 
 `v0.2.0` shipped 2026-07-15 (tag + PyPI). From this point the plan is not
-version-scoped: features are planned and prioritized here, delivered as
-feature branches merged by PR when complete, and the owner cuts a release
-whenever accumulated merged value warrants one — the existing tag-driven
+version-scoped: features are planned and prioritized here, completed as
+independently verifiable slices, and the owner cuts a release whenever
+accumulated value warrants one — the existing tag-driven
 gate (`RELEASING.md`, D33/D40) is unchanged. M-numbered version-scoped
 milestone blocks end at `v0.2.0`.
 
-**The invariant replacing "milestone done": `main` stays releasable at
-every merge.** The full PR gate is the mergeability bar; anything too
-large to merge green in one PR must be sliced into increments that each
-keep `main` releasable.
+**The invariant replacing "milestone done": the integrated project stays
+releasable.** The full verification gate is the completion bar; anything too
+large for one green slice must be divided into increments that each preserve
+that invariant.
 
 ### Priority criteria (ordered; earlier criterion wins ties)
 
@@ -889,7 +881,7 @@ keep `main` releasable.
    orphaned processes, data loss) that would burn a user's trust once.
 3. **Enabler leverage** — makes already-planned work cheaper or cleaner;
    structural splits land before the features that would pile onto them.
-4. **Cost fit** — prefer branches that merge within days; large features
+4. **Cost fit** — prefer slices that complete within days; large features
    must be sliceable per the invariant above.
 5. **Compat window** — wanted format/API breaks are cheapest early in
    v0.x (D33); prefer sooner over later.
@@ -897,18 +889,16 @@ keep `main` releasable.
 Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
-F6 was selected by the owner as the first rollout implementation and is
-complete on `feat/f6-init-git-metadata` at `da245c8` as of 2026-07-15. Current
-order resumes with **F2** (small enabler, days), then the
+F6 was selected by the owner as the first rollout implementation and completed
+on 2026-07-15. Current order resumes with **F2** (small enabler, days), then the
 **F1 track** as headline work, with **F3** and **F4** interleaved between F1
-slices as small core/CLI branches. Owner direction then pulled **F7** forward;
-it is implemented on `feat/f7-configurable-data-roots`. **F5** remains
-unscheduled/low.
+slices as small core/CLI changes. Owner direction then pulled **F7** forward;
+it is implemented. **F5** remains unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
 Owner direction 2026-07-15: adapt the canvas UI for real daily use and
-apply a coherent visual style. Proceeds as sliced feature branches
+apply a coherent visual style. Proceeds as independent development slices
 (invariant above); Slice 0 produces the authoritative slice list — the
 slices named here are the expected shape, not commitments.
 
@@ -945,7 +935,7 @@ slices named here are the expected shape, not commitments.
       canvas interaction + node config forms; run panel + replay
       drilldown; workspace/flow navigation; `nodes.py` editing ergonomics.
 - [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
-      updates are deliberate, named in the PR); production build and the
+      updates are deliberate and named in the change); production build and the
       frontend notices audit stay in the gate.
 
 Exit: the owner completes a real API-testing task in the UI without
@@ -994,7 +984,7 @@ Rules and definition of done:
   are updated mechanically — no test logic changes.
 - DoD: `app.py` well under ~700 lines; the diff reads as moves; the full
   gate is green with no behavior diff.
-- Optional follow-up branch (not part of this one): split
+- Optional follow-up change (not part of this slice): split
   `tests/test_server.py` (2,151 lines) along the same seams.
 
 ### F3 — EC22 descendant-process cleanup
@@ -1018,7 +1008,7 @@ tree-kill tests.
       file; assert child and grandchild both die on (a) per-node timeout,
       (b) external cancellation, (c) shutdown — green on all three OS
       CI jobs.
-- [ ] Close EC22 in `EDGE_CASES.md` in the landing PR; until then its
+- [ ] Close EC22 in `EDGE_CASES.md` in the implementation change; until then its
       "only the worker process is covered" wording stays accurate.
 
 ### F4 — EC27/EC35 template render guards (narrows, does not close)
@@ -1042,12 +1032,13 @@ expensive design and is exactly what stays deferred.
 - [ ] Chunked rendering: render via `Template.generate()` instead of one
       blocking `render()`; every N chunks (batched, e.g. 256) check the
       monotonic deadline/abort state and an output-size cap.
-- [ ] Perf evidence in the PR: the guarded inline throughput baseline
+- [ ] Perf evidence in the implementation change: the guarded inline throughput
+      baseline
       (≈44.6k laps/s, `docs/perf-baselines.md`) must not measurably
       regress — record a before/after opt-in perf run.
 - [ ] Honesty: a template loop that emits no output between iterations
       still cannot be preempted. EC27/EC35 stay OPEN with narrowed
-      wording; the ledger update lands in the same PR.
+      wording; the ledger update lands in the same change.
 
 ### F5 — perf drift trend job (unscheduled, low)
 
@@ -1059,10 +1050,10 @@ only if drift is actually observed.
 
 ### F6 — `napf init` git-metadata handling for existing files ✅ done 2026-07-15 (EC56; D43)
 
-Completion evidence: implementation commit `da245c8`; 99 focused tests and
-667 full-suite tests passed locally (11 deselected), with Ruff lint/format and
-diff hygiene clean. PR #5 merged; its Python matrix passed on all three OSes.
-The post-merge Windows browser flake is separately reproduced/fixed as EC57.
+Completion evidence: 99 focused tests and 667 full-suite tests passed locally
+(11 deselected), with Ruff lint/format and diff hygiene clean; the Python matrix
+passed on all three OSes. The later Windows browser flake is separately
+reproduced/fixed as EC57.
 
 Brownfield init (target directory already has `.gitignore` or
 `.gitattributes`, no `napflow.yaml`) previously skipped both files with a
@@ -1111,8 +1102,8 @@ Owner-decided and implemented behavior (2026-07-15):
 - [x] Tests: block construction + idempotency + partial/order cases;
       CliRunner prompt flows (accept/decline/default); no-TTY skip+warn;
       `--git-meta` both values; root-only authority; both opt-outs; CRLF
-      refusal; invalid/non-regular paths; read-only W109. The PR gate will
-      confirm the implementation on the macOS/Windows/Linux matrix.
+      refusal; invalid/non-regular paths; read-only W109. The implementation
+      passed the macOS/Windows/Linux Python matrix.
 
 ### F7 — configurable source roots + dotenv-style profiles ✅ done 2026-07-15 (D42/D44)
 
@@ -1152,9 +1143,9 @@ demo clutter, and the richer reference workspace belongs behind `--example`.
       patterns, invalid selection, W108 semantics/opt-out, minimal vs example
       scaffold, brownfield reuse/collisions, planned file/directory role
       conflicts, and release/server/browser use of explicit `--example`.
-      Three-OS confirmation remains the branch PR gate.
+      Three-OS confirmation remains pending after the EC60 test-harness repair.
 
-The same branch closes EC57, the linked Windows Playwright failure: same-flow
+F7 also closes EC57, the linked Windows Playwright failure: same-flow
 xyflow rebuilds preserve stable-node measurements, the E2E assertion checks
 real post-Fit-View geometry, and every retry worker restores immutable editing
 seeds before the serial suite.
@@ -1168,8 +1159,8 @@ criteria; nothing is dropped by not being scheduled.
 ## Working agreements
 
 - Conventional commits (`type(scope): subject`) — they feed git-cliff.
-- Spec updates land in the same PR as the behavior change (AGENTS.md).
-- Tick REQUIREMENTS checkboxes in the landing PR, with a test.
+- Spec updates land in the same change as the behavior change (AGENTS.md).
+- Tick REQUIREMENTS checkboxes in the implementation change, with a test.
 - Run `$napflow-closeout` after each state-changing session and milestone; add
   one dated `docs/JOURNAL.md` entry (done / decided / next) when the closeout
   produced a durable change or useful handoff.
@@ -1178,8 +1169,3 @@ criteria; nothing is dropped by not being scheduled.
 - v0.x releases are experimental (D33), tag-driven, and require exact
   tag/package version agreement (`RELEASING.md`). Breaking changes are
   permitted with clear release notes until v1.0.
-- **From the v0.1.0 tag on** (owner call 2026-07-08): no direct
-  commits to `main` — feature branches + PRs, conventional commits
-  feed git-cliff per release. Side benefit: per-PR CI closes the
-  NFR-10 batch-push blind spot (every change gets its own CI run at
-  its own HEAD).

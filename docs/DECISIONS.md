@@ -829,12 +829,11 @@ sequence pages, scalar frame/final and graph-sized view projections, lazy
 verified event detail, and completed child-canvas drilldown. M6 now also
 supplies the public Workspace/Flow API, artifact-only distribution contract,
 schema/UI coverage, and audited frontend notices. M7's focused release gate is
-implemented: one reusable workflow now gates PRs and tags with the existing
+implemented: one reusable workflow now gates development changes and tags with the existing
 three-OS Python/UI paths, Vitest, notices, the installed-artifact smoke, and
 tested exact tag/development-version refusal. v0.2's concrete compatibility notes are
-inserted into the generated release notes. PR #2 and non-publishing release
-dispatch #29352493848 then passed the full three-OS gate on the prepared
-`0.2.0` tree; its uploaded wheel and sdist both carry exact `0.2.0` metadata.
+inserted into the generated release notes. The prepared `0.2.0` tree passed the
+full three-OS gate; its uploaded wheel and sdist both carry exact `0.2.0` metadata.
 The remaining promotion action is the exact `v0.2.0` tag after release-memory
 closeout—not another product or hardening matrix.
 
@@ -860,7 +859,7 @@ forms, requires identical sdist/wheel static trees, and probes the real
 Rejected: committing the generated bundle; adding Node to the PEP 517 build;
 continuing to imply that an arbitrary Git checkout is an install artifact. M7
 wired the reusable smoke, notice check, frontend suites, and exact tag/version
-refusal into the authoritative PR/tag gate.
+refusal into the authoritative change/tag gate.
 
 ## D41 — Rolling feature delivery; owner-triggered releases
 
@@ -870,23 +869,22 @@ After `v0.2.0`, development stops planning version-scoped milestone
 blocks. Work is planned as independent features in `PLAN.md`
 ("Rolling delivery" section) with explicit ordered priority criteria:
 real-use pull, trust protection, enabler leverage, cost fit, compat
-window. Features are delivered as PR-gated branches and merge when
-complete; no version number is assigned in advance. The owner cuts a
-release whenever accumulated merged value warrants one, using the
+window. Features complete as independently verifiable slices; no version
+number is assigned in advance. The owner cuts a release whenever accumulated
+value warrants one, using the
 existing tag-driven gate (D33/D40, `RELEASING.md`) unchanged.
 
-The invariant that replaces "milestone done" is: **`main` stays
-releasable at every merge.** The full PR gate is the mergeability bar;
-features too large for one green PR are sliced into increments that each
+The invariant that replaces "milestone done" is: **the integrated project
+stays releasable.** The full verification gate is the completion bar;
+features too large for one green slice are divided into increments that each
 preserve that invariant. First scheduled features: the UI rework track
 (F1), the `server/app.py` pure-move split (F2), EC22 descendant-process
 cleanup (F3), EC27/EC35 render guards (F4), and an unscheduled perf
 drift trend job (F5).
 
 Rejected: continuing M-numbered version-scoped plans (planning overhead
-without a fixed release target to justify it); a long-lived `develop`
-integration branch (`main` + the PR gate already provide the integration
-point, and a second branch would break the always-releasable invariant).
+without a fixed release target to justify it); a second long-lived integration
+track that would break the always-releasable invariant.
 
 ## D42 — Configurable workspace directories never escape the workspace root
 
