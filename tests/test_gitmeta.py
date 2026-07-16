@@ -11,7 +11,10 @@ from napflow.core.gitmeta import (
     GitMetadataState,
     append_git_metadata,
     default_git_metadata_rules,
+    example_git_metadata_rules,
+    example_gitignore_rules,
     gitattributes_rules,
+    gitignore_covered_paths,
     gitignore_rules,
     inspect_git_metadata,
 )
@@ -21,16 +24,20 @@ def test_default_rules_are_the_current_exact_scaffold_rules() -> None:
     ignore, attributes = default_git_metadata_rules()
 
     assert ignore.filename == GITIGNORE
-    assert ignore.required_rules == (
-        "envs/*.env",
-        "!envs/example.env",
-        ".napflow/",
-    )
+    assert ignore.required_rules == (".napflow/",)
     assert attributes.filename == GITATTRIBUTES
     assert attributes.required_rules == (
         "*.yaml text eol=lf",
         "*.yml text eol=lf",
     )
+
+
+def test_example_rules_add_only_the_exact_root_secret_profile() -> None:
+    ignore, attributes = example_git_metadata_rules()
+
+    assert ignore == example_gitignore_rules()
+    assert ignore.required_rules == ("/.env", ".napflow/")
+    assert attributes == gitattributes_rules()
 
 
 def test_missing_file_is_reported_but_not_created(tmp_path: Path) -> None:
@@ -65,7 +72,7 @@ def test_parent_and_repository_local_metadata_never_count(
 
 def test_exact_rules_are_covered_without_requiring_a_marker(tmp_path: Path) -> None:
     path = tmp_path / GITIGNORE
-    original = "user-rule\nenvs/*.env\n!envs/example.env\n.napflow/\n"
+    original = "user-rule\n.napflow/\n"
     path.write_text(original, encoding="utf-8", newline="")
 
     inspection = inspect_git_metadata(tmp_path, gitignore_rules())
@@ -90,35 +97,18 @@ def test_partial_rules_produce_only_missing_lines_in_marked_block(
     assert inspection.append_block == "# napflow\n*.yml text eol=lf\n"
 
 
-@pytest.mark.parametrize(
-    ("existing", "missing"),
-    [
-        (
-            "!envs/example.env\n.napflow/\n",
-            ("envs/*.env", "!envs/example.env"),
-        ),
-        (
-            "!envs/example.env\nenvs/*.env\n.napflow/\n",
-            ("!envs/example.env",),
-        ),
-        (
-            "envs/*.env\n.napflow/\n!envs/example.env\n",
-            (),
-        ),
-    ],
-)
-def test_example_exception_is_readded_after_the_last_wildcard_when_needed(
-    tmp_path: Path, existing: str, missing: tuple[str, ...]
+def test_example_rules_append_only_missing_exact_root_profile_rule(
+    tmp_path: Path,
 ) -> None:
-    (tmp_path / GITIGNORE).write_text(existing, encoding="utf-8", newline="")
-
-    inspection = inspect_git_metadata(tmp_path, gitignore_rules())
-
-    assert inspection.missing_rules == missing
-    expected_state = (
-        GitMetadataState.NEEDS_APPEND if missing else GitMetadataState.COVERED
+    (tmp_path / GITIGNORE).write_text(
+        "# owner\n.napflow/\n", encoding="utf-8", newline=""
     )
-    assert inspection.state is expected_state
+
+    inspection = inspect_git_metadata(tmp_path, example_gitignore_rules())
+
+    assert inspection.state is GitMetadataState.NEEDS_APPEND
+    assert inspection.missing_rules == ("/.env",)
+    assert inspection.append_block == "# napflow\n/.env\n"
 
 
 def test_append_is_atomic_preserves_content_and_mode_and_is_idempotent(
@@ -275,3 +265,132 @@ def test_append_refuses_lf_content_changed_after_inspection(tmp_path: Path) -> N
     with pytest.raises(GitMetadataAppendError, match="changed after inspection"):
         append_git_metadata(inspection)
     assert path.read_bytes() == changed
+
+
+@pytest.mark.parametrize(
+    ("patterns", "paths", "expected"),
+    [
+        pytest.param(
+            "envs/local.env\n",
+            ("envs/local.env", "nested/envs/local.env", "envs/other.env"),
+            frozenset({"envs/local.env"}),
+            id="exact-path",
+        ),
+        pytest.param(
+            "*.env\n",
+            ("local.env", "nested/local.env", "nested/local.txt"),
+            frozenset({"local.env", "nested/local.env"}),
+            id="glob",
+        ),
+        pytest.param(
+            "cache/\n",
+            ("cache/item.json", "nested/cache/item.json", "cached/item.json"),
+            frozenset({"cache/item.json", "nested/cache/item.json"}),
+            id="directory",
+        ),
+        pytest.param(
+            "/root.env\n",
+            ("root.env", "nested/root.env"),
+            frozenset({"root.env"}),
+            id="root-anchored",
+        ),
+        pytest.param(
+            "*.env\n!keep.env\n",
+            ("secret.env", "keep.env", "nested/keep.env"),
+            frozenset({"secret.env"}),
+            id="later-negation-wins",
+        ),
+        pytest.param(
+            "!keep.env\n*.env\n",
+            ("secret.env", "keep.env", "nested/keep.env"),
+            frozenset({"secret.env", "keep.env", "nested/keep.env"}),
+            id="later-ignore-wins",
+        ),
+    ],
+)
+def test_gitignore_covered_paths_uses_gitignore_semantics(
+    patterns: str,
+    paths: tuple[str, ...],
+    expected: frozenset[str],
+    tmp_path: Path,
+) -> None:
+    (tmp_path / GITIGNORE).write_text(patterns, encoding="utf-8", newline="")
+
+    assert gitignore_covered_paths(tmp_path, paths) == expected
+
+
+def test_gitignore_covered_paths_uses_only_the_workspace_root_file(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    nested = workspace / "envs"
+    nested.mkdir(parents=True)
+    (tmp_path / GITIGNORE).write_text("*.parent\n", encoding="utf-8", newline="")
+    (workspace / GITIGNORE).write_text("/covered.env\n", encoding="utf-8", newline="")
+    (nested / GITIGNORE).write_text("*.nested\n", encoding="utf-8", newline="")
+
+    covered = gitignore_covered_paths(
+        workspace,
+        ("file.parent", "envs/file.nested", "covered.env"),
+    )
+
+    assert covered == frozenset({"covered.env"})
+
+
+def test_crlf_gitignore_semantics_are_separate_from_w109_state(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / GITIGNORE).write_bytes(b"*.env\r\n!keep.env\r\n")
+
+    inspection = inspect_git_metadata(tmp_path, gitignore_rules())
+    covered = gitignore_covered_paths(
+        tmp_path,
+        ("secret.env", "nested/secret.env", "keep.env"),
+    )
+
+    assert inspection.state is GitMetadataState.NON_LF
+    assert covered == frozenset({"secret.env", "nested/secret.env"})
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["missing", "invalid-utf8", "invalid-pattern", "symlink", "directory"],
+)
+def test_unsafe_or_invalid_gitignore_provides_no_semantic_coverage(
+    kind: str, tmp_path: Path
+) -> None:
+    path = tmp_path / GITIGNORE
+    if kind == "invalid-utf8":
+        path.write_bytes(b"*.env\n\xff")
+    elif kind == "invalid-pattern":
+        # A valid first line must not provide partial coverage when a later
+        # pattern cannot be parsed.
+        path.write_text("*.env\n!\n", encoding="utf-8", newline="")
+    elif kind == "symlink":
+        target = tmp_path / "owner-ignore"
+        target.write_text("*.env\n", encoding="utf-8", newline="")
+        try:
+            path.symlink_to(target)
+        except OSError as error:
+            pytest.skip(f"symlink unavailable: {error}")
+    elif kind == "directory":
+        path.mkdir()
+
+    assert gitignore_covered_paths(tmp_path, ("secret.env",)) == frozenset()
+
+
+def test_unreadable_gitignore_provides_no_semantic_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / GITIGNORE
+    path.write_text("*.env\n", encoding="utf-8", newline="")
+    real_read_bytes = Path.read_bytes
+
+    def fail_read(candidate: Path) -> bytes:
+        if candidate == path:
+            raise PermissionError("owner denied read")
+        return real_read_bytes(candidate)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    assert gitignore_covered_paths(tmp_path, ("secret.env",)) == frozenset()

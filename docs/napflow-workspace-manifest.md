@@ -6,7 +6,7 @@ Changes from v0.2: secret-masking rule made precise (algorithm + scope,
 D22/EC10); `defaults.request` template scope stated (EC23); runtime
 secret redaction added to the roadmap; on-disk YAML follows the canonical
 safe profile (D23, `yaml-profile.md`); `napf init` also writes
-`.gitattributes` and `envs/example.env`. Amended 2026-07-02:
+`.gitattributes`. Amended 2026-07-02:
 `defaults.run.run_timeout_s` + `napf run --timeout` (run deadline);
 `node_timeout_s` default scope pinned to request/python (D24). Amended
 2026-07-02 (b), senior review: `message_budget` default 100000,
@@ -29,6 +29,10 @@ Amended 2026-07-15 for rolling feature F6/D43: brownfield init now
 inspects only workspace-root Git metadata, offers LF-only canonical appends,
 never changes CR/CRLF or unsafe paths, and exposes advisory read-only W109
 checks with explicit CLI opt-outs.
+Amended 2026-07-15 for F7/D44: flow, input-data, and environment roots are
+configurable and workspace-contained; dotenv profiles use literal filenames;
+W108 checks semantic root-ignore coverage; default init is minimal and
+`--example` creates the complete reference workspace.
 
 v0.2 upgrade note: there is no automatic manifest migration. Existing files
 that still validate load best-effort, but `defaults.run.body_capture_mb` and
@@ -49,10 +53,15 @@ workspace:
 
 flows:
   root: flows
-  main: flows/main          # canvas the UI opens by default — just a flow
+  main: flows/main          # canvas the UI opens by default; omitted means
+                            # <flows.root>/main
+
+data:
+  root: data                # fixture-node file: values resolve below here
 
 environments:
-  default: dev              # profiles auto-discovered from envs/*.env;
+  root: .                   # "."/"./" means the napflow workspace root
+  default: .env             # exact filename; null = process environment only
   secrets: []               # built-in/scaffold default: no presentation masking
   # Opt in by adding env-name globs such as API_TOKEN or "*_PASSWORD".
   # They redact terminal/reports, never raw history.
@@ -109,11 +118,42 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    flows-root-relative; `workspace.flow(...)` takes a full workspace-relative
    identity, avoiding ambiguity when a legal first segment equals the root
    name. A flow directory may also be a namespace containing child flows (D38).
-2. **Env discovery** — every `envs/*.env` file is a profile; profile name =
-   filename stem. A greenfield `napf init` writes `envs/*.env` plus the
-   `!envs/example.env` template exception into the root `.gitignore`; an
-   existing file remains user-owned under D43 and may be skipped. No file
-   registry in the manifest — drop a file in `envs/`, it appears in the UI.
+   `flows.main` is likewise a full workspace-relative identity and must stay
+   below `flows.root`; when omitted, it defaults to `<flows.root>/main`.
+   The root remains the discovery, catalog, scaffold, and clone-destination
+   boundary—not a new access sandbox: existing explicit full workspace-relative
+   entry/reference identities outside it remain supported and participate in
+   reference-closure checking (FR-308/D38).
+2. **Data and environment roots (F7/D44)** — `data.root` defaults to the
+   proper workspace subdirectory `data`; every fixture-node `file:` is
+   relative to that root. Like `flows.root`, it may be nested but may not be
+   `.`. `environments.root` defaults to `.` and uniquely accepts `.` or `./`
+   as the workspace root because host-project dotenv files are an intended
+   source. All roots reject absolute paths, `..`, backslashes, drive syntax,
+   and symlink escapes (D42).
+
+   Environment discovery is non-recursive and collects the filename union
+   `.env`, `.env.*`, and `*.env` under the configured root. The **literal
+   filename is the profile id**: select `.env`, `.env.staging`, or `dev.env`
+   exactly in `--env`, `environments.default`, and the UI. There is no
+   registry, stem mapping, collision rule, or root-specific special case.
+   Regular readable UTF-8 files in the pinned dialect are selectable;
+   directories and unreadable/invalid entries are omitted with W105/operator
+   warnings. Explicitly selecting an omitted/invalid filename, or configuring
+   it as the default, is a hard preparation error—napflow never silently runs
+   without a requested profile. An unsafe literal name or escaping candidate
+   retains the stable `workspace_boundary` reason; safe missing names use
+   `env_not_found`, and safe invalid content uses `env_invalid`. Unselected
+   invalid candidates do not block a run.
+
+   `napf init --example` creates `.env` plus the committed `.env.example`
+   template at the configured environment root. Its root `.gitignore` adds
+   only the exact anchored sensitive path (`/.env` for the default), never a
+   broad wildcard. Basic init creates no environment file. W108 reports each
+   actual non-template profile not semantically covered by the workspace-root
+   `.gitignore`; parent/global/`.git/info` rules do not count. W109 separately
+   checks fixed napflow metadata. Both warnings are advisory and read-only.
+
    Dialect (EC36): `KEY=VALUE` per line; `#` comments and blank lines
    ignored; optional single/double quotes stripped from values; no
    `export` prefix, no variable interpolation — values are literal
@@ -160,7 +200,7 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
    its contents. Terminal/JSON/JUnit masking creates presentation views only;
    it does not rewrite the canonical JSONL, referenced blobs, or local UI data.
 6. **Workspace identities and containment (D37, v0.2/M1)** — one
-   `WorkspaceResolver` owns entry flows, flow/loop references, fixtures,
+   `WorkspaceResolver` owns entry flows, flow/loop references, fixture data,
    histories, source files, and clone destinations. Identities are non-empty
    workspace-relative POSIX paths: empty segments, `.`/`..`, backslashes,
    Windows drive syntax, control characters, and invalid Unicode surrogates
@@ -188,26 +228,40 @@ codegen:                    # RESERVED: parsed, unused in current v0.x
 
 ## `napf init` output
 
+Basic scaffold:
+
 ```
 napf init my-workspace
   created  napflow.yaml
-  created  flows/main/flow.yaml        # default canvas (start+end scaffolded)
+  created  flows/main/flow.yaml        # empty default canvas: Start + End only
+  created  flows/main/nodes.py
+  created  data/
+  created  .gitignore                  # .napflow/ only
+  created  .gitattributes              # *.yaml / *.yml text eol=lf
+  created  .napflow/
+```
+
+Complete reference scaffold:
+
+```
+napf init my-workspace --example
+  created  napflow.yaml
+  created  flows/main/flow.yaml
   created  flows/main/nodes.py
   created  flows/example/flow.yaml     # request→assert demo against httpbin
   created  flows/example/nodes.py
   created  flows/smoke/flow.yaml       # fixture→python→assert — fully offline
   created  flows/smoke/nodes.py
-  created  fixtures/smoke.json         # data for the smoke fixture node
-                                       #   (added at M5 — E008 requires it)
-  created  envs/dev.env                # BASE_URL=https://httpbin.org
-  created  envs/example.env            # committed onboarding template
-  created  .gitignore                  # envs/*.env (except example.env), .napflow/
+  created  data/smoke.json              # input for the smoke fixture node
+  created  .env                         # BASE_URL=https://httpbin.org
+  created  .env.example                 # committed onboarding template
+  created  .gitignore                   # exact /.env plus .napflow/
   created  .gitattributes              # *.yaml / *.yml text eol=lf
   created  .napflow/
 ```
 
-First-touch check (EC34): `napf run flows/smoke` must pass **offline**
-out of the box — no network, no external services. `flows/example` is
+Example first-touch check (EC34): `napf run flows/smoke` must pass **offline**
+after `napf init --example` — no network, no external services. `flows/example` is
 the HTTP demo against httpbin (network required); it is deliberately NOT
 the smoke check, so a proxy, a firewall, or httpbin having a bad day
 cannot break a user's first five minutes (nor napflow's own CI).
@@ -232,10 +286,35 @@ creating either metadata file when it is missing. Only `napf init` may append;
 `--no-git-meta-check`. The statuses are `created`, `exists`, `appended`, and
 `skipped`.
 
+The three init root options write the selected paths into the manifest and
+place scaffold content there:
+
+```
+napf init [dir] [--flows-root PATH] [--data-root PATH]
+     [--environments-root PATH] [--example]
+```
+
+Configured roots are validated before Git metadata or scaffold content is
+written. Existing directories are reused without deleting or overwriting
+their contents; scaffold-owned files report `exists`. A file, symlink,
+Windows junction, or other non-directory at a required directory path is an
+operational error before `napflow.yaml` is created. An existing or dangling
+`napflow.yaml` symlink is an existing workspace and is refused before any
+write. A required directory (or one of its ancestors) must not also be a
+planned scaffold file: roots such as `napflow.yaml`, `.gitignore`, or
+`flows/main/flow.yaml` are rejected from the complete plan before any callback
+or write. An existing non-metadata scaffold source is preserved only when it
+is a regular file; a directory, symlink (including dangling), junction, or
+other non-regular object in a source-file role is an equally early error.
+Existing root Git metadata retains the D43 inspect/skip/warn policy and is
+never mutated when unsafe. Basic init creates an empty custom environment
+subdirectory, but creates no profile file.
+
 ## CLI surface (current experimental v0.x)
 
 ```
-napf init [dir] [--git-meta append|skip]
+napf init [dir] [--example] [--flows-root PATH] [--data-root PATH]
+     [--environments-root PATH] [--git-meta append|skip]
      [--no-git-meta-check]    scaffold workspace; existing Git metadata is
                               consent-based and LF-only
 napf ui [--port] [--no-browser]  serve editor + engine on one localhost
@@ -256,9 +335,10 @@ Exit codes for `napf run`: 0 passed · 1 failed · 2 error · 130 aborted.
 `napf check` (pinned at S1/M5): 0 clean or warnings-only · 1 any E-code ·
 2 operational error (no workspace found). `napf init` refuses a directory
 that already has a `napflow.yaml` (exit 2). Scaffold content is never
-overwritten; the sole existing-file mutation is an explicitly authorized LF
+overwritten; existing-path and planned file/directory role collisions fail
+during preflight. The sole existing-file mutation is an explicitly authorized LF
 append to root `.gitignore`/`.gitattributes`. W109 is warning-class, so it does
-not change `napf check`'s exit status.
+not change `napf check`'s exit status; W108 is equally advisory.
 
 `napf run` pins (S2/M5, 2026-07-05):
 - **Run gate** = `check_flow` on the target flow (E-codes → exit 2
@@ -274,10 +354,11 @@ not change `napf check`'s exit status.
 - **Inputs**: `--input-json` (object) is applied first, `-i KEY=VALUE`
   overrides per key; `-i` values arrive as strings and BIND coerces
   them against the port's declared type.
-- **Env**: explicit `--env NAME` must exist (exit 2 otherwise); the
-  manifest `environments.default` is best-effort — real profiles are normally
-  machine-local (greenfield init adds their root ignore rule), so a fresh clone
-  without that profile falls back to process env with a stderr note.
+- **Env**: explicit `--env NAME` and `environments.default` both select one
+  literal filename and must resolve to a valid discovered profile (exit 2
+  otherwise). `default: null` means process-environment only. Invalid
+  unselected candidates are reported but do not prevent a run; the entire
+  process environment still overrides the selected file.
 - **Reports** (`defaults.run.report`) are written next to the JSONL:
   `<run-id>.report.json` / `<run-id>.junit.xml`, built as schema-aware
   declared-secret redacted views over the raw local JSONL (junit: testcase
@@ -301,8 +382,8 @@ not change `napf check`'s exit status.
 
 Dropped for now: `napf sync` — with no registry, copied folders just appear
 and broken references surface in `napf check` / on canvas. Possible later
-nicety: `napf check --write-env-example` to regenerate a committed
-`envs/example.env` from the union of all flows' `env.required`.
+nicety: generate a committed environment template from the union of all
+flows' `env.required`.
 
 `napf check` is the CI pre-gate: fails fast on broken references before
 anything executes.

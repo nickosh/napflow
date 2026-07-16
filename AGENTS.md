@@ -32,25 +32,29 @@ Core promises (never compromise these):
 - `docs/DECISIONS.md`               — why each major decision was made (D01–D40)
 - `docs/EDGE_CASES.md`              — resolution ledger; append new cases here
 - `docs/PRODUCT.md` / `docs/REQUIREMENTS.md` — vision/scope; v0.1 + v0.2 FR/NFR checklist
-  (tick requirements in the PR that lands them, with a test)
+  (tick requirements in the same change that lands them, with a test)
 - `docs/PLAN.md` / `docs/JOURNAL.md`    — milestone sequencing + working journal
 - `docs/RELEASING.md`               — experimental-v0.x policy (D33) +
   tag-driven release flow (release.yml)
 
 Specs are hypotheses: when implementation proves one wrong, UPDATE THE SPEC
-in the same PR as the code change.
+in the same change as the code change.
 
 Documentation workflow:
 - Before non-trivial implementation work, read `docs/PLAN.md`,
   `docs/JOURNAL.md`, and the relevant authoritative specs above.
-- At the end of each state-changing session and after each milestone or PR-sized
-  change, use the repo-scoped `$napflow-closeout` skill in
+- At the end of each state-changing session and after each milestone or
+  independently useful development slice, use the repo-scoped
+  `$napflow-closeout` skill in
   `.agents/skills/napflow-closeout/` to reconcile project memory from evidence.
 - After behavior or schema changes, update the matching spec in the same
   change.
 - For each session or milestone closeout, prepend a dated entry to
   `docs/JOURNAL.md` (done / decided / next) — it is the cross-session
-  progress log; keep entries to 2–5 lines.
+  progress log; keep entries to 2–5 lines. Record product/engineering state,
+  verification, blockers, and the next technical action. Do not record branch
+  names, commit SHAs, PR numbers/status, push/pull/merge steps, or CI run/job
+  identifiers; those belong in chat, Git history, and the hosting service.
 - Update `docs/REQUIREMENTS.md` only when a requirement actually lands with a
   test.
 - Update `docs/EDGE_CASES.md` when recording a reproduced edge case or
@@ -163,15 +167,18 @@ either were the accepted v0.2 design.
 - End ports are REAL input ports (wire to `end.<port>`); Start ports
   define flow inputs, editable as key-value list in UI, bindable via
   `napf run -i key=value` (validated + type-coerced), End → stdout JSON.
-- Env: profiles auto-discovered (filename stem = profile name); process env
-  overrides files; `env.required` per flow fails fast. The scaffold's root
+- Source roots: `flows.root` and `data.root` are proper workspace
+  subdirectories; fixture `file:` values are relative to `data.root`.
+- Env: `.env`, `.env.*`, and `*.env` profiles are discovered non-recursively
+  under `environments.root` (default `.`), with the literal filename as id;
+  process env overrides files; `env.required` per flow fails fast. The scaffold's root
   Git metadata is advisory/user-owned under D43: init is the only append path,
   CR/CRLF files are never changed, and read-only W109 reports drift.
 
 ## Build history and current order
 
 1. `core/loader.py` + Pydantic models + `napf check`
-   (E001–E009, E011–E012 — E010 reserved; W101–W107 + W109, W108 reserved)
+   (E001–E009, E011–E012 — E010 reserved; W101–W109)
 2. `core/engine.py` scheduler + request/condition/assert/start/end
    + `napf run` (JSONL events from day one)
 3. Remaining nodes (python + worker subprocess, merge, guards, loop,
@@ -184,14 +191,14 @@ either were the accepted v0.2 design.
 6. **Rolling delivery (current, D41)**: no version-scoped milestone
    plans after `v0.2.0`. Features are planned and prioritized in
    `docs/PLAN.md` §"Rolling delivery" (F-numbered entries + ordered
-   priority criteria), delivered as PR-gated feature branches; the owner
-   cuts releases when accumulated value warrants. Invariant: `main`
-   stays releasable at every merge — slice large features accordingly.
-   F6 (EC56 brownfield-init root Git metadata) was implemented first by owner
-   selection. Current next: F2 `server/app.py` pure-move split, then the F1
+   priority criteria) and completed as independently verifiable slices;
+   the owner cuts releases when accumulated value warrants. Invariant:
+   the integrated project stays releasable — slice large features accordingly.
+   F6 (EC56 brownfield-init root Git metadata) and F7 (configurable source
+   roots, literal dotenv profiles, minimal/example init, W108) are complete.
+   Current next: F2 `server/app.py` pure-move split, then the F1
    UI-rework track, with F3 (EC22 tree-kill) and F4 (EC27/EC35 render guards)
-   interleaved. F7 (`environments.root` + dotenv-style profiles + W108) remains
-   planned but is explicitly deferred; F5 perf drift remains unscheduled.
+   interleaved; F5 perf drift remains unscheduled.
 
 ## Testing priorities (in order of bug-risk)
 

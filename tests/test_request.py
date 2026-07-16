@@ -789,15 +789,14 @@ def test_s2_dod_request_assert_headless(server, tmp_path, monkeypatch):
         (ws / "flows" / identity).mkdir(parents=True)
         flow_yaml = DOD_FLOW.replace("STATUS", str(status))
         (ws / "flows" / identity / "flow.yaml").write_text(flow_yaml, encoding="utf-8")
-    (ws / "envs").mkdir()
     (ws / "napflow.yaml").write_text('schema: "napflow/v1"\n', encoding="utf-8")
-    (ws / "envs" / "dev.env").write_text(f"BASE_URL={server}\n", encoding="utf-8")
+    (ws / "dev.env").write_text(f"BASE_URL={server}\n", encoding="utf-8")
     monkeypatch.chdir(ws)
 
     runner = CliRunner()
-    passed = runner.invoke(app, ["run", "flows/good", "--env", "dev"])
+    passed = runner.invoke(app, ["run", "flows/good", "--env", "dev.env"])
     assert passed.exit_code == 0, passed.stderr
     assert json.loads(passed.stdout)["job"]["body"]["id"] == "abc123"
 
-    failed = runner.invoke(app, ["run", "flows/bad", "--env", "dev"])
+    failed = runner.invoke(app, ["run", "flows/bad", "--env", "dev.env"])
     assert failed.exit_code == 1  # assert-driven exit code, headless

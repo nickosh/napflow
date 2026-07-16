@@ -6,8 +6,9 @@ Authoritative spec: docs/napflow-workspace-manifest.md (FR-101/102/103).
 - Any directory under `flows.root` containing `flow.yaml` is a flow;
   identity = workspace-relative POSIX path (stable across OS); nesting
   is free, including flows inside flow directories.
-- Every `envs/*.env` file is a profile named by its filename stem — no
-  registry. `layer_env` layers profile → process environment (FR-104).
+- Environment profiles are discovered non-recursively below the configured
+  root and keep their literal filenames as identities. `layer_env` layers
+  profile → process environment (FR-104).
 """
 
 import os
@@ -21,7 +22,6 @@ import napflow
 from napflow.core.loader import LoadedFlow, LoadedManifest, load_flow, load_manifest
 
 MANIFEST_NAME = "napflow.yaml"
-ENVS_DIR = "envs"
 FLOW_FILE = "flow.yaml"
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -29,6 +29,13 @@ _WINDOWS_DRIVE_SEGMENT_RE = re.compile(r"^[A-Za-z]:")
 _RUN_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 
 SourceFilename = Literal["flow.yaml", "nodes.py"]
+EnvProfileIssueReason = Literal[
+    "workspace_boundary",
+    "not_regular",
+    "unreadable",
+    "invalid_encoding",
+    "invalid_format",
+]
 
 
 class WorkspaceNotFoundError(Exception):
@@ -63,8 +70,14 @@ class WorkspaceResolver:
 
     root: Path
     flows_root_identity: str = "flows"
+    environments_root_identity: str = "."
+    data_root_identity: str = "data"
     flows_root: Path = field(init=False)
     flows_root_resolved: Path = field(init=False)
+    environments_root: Path = field(init=False)
+    environments_root_resolved: Path = field(init=False)
+    data_root: Path = field(init=False)
+    data_root_resolved: Path = field(init=False)
     runs_root: Path = field(init=False)
 
     def __post_init__(self) -> None:
@@ -75,6 +88,10 @@ class WorkspaceResolver:
                 f"cannot resolve workspace root {self.root!s}: {e}"
             ) from e
         object.__setattr__(self, "root", root)
+        if self.flows_root_identity in {".", "./"}:
+            raise WorkspaceBoundaryError(
+                "flows.root must resolve to a proper subdirectory of the workspace"
+            )
         flows_identity = self.normalize_identity(
             self.flows_root_identity, label="flows.root"
         )
@@ -87,11 +104,80 @@ class WorkspaceResolver:
             "flows_root_resolved",
             self._resolve_normalized(flows_identity, label="flows.root"),
         )
+        if self.flows_root_resolved == self.root:
+            raise WorkspaceBoundaryError(
+                "flows.root must resolve to a proper subdirectory of the workspace"
+            )
+
+        environments_identity = self.normalize_directory_root(
+            self.environments_root_identity,
+            label="environments.root",
+            allow_workspace_root=True,
+        )
+        object.__setattr__(self, "environments_root_identity", environments_identity)
+        environments_root = self._lexical_root(environments_identity)
+        object.__setattr__(self, "environments_root", environments_root)
+        object.__setattr__(
+            self,
+            "environments_root_resolved",
+            self._resolve_directory_root(
+                environments_identity, label="environments.root"
+            ),
+        )
+
+        data_identity = self.normalize_directory_root(
+            self.data_root_identity,
+            label="data.root",
+            allow_workspace_root=False,
+        )
+        object.__setattr__(self, "data_root_identity", data_identity)
+        data_root = self._lexical_root(data_identity)
+        object.__setattr__(self, "data_root", data_root)
+        object.__setattr__(
+            self,
+            "data_root_resolved",
+            self._resolve_directory_root(data_identity, label="data.root"),
+        )
+        if self.data_root_resolved == self.root:
+            raise WorkspaceBoundaryError(
+                "data.root must resolve to a proper subdirectory of the workspace"
+            )
         object.__setattr__(
             self,
             "runs_root",
             self._resolve_normalized(".napflow/runs", label="run-history root"),
         )
+
+    def normalize_directory_root(
+        self,
+        value: str,
+        *,
+        label: str,
+        allow_workspace_root: bool,
+    ) -> str:
+        """Normalize a configurable data root.
+
+        ``.`` and ``./`` are deliberate whole-value spellings for the
+        workspace root. A dot segment embedded in any other path remains
+        forbidden by :meth:`normalize_identity`.
+        """
+        if value in {".", "./"}:
+            if allow_workspace_root:
+                return "."
+            raise WorkspaceBoundaryError(
+                f"{label} must resolve to a proper subdirectory of the workspace"
+            )
+        return self.normalize_identity(value, label=label)
+
+    def _lexical_root(self, identity: str) -> Path:
+        if identity == ".":
+            return self.root
+        return self.root.joinpath(*identity.split("/"))
+
+    def _resolve_directory_root(self, identity: str, *, label: str) -> Path:
+        if identity == ".":
+            return self.root
+        return self._resolve_normalized(identity, label=label)
 
     def normalize_identity(self, value: str, *, label: str = "flow identity") -> str:
         """Validate and return one canonical relative POSIX identity.
@@ -172,7 +258,44 @@ class WorkspaceResolver:
         return source
 
     def fixture_file(self, value: str) -> Path:
-        return self.resolve_workspace_path(value, label="fixture path")
+        return self._resolve_data_file(
+            self.data_root_identity,
+            self.data_root_resolved,
+            value,
+            label="fixture path",
+        )
+
+    def environment_file(self, name: str) -> Path:
+        normalized = self.normalize_identity(name, label="env profile filename")
+        if "/" in normalized:
+            raise WorkspaceBoundaryError(
+                "env profile filename must be one literal filename"
+            )
+        return self._resolve_data_file(
+            self.environments_root_identity,
+            self.environments_root_resolved,
+            normalized,
+            label="env profile",
+        )
+
+    def _resolve_data_file(
+        self,
+        root_identity: str,
+        root_resolved: Path,
+        value: str,
+        *,
+        label: str,
+    ) -> Path:
+        normalized = self.normalize_identity(value, label=label)
+        combined = (
+            normalized if root_identity == "." else f"{root_identity}/{normalized}"
+        )
+        resolved = self._resolve_normalized(combined, label=label)
+        if not resolved.is_relative_to(root_resolved):
+            raise WorkspaceBoundaryError(
+                f"{label} {value!r} resolves outside configured root {root_identity!r}"
+            )
+        return resolved
 
     def runs_dir(self, identity: str) -> Path:
         normalized = self.normalize_identity(identity, label="flow identity")
@@ -240,6 +363,38 @@ class EnvFileError(Exception):
         super().__init__(f"{path}:{line_no}: {problem}")
 
 
+@dataclass(frozen=True)
+class EnvProfile:
+    """One selectable, successfully parsed environment profile."""
+
+    name: str
+    path: Path
+    values: dict[str, str]
+
+
+@dataclass(frozen=True)
+class EnvProfileIssue:
+    """A filename-shaped candidate omitted from selectable profiles."""
+
+    name: str
+    path: Path
+    reason: EnvProfileIssueReason
+    message: str
+
+
+@dataclass(frozen=True)
+class EnvProfileDiscovery:
+    """Fresh valid profiles and name-addressable skipped candidates."""
+
+    profiles: dict[str, EnvProfile]
+    issues: dict[str, EnvProfileIssue]
+
+
+def _is_env_profile_filename(name: str) -> bool:
+    """The deterministic, platform-independent F7 filename union."""
+    return name == ".env" or name.startswith(".env.") or name.endswith(".env")
+
+
 def find_manifest(start: Path) -> Path | None:
     """Walk upward from `start` (file or directory) to the filesystem
     root, returning the first napflow.yaml found."""
@@ -270,13 +425,40 @@ class Workspace:
     resolver: WorkspaceResolver = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        resolver = WorkspaceResolver(self.root, self.manifest.model.flows.root)
+        manifest = self.manifest.model
+        resolver = WorkspaceResolver(
+            self.root,
+            flows_root_identity=manifest.flows.root,
+            environments_root_identity=manifest.environments.root,
+            data_root_identity=manifest.data.root,
+        )
+        main = resolver.normalize_identity(manifest.flows.main, label="flows.main")
+        if main != resolver.flows_root_identity and not main.startswith(
+            f"{resolver.flows_root_identity}/"
+        ):
+            raise WorkspaceBoundaryError(
+                f"flows.main {main!r} must be under flows.root "
+                f"{resolver.flows_root_identity!r}"
+            )
+        if not resolver.flow_dir(main).is_relative_to(resolver.flows_root_resolved):
+            raise WorkspaceBoundaryError(
+                f"flows.main {main!r} resolves outside flows.root "
+                f"{resolver.flows_root_identity!r}"
+            )
         object.__setattr__(self, "root", resolver.root)
         object.__setattr__(self, "resolver", resolver)
 
     @property
     def flows_root(self) -> Path:
         return self.resolver.flows_root
+
+    @property
+    def environments_root(self) -> Path:
+        return self.resolver.environments_root
+
+    @property
+    def data_root(self) -> Path:
+        return self.resolver.data_root
 
     def discover_flows(self) -> list[FlowRef]:
         """Every directory under flows.root containing a flow.yaml,
@@ -347,13 +529,92 @@ class Workspace:
         """Load a flow by its workspace-relative identity."""
         return load_flow(self.resolver.flow_file(identity))
 
+    def discover_env_profiles(self) -> EnvProfileDiscovery:
+        """Discover valid profiles and skipped candidates below the env root.
+
+        Discovery is non-recursive and never invents a profile id: the exact
+        filename is the id. Content validation is eager so every entry exposed
+        to a caller is immediately usable; issues retain enough detail for
+        listing/check surfaces and for hard errors on explicit selection.
+        """
+        root = self.environments_root
+        if not root.is_dir():
+            return EnvProfileDiscovery({}, {})
+        try:
+            candidates = sorted(root.iterdir(), key=lambda path: path.name)
+        except OSError:
+            # A root has no candidate filename to key an issue by. Callers see
+            # an empty discovery; configured-root diagnostics belong at the
+            # workspace/check surface rather than masquerading as a profile.
+            return EnvProfileDiscovery({}, {})
+
+        profiles: dict[str, EnvProfile] = {}
+        issues: dict[str, EnvProfileIssue] = {}
+        for candidate in candidates:
+            name = candidate.name
+            if not _is_env_profile_filename(name):
+                continue
+            try:
+                path = self.resolver.environment_file(name)
+            except WorkspaceBoundaryError as error:
+                issues[name] = EnvProfileIssue(
+                    name,
+                    candidate,
+                    "workspace_boundary",
+                    str(error),
+                )
+                continue
+            try:
+                is_file = path.is_file()
+            except OSError as error:
+                issues[name] = EnvProfileIssue(
+                    name,
+                    path,
+                    "unreadable",
+                    f"could not inspect env profile: {error}",
+                )
+                continue
+            if not is_file:
+                issues[name] = EnvProfileIssue(
+                    name,
+                    path,
+                    "not_regular",
+                    "env profile candidate is not a regular file",
+                )
+                continue
+            try:
+                values = parse_env_file(path)
+            except EnvFileError as error:
+                issues[name] = EnvProfileIssue(
+                    name,
+                    path,
+                    "invalid_format",
+                    str(error),
+                )
+            except UnicodeDecodeError as error:
+                issues[name] = EnvProfileIssue(
+                    name,
+                    path,
+                    "invalid_encoding",
+                    f"env profile is not valid UTF-8: {error}",
+                )
+            except OSError as error:
+                issues[name] = EnvProfileIssue(
+                    name,
+                    path,
+                    "unreadable",
+                    f"could not read env profile: {error}",
+                )
+            else:
+                profiles[name] = EnvProfile(name, path, values)
+        return EnvProfileDiscovery(profiles, issues)
+
     def env_profiles(self) -> dict[str, Path]:
-        """Profile name (filename stem) → file path, sorted by name
-        (FR-103). Drop a file in envs/, it appears — no registry."""
-        envs = self.root / ENVS_DIR
-        if not envs.is_dir():
-            return {}
-        return {p.stem: p for p in sorted(envs.glob("*.env"))}
+        """Compatibility view: literal profile filename → valid file path."""
+        return {
+            name: profile.path
+            for name, profile in self.discover_env_profiles().profiles.items()
+        }
 
 
 def load_workspace(start: Path | None = None) -> Workspace:

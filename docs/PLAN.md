@@ -13,7 +13,7 @@ don't rewrite history.
 
 Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
 
-- [x] **M0 — Repo scaffolding** (landed 2026-07-04; CI run #1 green on
+- [x] **M0 — Repo scaffolding** (landed 2026-07-04; CI green on
       ubuntu/macos/windows)
   - [x] `pyproject.toml` (uv-managed), `napflow/{core,cli}` package layout
   - [x] pytest + ruff; GitHub Actions matrix macOS/Windows/Linux from
@@ -23,7 +23,7 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
         (Keep a Changelog format via git-cliff; conventional commits
         already in use since the first commit) (NFR-11)
   - [x] Working journal live: `docs/JOURNAL.md` + the CLAUDE.md rule
-        (dated entry per milestone / PR-sized commit). SessionEnd
+        (dated entry per milestone / useful development slice). SessionEnd
         breadcrumb hook implemented 2026-07-04:
         `.claude/hooks/session-end-log.sh` appends per-session lines to
         gitignored `.claude/sessions.log` (the agent-written journal
@@ -46,8 +46,9 @@ Deliverable: `napf init` / `napf list` / `napf check` usable in CI.
       closure checking; file:line diagnostics + hints —
       `core/checker.py` (+ `core/templating.py` syntax half).
       Rule-scope pins recorded in engine spec §8. (FR-301–309)
-- [x] **M5 — CLI** (landed 2026-07-05): `napf init` (incl. `flows/smoke`
-      + `fixtures/smoke.json` scaffold, written through the canonical
+- [x] **M5 — CLI** (landed 2026-07-05): `napf init` (the historical
+      `flows/smoke` + fixture scaffold now lives behind `--example`, D44;
+      written through the canonical
       serializer, checks clean out of the box), `napf list`,
       `napf check` with exit codes 0/1/2. (FR-801/802/805, FR-107)
 
@@ -148,7 +149,7 @@ and guards follow; container frames close the stage.
       null), log (+ live stderr echo in `napf run`), fixture (per-run
       cache keyed by path, CSV pins, rule-6 auto-seed through the
       normal firing path), note runtime no-op. `napf run flows/smoke`
-      passes offline on a fresh `napf init` → EC34 first-touch test
+      passes offline on a fresh `napf init --example` → EC34 first-touch test
       green. Semantics pinned in EN §5. (FR-507/512/513/514/517)
 - [x] **M4 — guards** (landed 2026-07-06): counter (EC16
       check-then-decrement, `count: 0` exhausts everything) + timeout
@@ -169,7 +170,7 @@ and guards follow; container frames close the stage.
       close: 0.1.0.dev3. (D20/D21/D24)
 
 S3 DoD verified: flagship retry example runs (M4); `napf run
-flows/smoke` passes offline on a fresh `napf init` (M3, EC34);
+flows/smoke` passes offline on a fresh `napf init --example` (M3, EC34);
 TR-1/4/5/6/8/10 green + TR-9's protocol-integrity half (the
 through-the-server half is S4's, per the S3 DoD note above).
 
@@ -206,7 +207,7 @@ harness lands M2, suite grows M3–M6).
       `artifacts` forces the gitignored bundle into sdist+wheel; CI `ui`
       job (3-OS: build + wheel gate + Playwright chromium e2e) and
       release.yml bundle gate; Playwright harness (`e2e/serve.mjs`
-      scaffolds a fresh `napf init` workspace) + 2 smokes. (NFR-03;
+      scaffolds a fresh `napf init --example` workspace) + 2 smokes. (NFR-03;
       FR-806/1001 complete)
 - [x] **M3 — read-only canvas** (landed 2026-07-06): flow-detail API
       grew per-node port surfaces (`checker.node_surfaces`, AST-derived
@@ -262,7 +263,7 @@ harness lands M2, suite grows M3–M6).
       Also fixed here: the M3 canvas e2e broken by the M4 "E-codes
       don't 400" pin (split into editable-with-E-codes +
       unloadable-shows-error-view against a new fixture), which had
-      all three `ui e2e` CI legs red since the M4 push.
+      all three `ui e2e` CI legs red after M4.
 - [x] **M5 — run on canvas + history** (landed 2026-07-08): RUN MODE
       (D29, owner fork) — editing locks, the canvas animates off the
       M1 WebSocket (JSONL lines verbatim): `runview.ts` pure reducer
@@ -325,9 +326,8 @@ harness lands M2, suite grows M3–M6).
 S4 → release path (owner call 2026-07-08): `0.1.0.dev4` at stage
 close, a manual-testing window on the dev4 checkpoint, then the SAME
 scope promotes to **v0.1.0** via the RELEASING flow (dev4 is the de
-facto release candidate; only release-prep lands between). From the
-v0.1.0 tag on, work moves to feature branches + PRs (see Working
-agreements).
+facto release candidate; only release preparation lands between). After
+v0.1.0, work moves to independently verified feature delivery.
 
 ## v0.2.0 — usable full-fidelity prototype
 
@@ -448,13 +448,13 @@ discarded. This mapping is the continuity ledger:
 M0 DoD: v0.1 can be reproduced from its tag; v0.2 formats and invariants
 are written before implementation; every confirmed critical/high audit
 finding has a named failing test or an explicit later milestone owner.
-**Met and adversarially revalidated 2026-07-12** (`feat/v0.2`): all four
+**Met and adversarially revalidated 2026-07-12**: all four
 boxes are evidenced — clean-tag v0.1.0 artifact + first-touch run; protected
 and enforced history envelope plus collision-safe pre-storage contract; each
 audit finding a signal-correct strict `xfail` or explicit-owner `skip`; every
-named performance size measured with no deferred slot. (PR scope, owner call
-2026-07-12: v0.2 lands as larger feature PRs off `feat/v0.2`, not one branch
-per milestone.)
+named performance size measured with no deferred slot. (Owner call 2026-07-12:
+v0.2 lands as larger independently verifiable slices, not one slice per
+milestone.)
 
 ### M1 — workspace boundary and durable editing  ✅ done 2026-07-12
 
@@ -777,8 +777,8 @@ audited notice is present in both sdist and wheel.
       `napf ui`/`run_flow` smoke, production bundle membership, and exact
       tag/package version refusal. Do not add minimum/latest dependency or
       expanded OS/browser axes before user demand. (NFR-16) — one reusable
-      workflow plus independently tested exact-tag/`.dev` refusal; PR CI run
-      #42 passed every existing Linux/macOS/Windows Python/UI job, 2026-07-14
+      workflow plus independently tested exact-tag/`.dev` refusal; every
+      existing Linux/macOS/Windows Python/UI job passed, 2026-07-14
 - [x] Close the M0 audit entries still owned by streamlined v0.2. Reassign
       placeholders for explicitly deferred export, advanced replay, or
       performance targets to the future ledger instead of treating them as
@@ -800,17 +800,10 @@ audited notice is present in both sdist and wheel.
       cooperative-scheduler half precisely, and retain EC10/EC22/EC35
       as named post-v0.2 limitations. — the audit also reproduced and fixed
       anchor/alias enforcement (EC53) and report/replay envelope drift (EC54)
-- [ ] Promote the exact prepared release: land the `0.2.0` metadata,
-      generated changelog, and compatibility notes; observe the reusable PR
-      gate and non-publishing release dry-run on that commit; merge, then tag
-      the resulting `main` commit `v0.2.0`. Metadata, notes, and changelog landed
-      through PR #1; EC55 landed through green PR #2. Non-publishing dispatch
-      #29352493848 then passed every reusable gate job on `main` at `de8f40f`,
-      including the formerly failing macOS browser path, exact artifact smoke,
-      and upload. Inspection confirmed `napflow-0.2.0` wheel/sdist names and
-      metadata. After this release-memory closeout merges, run the final
-      non-publishing dispatch against that exact `main` commit, then tag it;
-      the checkbox remains open until `v0.2.0` exists.
+- [x] Promote the exact prepared release: `v0.2.0` metadata, generated
+      changelog, compatibility notes, and EC55 passed the reusable three-OS
+      release gate, including the macOS browser path and exact artifact smoke.
+      Published wheel/sdist names and metadata are exact `napflow-0.2.0`.
 
 v0.2 DoD: every requirement still assigned to v0.2 is green; no
 v0.2-targeted correctness case remains merely documented; deferred product,
@@ -869,16 +862,16 @@ release stays bounded:
 ## Rolling delivery — from 2026-07-15 (D41)
 
 `v0.2.0` shipped 2026-07-15 (tag + PyPI). From this point the plan is not
-version-scoped: features are planned and prioritized here, delivered as
-feature branches merged by PR when complete, and the owner cuts a release
-whenever accumulated merged value warrants one — the existing tag-driven
+version-scoped: features are planned and prioritized here, completed as
+independently verifiable slices, and the owner cuts a release whenever
+accumulated value warrants one — the existing tag-driven
 gate (`RELEASING.md`, D33/D40) is unchanged. M-numbered version-scoped
 milestone blocks end at `v0.2.0`.
 
-**The invariant replacing "milestone done": `main` stays releasable at
-every merge.** The full PR gate is the mergeability bar; anything too
-large to merge green in one PR must be sliced into increments that each
-keep `main` releasable.
+**The invariant replacing "milestone done": the integrated project stays
+releasable.** The full verification gate is the completion bar; anything too
+large for one green slice must be divided into increments that each preserve
+that invariant.
 
 ### Priority criteria (ordered; earlier criterion wins ties)
 
@@ -888,7 +881,7 @@ keep `main` releasable.
    orphaned processes, data loss) that would burn a user's trust once.
 3. **Enabler leverage** — makes already-planned work cheaper or cleaner;
    structural splits land before the features that would pile onto them.
-4. **Cost fit** — prefer branches that merge within days; large features
+4. **Cost fit** — prefer slices that complete within days; large features
    must be sliceable per the invariant above.
 5. **Compat window** — wanted format/API breaks are cheapest early in
    v0.x (D33); prefer sooner over later.
@@ -896,17 +889,16 @@ keep `main` releasable.
 Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
-F6 was selected by the owner as the first rollout implementation and is
-complete on `feat/f6-init-git-metadata` at `da245c8` as of 2026-07-15. Current
-order resumes with **F2** (small enabler, days), then the
+F6 was selected by the owner as the first rollout implementation and completed
+on 2026-07-15. Current order resumes with **F2** (small enabler, days), then the
 **F1 track** as headline work, with **F3** and **F4** interleaved between F1
-slices as small core/CLI branches. **F7** remains planned but is deferred by
-owner direction; **F5** is unscheduled/low.
+slices as small core/CLI changes. Owner direction then pulled **F7** forward;
+it is implemented. **F5** remains unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
 Owner direction 2026-07-15: adapt the canvas UI for real daily use and
-apply a coherent visual style. Proceeds as sliced feature branches
+apply a coherent visual style. Proceeds as independent development slices
 (invariant above); Slice 0 produces the authoritative slice list — the
 slices named here are the expected shape, not commitments.
 
@@ -943,7 +935,7 @@ slices named here are the expected shape, not commitments.
       canvas interaction + node config forms; run panel + replay
       drilldown; workspace/flow navigation; `nodes.py` editing ergonomics.
 - [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
-      updates are deliberate, named in the PR); production build and the
+      updates are deliberate and named in the change); production build and the
       frontend notices audit stay in the gate.
 
 Exit: the owner completes a real API-testing task in the UI without
@@ -992,7 +984,7 @@ Rules and definition of done:
   are updated mechanically — no test logic changes.
 - DoD: `app.py` well under ~700 lines; the diff reads as moves; the full
   gate is green with no behavior diff.
-- Optional follow-up branch (not part of this one): split
+- Optional follow-up change (not part of this slice): split
   `tests/test_server.py` (2,151 lines) along the same seams.
 
 ### F3 — EC22 descendant-process cleanup
@@ -1016,7 +1008,7 @@ tree-kill tests.
       file; assert child and grandchild both die on (a) per-node timeout,
       (b) external cancellation, (c) shutdown — green on all three OS
       CI jobs.
-- [ ] Close EC22 in `EDGE_CASES.md` in the landing PR; until then its
+- [ ] Close EC22 in `EDGE_CASES.md` in the implementation change; until then its
       "only the worker process is covered" wording stays accurate.
 
 ### F4 — EC27/EC35 template render guards (narrows, does not close)
@@ -1040,12 +1032,13 @@ expensive design and is exactly what stays deferred.
 - [ ] Chunked rendering: render via `Template.generate()` instead of one
       blocking `render()`; every N chunks (batched, e.g. 256) check the
       monotonic deadline/abort state and an output-size cap.
-- [ ] Perf evidence in the PR: the guarded inline throughput baseline
+- [ ] Perf evidence in the implementation change: the guarded inline throughput
+      baseline
       (≈44.6k laps/s, `docs/perf-baselines.md`) must not measurably
       regress — record a before/after opt-in perf run.
 - [ ] Honesty: a template loop that emits no output between iterations
       still cannot be preempted. EC27/EC35 stay OPEN with narrowed
-      wording; the ledger update lands in the same PR.
+      wording; the ledger update lands in the same change.
 
 ### F5 — perf drift trend job (unscheduled, low)
 
@@ -1057,13 +1050,14 @@ only if drift is actually observed.
 
 ### F6 — `napf init` git-metadata handling for existing files ✅ done 2026-07-15 (EC56; D43)
 
-Completion evidence: implementation commit `da245c8`; 99 focused tests and
-667 full-suite tests pass locally (11 deselected), with Ruff lint/format and
-diff hygiene clean. The PR's macOS/Windows/Linux gate remains pending.
+Completion evidence: 99 focused tests and 667 full-suite tests passed locally
+(11 deselected), with Ruff lint/format and diff hygiene clean; the Python matrix
+passed on all three OSes. The later Windows browser flake is separately
+reproduced/fixed as EC57.
 
 Brownfield init (target directory already has `.gitignore` or
 `.gitattributes`, no `napflow.yaml`) previously skipped both files with a
-one-line `exists` notice, leaving `envs/*.env`, `.napflow/`, and YAML
+one-line `exists` notice, leaving then-current `envs/*.env`, `.napflow/`, and YAML
 `eol=lf` rules absent — committable credentials/raw history (EC56).
 `napf init`'s refusal when `napflow.yaml` exists stays exactly as is.
 
@@ -1074,8 +1068,9 @@ Owner-decided and implemented behavior (2026-07-15):
 - [x] Coverage authority is only the canonical lines in workspace-root
       `.gitignore` and `.gitattributes`. Parent files, `.git/info/*`, global
       configuration, and a Git executable never count. The evaluator also
-      preserves the required wildcard→template-exception order; arbitrary
-      user patterns remain user policy rather than a second Git interpreter.
+      checks exact fixed rules; arbitrary user patterns remain user policy.
+      F7 later narrows the fixed ignore line to `.napflow/` and assigns actual
+      environment-profile coverage to semantic W108.
 - [x] Existing LF file with all canonical napflow rules covered: report
       `exists (rules covered)`; no prompt, no change.
 - [x] Existing LF file missing rules, interactive TTY: per-file prompt
@@ -1107,79 +1102,53 @@ Owner-decided and implemented behavior (2026-07-15):
 - [x] Tests: block construction + idempotency + partial/order cases;
       CliRunner prompt flows (accept/decline/default); no-TTY skip+warn;
       `--git-meta` both values; root-only authority; both opt-outs; CRLF
-      refusal; invalid/non-regular paths; read-only W109. The PR gate will
-      confirm the implementation on the macOS/Windows/Linux matrix.
+      refusal; invalid/non-regular paths; read-only W109. The implementation
+      passed the macOS/Windows/Linux Python matrix.
 
-### F7 — configurable environments root + dotenv-style profiles (deferred; owner-designed 2026-07-15)
+### F7 — configurable source roots + dotenv-style profiles ✅ done 2026-07-15 (D42/D44)
 
-Context: napflow workspaces embedded inside host projects need locations
-that fit the host layout. Verified 2026-07-15 in a live workspace:
-`flows.root` is **already** a manifest key honored by discovery and the
-resolver (nested paths work; `.` is already rejected for flows by
-identity rules — correct, discovery would otherwise scan `.napflow/`
-and the whole host project), and fixture `file:` paths are **already**
-free workspace-relative paths (root-level fixture ran green). Document
-both; do not rebuild. The only hardcoded location is `ENVS_DIR = "envs"`
-(`core/workspace.py`).
+Owner scope expanded during implementation: all user source categories need
+clear configurable roots, default init must be immediately usable without
+demo clutter, and the richer reference workspace belongs behind `--example`.
 
-- [ ] New manifest key `environments.root` (default `"envs"`) inside
-      the existing `environments:` block. Values validated like
-      `flows.root` (workspace-relative identity + containment: nested
-      OK; absolute, `..`, backslash, outside-workspace rejected — D42);
-      `"."` and `"./"` are explicit special cases meaning the workspace
-      root itself.
-- [ ] Discovery in the configured root — same rules for every root
-      value, not special-cased to `"."`, non-recursive as today:
-      collect `*.env`, `.env`, and `.env.*`; keep regular files only
-      (directories and unreadable/invalid-format entries are skipped
-      with a warning, never fatal at discovery).
-- [ ] **Profile identifier = the literal filename** (owner call
-      2026-07-15): `.env` is picked as `.env`, `.env.staging` as
-      `.env.staging`, `dev.env` as `dev.env` — in `--env`,
-      `environments.default`, and the UI picker alike. No stem mapping,
-      no invented names; filenames are unique per directory, so name
-      collisions/precedence/shadowing cannot exist. **Breaking change**
-      to the v0.2 stem convention (`--env dev` → `--env dev.env`),
-      accepted under D33/criterion 5 while the user base is small: the
-      scaffolded manifest (`environments.default`), FR-103 spec text,
-      and a release-notes entry update in the same PR.
-- [ ] Skip-with-warning applies to listing only: explicitly selecting a
-      skipped or invalid profile (`--env`, `environments.default`, or a
-      flow's `env.required`) is a hard, clearly-worded error at run
-      preparation — a run must never proceed silently without the
-      credentials the user asked for.
-- [ ] **No `.gitignore`/`.gitattributes` mutation outside `napf init`**
-      (owner call 2026-07-15): users who change default paths own their
-      host project's ignore rules; napflow warns, never edits. Safety =
-      new **W108** in `napf check`: a discovered env profile file is
-      not covered by the workspace-root `.gitignore`; parent/global/info
-      rules do not count. F6's W109 separately covers the canonical root
-      scaffold block and non-LF/invalid metadata. Both remain advisory and
-      `--no-git-meta-check` suppresses them. `napf init` has no
-      environment-root choice today. If F7 adds one, a root layout must ignore
-      only root-anchored exact sensitive profiles init creates (for example
-      `/dev.env`), never a broad root `*.env` or the `example.env` template;
-      changing the manifest root after init must never edit Git metadata.
-- [ ] Same-PR docs: manifest spec §environments / FR-103 (patterns,
-      literal-filename selection, root values, W108); a separate short
-      "embedding napflow in an existing project" note covering
-      `flows.root`, free fixture paths, `environments.root`, the
-      you-own-your-gitignore stance, and D42 stated explicitly — `..`
-      and absolute roots stay rejected for every configurable
-      directory; the supported pattern for host-level files is raising
-      the workspace root (`napflow.yaml` at host level, keys pointing
-      down). Release-notes entry when a release is cut (literal-name
-      selection break + `.env`/`.env.*` discovery addition).
-- [ ] Tests: nested root; `"."` and `"./"`; containment rejections;
-      literal-filename selection for all three patterns (incl. the
-      `--env dev.env` break); invalid-file skip warning vs hard error
-      on explicit selection; `example.env` convention and
-      process-env-overrides precedence unchanged; W108 root-only coverage
-      and opt-out; three-OS CI.
+- [x] `flows.root` remains a required proper workspace subdirectory;
+      `data.root` is added with default `data` and the same proper-subdirectory
+      rule. Fixture-node `file:` values now resolve relative to `data.root`.
+      `environments.root` defaults to `.` and uniquely accepts `.`/`./`.
+      Every root uses D42 lexical + symlink-aware containment.
+- [x] Environment discovery is non-recursive and uniform for every root:
+      collect `.env`, `.env.*`, and `*.env`; literal filename is the id in
+      manifest, CLI, server, and UI. Valid foreign-created files are first-class.
+- [x] Invalid/unreadable/non-regular candidates are skipped with W105/operator
+      notes; explicitly/default-selected invalid or missing filenames are hard
+      run-preparation errors. Process environment overrides remain unchanged.
+- [x] W108 uses Git-compatible pattern semantics over only the workspace-root
+      `.gitignore`. F6/W109 retains only fixed `.napflow/` + YAML attributes.
+      `--example` adds one exact anchored ignore for its configured `.env`;
+      `.env.example` stays visible and root changes never mutate metadata.
+- [x] Basic init creates the manifest, empty Start/End `flows/main`, empty
+      `nodes.py`, empty `data/`, `.napflow/`, and Git metadata—no env files,
+      smoke, fixture data, or HTTP demo. `napf init --example` creates the
+      complete offline/HTTP reference surface used by tests.
+- [x] Init accepts `--flows-root`, `--data-root`, and
+      `--environments-root`; validation and required-directory collision
+      preflight happen before writes. Existing directories/files are reused
+      without overwrite; non-directory/symlink/junction collisions and any
+      directory role that overlaps a planned scaffold file fail before writes.
+      Existing scaffold sources are preserved only when regular files; F6's
+      metadata-specific inspect/skip policy remains unchanged.
+- [x] Specs, README, D42/D44, requirements, EC34/EC56/EC58/EC59, and a dedicated
+      embedding guide describe the break and root-ownership policy.
+- [x] Tests cover defaults/custom/nested roots, root containment, literal
+      patterns, invalid selection, W108 semantics/opt-out, minimal vs example
+      scaffold, brownfield reuse/collisions, planned file/directory role
+      conflicts, and release/server/browser use of explicit `--example`.
+      Three-OS confirmation remains pending after the EC60 test-harness repair.
 
-Estimate: small (~day), currently deferred. It can reuse F6's root-file
-inspection and authority, but W108 still needs semantic ignore matching for
-arbitrary discovered profiles.
+F7 also closes EC57, the linked Windows Playwright failure: same-flow
+xyflow rebuilds preserve stable-node measurements, the E2E assertion checks
+real post-Fit-View geometry, and every retry worker restores immutable editing
+seeds before the serial suite.
 
 ### Unscheduled backlog
 
@@ -1190,8 +1159,8 @@ criteria; nothing is dropped by not being scheduled.
 ## Working agreements
 
 - Conventional commits (`type(scope): subject`) — they feed git-cliff.
-- Spec updates land in the same PR as the behavior change (AGENTS.md).
-- Tick REQUIREMENTS checkboxes in the landing PR, with a test.
+- Spec updates land in the same change as the behavior change (AGENTS.md).
+- Tick REQUIREMENTS checkboxes in the implementation change, with a test.
 - Run `$napflow-closeout` after each state-changing session and milestone; add
   one dated `docs/JOURNAL.md` entry (done / decided / next) when the closeout
   produced a durable change or useful handoff.
@@ -1200,8 +1169,3 @@ criteria; nothing is dropped by not being scheduled.
 - v0.x releases are experimental (D33), tag-driven, and require exact
   tag/package version agreement (`RELEASING.md`). Breaking changes are
   permitted with clear release notes until v1.0.
-- **From the v0.1.0 tag on** (owner call 2026-07-08): no direct
-  commits to `main` — feature branches + PRs, conventional commits
-  feed git-cliff per release. Side benefit: per-PR CI closes the
-  NFR-10 batch-push blind spot (every change gets its own CI run at
-  its own HEAD).

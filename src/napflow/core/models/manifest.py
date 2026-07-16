@@ -4,9 +4,10 @@ Authoritative spec: docs/napflow-workspace-manifest.md (v0.3). Field
 defaults here ARE the documented built-in defaults — one source of truth.
 """
 
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from napflow.core.models.common import (
     FrozenModel,
@@ -26,15 +27,34 @@ class FlowsConfig(FrozenModel):
     root: str = "flows"
     main: str = "flows/main"  # canvas the UI opens by default
 
+    @model_validator(mode="before")
+    @classmethod
+    def default_main_below_configured_root(cls, value: Any) -> Any:
+        """Keep an omitted ``main`` useful when only ``root`` is customized."""
+
+        if isinstance(value, Mapping) and "main" not in value:
+            values = dict(value)
+            root = values.get("root", "flows")
+            values["main"] = f"{root}/main"
+            return values
+        return value
+
 
 class EnvironmentsConfig(FrozenModel):
-    """Profiles are auto-discovered from envs/*.env (FR-103) — no registry.
+    """Profiles are auto-discovered below ``root`` (FR-103) — no registry.
     `secrets` are glob patterns over env var NAMES; matching values are
     redacted from terminal/report views while raw local history remains
     raw (D35)."""
 
+    root: str = "."
     default: str | None = None
     secrets: list[str] = []
+
+
+class DataConfig(FrozenModel):
+    """Input-data paths used by fixture nodes are resolved below ``root``."""
+
+    root: str = "data"
 
 
 class RequestDefaults(FrozenModel):
@@ -80,6 +100,7 @@ class Manifest(FrozenModel):
     workspace: WorkspaceInfo | None = None
     flows: FlowsConfig = FlowsConfig()
     environments: EnvironmentsConfig = EnvironmentsConfig()
+    data: DataConfig = DataConfig()
     defaults: Defaults = Defaults()
     python: PythonSettings = PythonSettings()
     codegen: Any = None  # RESERVED: parsed, unused in v1 (FR-109)

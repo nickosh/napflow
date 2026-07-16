@@ -22,6 +22,10 @@ summary pages reconstruct completed frame trees. Exports, advanced replay,
 and the 100k-event performance target remain deferred. Amended 2026-07-15 for
 F6/D43: W109 adds advisory, root-only Git-metadata coverage to the full
 workspace check without changing run preparation.
+Amended 2026-07-15 for F7/D44: environment profiles are literal filenames
+discovered under `environments.root`; skipped candidates feed W105/operator
+notes, selected invalid candidates block preparation, and W108 evaluates
+actual profile paths against the root `.gitignore`.
 
 ### v0.2 compatibility and format summary
 
@@ -124,7 +128,7 @@ nesting an event loop inside `run_flow`.
   and cleanup without importing CLI/server/UI. Inputs, environment/profile
   choices, overrides, deadlines, and history policy are per-run keyword options,
   so one loaded workspace/flow can safely serve independent test cases. The
-  concrete v0.2 keywords are `inputs`, profile name `env`, string-to-string
+  concrete v0.2 keywords are `inputs`, literal profile filename `env`, string-to-string
   `env_overrides`, deadline `timeout`, and `history` (default `True`; `False`
   suppresses durable JSONL history). Preparation failures raise `RunPrepError`;
   a started run returns `RunResult` with the ordinary
@@ -239,7 +243,7 @@ iteration "error" = a body frame ending `failed`/`error`.
 Note the env-validation split (EC17): W105 warns at `napf check` time
 when an `env.required` key is missing from *all* discovered profiles; the
 ENV lifecycle step errors at `napf run` time when a key is missing from
-the *active* profile. `napf check` can pass while `napf run --env staging`
+the *active* profile. `napf check` can pass while `napf run --env .env.staging`
 fails — by design, not contradiction.
 
 CLI exit codes: 0 passed · 1 failed · 2 error · 130 aborted.
@@ -1217,19 +1221,21 @@ E012 reserved port name `error` declared (End ports, python outputs)
 W101 edge-cycle without counter/timeout guard
 W102 port type mismatch on edge
 W103 unconnected error/failed output (failures mark run failed)
-W104 unreachable node (no path from start)
+W104 unreachable node (no path from start; the exact portless, edge-free
+     Start+End onboarding canvas is exempt)
 W105 env.required key missing from ALL discovered profiles
 W106 guard exhaustion/timeout port unconnected (loop exit produces no output)
 W107 unquoted scalar in a string-typed field matching YAML's
      implicit-coercion danger set (hand-edited files; see yaml-profile.md)
-W108 reserved for F7 per-discovered-environment-profile coverage
+W108 discovered environment profile is not semantically covered by the
+     workspace-root .gitignore (committed template convention exempt)
 W109 workspace-root .gitignore/.gitattributes lacks canonical napflow lines,
      uses CR/CRLF, or is invalid/non-regular/unreadable (D43)
 ```
 
 Errors block `napf run`; warnings print and proceed. Flow diagnostics appear
-on the canvas; workspace-level W109 is emitted by `napf check` only and is not
-part of run preparation or per-flow server/UI diagnostics.
+on the canvas; workspace-level W108/W109 are emitted by `napf check` only and
+are not part of run preparation or per-flow server/UI diagnostics.
 
 Diagnostic quality is product surface (EC29): every E/W message carries
 the file path and a one-line fix hint. Flow/YAML diagnostics additionally
@@ -1261,8 +1267,19 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
   `switch`, `assert`, `set`, `delay`, `log`, guards) use `in`;
   `request`/`loop`/`get`/`fixture` use `trigger`; merge inputs match
   `in[1-9][0-9]*` (1-based, no upper bound).
-- **W105 also reports an unparseable env profile** (its keys cannot be
-  checked; still warning-class — profiles are local files).
+- **W105 also reports a skipped env candidate** (non-regular, unreadable,
+  invalid UTF-8/dialect, or boundary failure). An unselected candidate remains
+  warning-class; selecting that literal filename explicitly or as the manifest
+  default blocks run preparation. Safe invalid content uses `env_invalid`;
+  unsafe literal ids and escaping candidates retain D37's stable
+  `workspace_boundary` reason.
+- **W108 semantic root-only policy (D43/D44/F7)**: every discovered real
+  profile path (plus readable-name candidates whose content is invalid) is
+  matched with Git-compatible ignore semantics against only the workspace-root
+  `.gitignore`. Parent/global/`.git/info` rules never count. `.env.example`
+  and the historical `example.env` onboarding-template convention are exempt.
+  The warning is advisory, read-only, and shares `--no-git-meta-check` with
+  W109.
 - **W107 under YAML 1.2 reality**: number-like and date-like plain
   scalars parse as ints/dates, never strings — date-typed values are
   warned as parsed-date objects; the string-form lint fires on the
@@ -1270,6 +1287,9 @@ Rule-scope pins made at M4 (2026-07-04, `core/checker.py`):
 - **W109 root-only policy (D43/F6)**: only exact canonical lines in
   workspace-root `.gitignore`/`.gitattributes` count; parent files,
   `.git/info/*`, global configuration, and Git executable state are ignored.
+  F7 narrows the fixed `.gitignore` contract to `.napflow/`; profile-specific
+  coverage belongs to W108, while `napf init --example` may add its exact
+  anchored `.env` path.
   The check recognizes CRLF-covered lines but still warns because init never
   appends to or normalizes a file containing CR. W109 is read-only/advisory,
   suppressible with `napf check --no-git-meta-check`, and never appears in

@@ -66,6 +66,7 @@ from napflow.core.models.flow import (
     TimeoutNode,
 )
 from napflow.core.models.manifest import (
+    DataConfig,
     Defaults,
     EnvironmentsConfig,
     FlowsConfig,
@@ -151,6 +152,7 @@ __all__ = [
     "TimeoutConfig",
     "TimeoutNode",
     # manifest
+    "DataConfig",
     "Defaults",
     "EnvironmentsConfig",
     "FlowsConfig",

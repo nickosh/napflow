@@ -13,8 +13,10 @@ def test_spec_example_parses(load_yaml) -> None:
     assert manifest.workspace is not None
     assert manifest.workspace.name == "qa-api-flows"
     assert manifest.flows.root == "flows"
-    assert manifest.environments.default == "dev"
+    assert manifest.environments.root == "."
+    assert manifest.environments.default == ".env"
     assert manifest.environments.secrets == []
+    assert manifest.data.root == "data"
     assert manifest.defaults.request.headers["User-Agent"].startswith("napflow/0.1")
     assert manifest.defaults.run.report == "junit"
     assert manifest.defaults.run.run_timeout_s is None
@@ -28,7 +30,9 @@ def test_minimal_manifest_gets_documented_defaults() -> None:
 
     assert manifest.flows.root == "flows"
     assert manifest.flows.main == "flows/main"
+    assert manifest.environments.root == "."
     assert manifest.environments.secrets == []
+    assert manifest.data.root == "data"
     assert manifest.defaults.request.timeout_s == 30
     assert manifest.defaults.request.verify_tls is True
     assert manifest.defaults.request.retry.max_attempts == 1
@@ -41,6 +45,30 @@ def test_minimal_manifest_gets_documented_defaults() -> None:
     assert manifest.codegen is None
 
 
+def test_configurable_data_roots_parse_as_posix_strings() -> None:
+    manifest = Manifest.model_validate(
+        {
+            "schema": "napflow/v1",
+            "flows": {"root": "qa/flows", "main": "qa/flows/main"},
+            "environments": {"root": "config/env", "default": ".env.test"},
+            "data": {"root": "tests/data"},
+        }
+    )
+
+    assert manifest.flows.root == "qa/flows"
+    assert manifest.environments.root == "config/env"
+    assert manifest.environments.default == ".env.test"
+    assert manifest.data.root == "tests/data"
+
+
+def test_omitted_main_tracks_configured_flows_root() -> None:
+    manifest = Manifest.model_validate(
+        {"schema": "napflow/v1", "flows": {"root": "qa/flows"}}
+    )
+
+    assert manifest.flows.main == "qa/flows/main"
+
+
 @pytest.mark.parametrize(
     "bad",
     [
@@ -51,6 +79,7 @@ def test_minimal_manifest_gets_documented_defaults() -> None:
         {"schema": "napflow/v1", "defaults": {"run": {"message_budget": 0}}},
         {"schema": "napflow/v1", "defaults": {"run": {"body_capture_mb": 10}}},
         {"schema": "napflow/v1", "defaults": {"run": {"run_capture_mb": 500}}},
+        {"schema": "napflow/v1", "fixtures": {"root": "fixtures"}},
     ],
 )
 def test_rejected(bad: dict) -> None:

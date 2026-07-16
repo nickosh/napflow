@@ -23,13 +23,16 @@ from napflow.core.events import (
     persist_record_content,
 )
 from napflow.core.history_content import RunContentStore
+from napflow.core.runprep import RunPrepError, prepare_run
+from napflow.core.workspace import load_workspace
 
 runner = CliRunner()
 
 MANIFEST = """\
 schema: "napflow/v1"
 environments:
-  default: "dev"
+  root: "envs"
+  default: "dev.env"
   secrets: ["*TOKEN*"]
 """
 
@@ -167,9 +170,109 @@ def test_unknown_flow_exits_2(ws):
 
 
 def test_missing_explicit_env_exits_2(ws):
-    result = runner.invoke(app, ["run", "flows/hello", "--env", "staging"])
+    result = runner.invoke(app, ["run", "flows/hello", "--env", "staging.env"])
     assert result.exit_code == 2
-    assert "staging" in result.stderr
+    assert "staging.env" in result.stderr
+
+
+def test_profile_identifier_is_the_literal_filename(ws):
+    result = runner.invoke(app, ["run", "flows/hello", "--env", "dev"])
+
+    assert result.exit_code == 2
+    assert "no literal filename" in result.stderr
+    assert "dev.env" in result.stderr
+
+
+def test_dotenv_names_under_workspace_root_are_selectable(tmp_path, monkeypatch):
+    manifest = """\
+schema: "napflow/v1"
+environments:
+  root: "."
+  default: ".env.staging"
+"""
+    workspace = make_workspace(tmp_path, manifest=manifest)
+    (workspace / ".env").write_text("GREETING=base\n", encoding="utf-8")
+    (workspace / ".env.staging").write_text("GREETING=staging\n", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+
+    default = runner.invoke(app, ["run", "flows/hello"])
+    explicit = runner.invoke(app, ["run", "flows/hello", "--env", ".env"])
+
+    assert default.exit_code == explicit.exit_code == 0
+    assert json.loads(default.stdout) == {"result": {"msg": "staging"}}
+    assert json.loads(explicit.stdout) == {"result": {"msg": "base"}}
+
+
+def test_invalid_selected_profile_is_a_hard_error(ws):
+    bad = ws / "envs" / "bad.env"
+    bad.write_text("export GREETING=nope\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["run", "flows/hello", "--env", "bad.env"])
+
+    assert result.exit_code == 2
+    assert "invalid" in result.stderr
+    assert "export" in result.stderr
+
+
+def test_invalid_unselected_profile_is_skipped_with_warning(ws):
+    (ws / "envs" / ".env.broken").write_text("not-an-assignment\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["run", "flows/hello"])
+
+    assert result.exit_code == 0
+    assert "warning: env profile '.env.broken' was skipped" in result.stderr
+
+
+def test_missing_manifest_default_is_a_hard_error(ws):
+    manifest = ws / "napflow.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("dev.env", "missing.env"),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["run", "flows/hello"])
+
+    assert result.exit_code == 2
+    assert "default env profile 'missing.env'" in result.stderr
+
+
+@pytest.mark.parametrize("name", ["../secret.env", "nested/dev.env", "C:/secret.env"])
+def test_unsafe_selected_profile_keeps_workspace_boundary_reason(ws, name):
+    with pytest.raises(RunPrepError) as excinfo:
+        prepare_run(load_workspace(ws), "flows/hello", name)
+
+    assert excinfo.value.reason == "workspace_boundary"
+    assert "violates workspace boundary" in str(excinfo.value)
+
+
+def test_unsafe_default_profile_keeps_workspace_boundary_reason(ws):
+    manifest = ws / "napflow.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("dev.env", "../secret.env"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunPrepError) as excinfo:
+        prepare_run(load_workspace(ws), "flows/hello")
+
+    assert excinfo.value.reason == "workspace_boundary"
+    assert "default env profile" in str(excinfo.value)
+
+
+def test_selected_escaping_profile_symlink_keeps_workspace_boundary_reason(
+    ws, tmp_path
+):
+    outside = tmp_path / "outside.env"
+    outside.write_text("GREETING=outside\n", encoding="utf-8")
+    try:
+        (ws / "envs" / "escape.env").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    with pytest.raises(RunPrepError) as excinfo:
+        prepare_run(load_workspace(ws), "flows/hello", "escape.env")
+
+    assert excinfo.value.reason == "workspace_boundary"
 
 
 def test_bad_input_pair_exits_2(ws):
@@ -939,13 +1042,13 @@ def test_junit_report_memory_does_not_scale_with_assertion_count(tmp_path):
 
 
 def test_first_touch_smoke_flow_offline(tmp_path, monkeypatch):
-    # EC34/FR-107 DoD: a fresh `napf init` workspace runs its smoke
-    # flow (fixture→python→assert) OFFLINE with exit 0 — the fixture
-    # auto-seed drives the run (the start node is fully unwired)
+    # EC34/FR-107 DoD: a fresh `napf init --example` workspace runs its
+    # smoke flow (fixture→python→assert) OFFLINE with exit 0 — the fixture
+    # auto-seed drives the run (the start node is fully unwired).
     fresh = tmp_path / "fresh"
     fresh.mkdir()
     monkeypatch.chdir(fresh)
-    assert runner.invoke(app, ["init"]).exit_code == 0
+    assert runner.invoke(app, ["init", "--example"]).exit_code == 0
     result = runner.invoke(app, ["run", "flows/smoke"])
     assert result.exit_code == 0, result.stderr
     payload = json.loads(result.stdout)

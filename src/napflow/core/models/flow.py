@@ -229,7 +229,7 @@ class LogConfig(FrozenModel):
 
 
 class FixtureConfig(FrozenModel):
-    """Load JSON/CSV from fixtures/; format inferred from the file
+    """Load JSON/CSV from ``data.root``; format inferred from the file
     extension when omitted. CSV → list of dicts, header row required."""
 
     file: str

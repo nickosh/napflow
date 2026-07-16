@@ -1,5 +1,5 @@
 // Playwright webServer command: scaffold a FRESH workspace (real
-// `napf init`, so e2e always exercises the first-touch surface) and
+// `napf init --example`, so e2e exercises the opt-in demo surface) and
 // serve it with the real server + the BUILT bundle. Cross-platform —
 // no shell-isms (NFR-02 applies to tooling too).
 import { spawn, spawnSync } from "node:child_process";
@@ -77,7 +77,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 const init = spawnSync(
   "uv",
-  ["run", "--project", repo, "napf", "init", workspace],
+  ["run", "--project", repo, "napf", "init", "--example", workspace],
   { stdio: "inherit" },
 );
 if (init.status !== 0) {
@@ -313,6 +313,19 @@ writeFileSync(
   REPLAY_CHILD_NODES,
   "utf-8",
 );
+
+// editing.spec mutates these models serially, and a Playwright retry starts a
+// fresh worker against the SAME server/workspace. Keep source snapshots outside
+// flows.root so they are not catalog entries and ordinary sidebar/editor
+// actions never target them. The spec reads these baselines and force-restores
+// its owned flows (plus smoke's nodes.py) in beforeAll on every worker/retry.
+const editingBaseline = join(workspace, "e2e-baselines", "editing");
+mkdirSync(editingBaseline, { recursive: true });
+for (const name of ["main", "smoke", "hint"]) {
+  cpSync(join(workspace, "flows", name), join(editingBaseline, name), {
+    recursive: true,
+  });
+}
 
 // a truncated JSONL — a run that died mid-request (abort/crash). The
 // history browser must list it `incomplete` and replay it without

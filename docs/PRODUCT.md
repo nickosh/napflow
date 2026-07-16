@@ -115,7 +115,7 @@ rather than a compatibility promise (D33).
 
 ## Success criteria (v0.1 working milestone)
 
-- `uv tool install napflow && napf init && napf run flows/smoke` is
+- `uv tool install napflow && napf init --example && napf run flows/smoke` is
   green in under five minutes on macOS, Windows, and Linux — fully
   offline, no external services (httpbin demo is separate, EC34).
 - The flagship retry-until-ready pattern is buildable on the canvas

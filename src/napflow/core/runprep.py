@@ -30,11 +30,9 @@ from napflow.core.events import (
 from napflow.core.history_content import RunContentStore
 from napflow.core.loader import LoadedFlow, LoadError, load_flow
 from napflow.core.workspace import (
-    EnvFileError,
     Workspace,
     WorkspaceBoundaryError,
     layer_env,
-    parse_env_file,
 )
 
 PrepFailure = Literal[
@@ -73,15 +71,15 @@ class PreparedRun:
     diagnostics: list[CheckDiagnostic]
     env: dict[str, str]  # layered: active profile → process env (FR-104)
     env_name: str | None
-    notes: list[str]  # operator-facing, e.g. missing default profile
+    notes: list[str]  # operator-facing, e.g. skipped unselected env candidates
 
 
 def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> PreparedRun:
     """LOAD + CHECK + ENV (EN §2): E-codes block, warnings proceed. The
     gate covers the entry flow plus its reference closure (E007) — a
-    broken subflow blocks like a broken entry. An explicit `env` must
-    exist; the manifest default is best-effort (real profiles are normally
-    machine-local, so fresh clones may have none)."""
+    broken subflow blocks like a broken entry. Both an explicit `env` and a
+    configured manifest default select a literal filename and must resolve to
+    a valid discovered profile; `default: null` means process-env only."""
     try:
         identity = workspace.resolver.normalize_identity(flow)
         file = workspace.resolver.flow_file(identity)
@@ -108,24 +106,43 @@ def prepare_run(workspace: Workspace, flow: str, env: str | None = None) -> Prep
     if any(d.severity == "error" for d in diagnostics):
         raise RunPrepError("check", f"{identity}: check errors", diagnostics)
 
-    profiles = workspace.env_profiles()
+    discovery = workspace.discover_env_profiles()
     env_name = env if env is not None else workspace.manifest.model.environments.default
     profile_values: dict[str, str] = {}
-    notes: list[str] = []
-    if env is not None and env not in profiles:
-        available = ", ".join(profiles) or "none"
-        raise RunPrepError(
-            "env_not_found",
-            f"--env {env!r}: no envs/{env}.env (available: {available})",
+    notes = [
+        f"warning: env profile {name!r} was skipped: {issue.message}"
+        for name, issue in discovery.issues.items()
+        if name != env_name
+    ]
+    if env_name is not None:
+        source = (
+            f"--env {env_name!r}"
+            if env is not None
+            else f"default env profile {env_name!r}"
         )
-    if env_name in profiles:
         try:
-            profile_values = parse_env_file(profiles[env_name])
-        except EnvFileError as e:
-            raise RunPrepError("env_invalid", str(e)) from e
-    elif env_name is not None:
-        notes.append(f"note: env profile {env_name!r} not found — process env only")
-        env_name = None
+            workspace.resolver.environment_file(env_name)
+        except WorkspaceBoundaryError as error:
+            raise RunPrepError(
+                "workspace_boundary",
+                f"{source} violates workspace boundary: {error}",
+            ) from error
+        issue = discovery.issues.get(env_name)
+        if issue is not None:
+            raise RunPrepError(
+                "env_invalid",
+                f"{source} is invalid at {issue.path}: {issue.message}",
+            )
+        profile = discovery.profiles.get(env_name)
+        if profile is None:
+            available = ", ".join(discovery.profiles) or "none"
+            root = workspace.resolver.environments_root_identity
+            raise RunPrepError(
+                "env_not_found",
+                f"{source}: no literal filename under environments.root "
+                f"{root!r} (available: {available})",
+            )
+        profile_values = profile.values
 
     return PreparedRun(
         identity=identity,

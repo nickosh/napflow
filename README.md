@@ -42,7 +42,7 @@ See the
 
 | Command      | Status | Does |
 |--------------|--------|------|
-| `napf init`  | ✅     | scaffold a workspace; consent-based root metadata handling for brownfield dirs |
+| `napf init`  | ✅     | scaffold a minimal workspace; `--example` adds runnable references; roots are configurable |
 | `napf list`  | ✅     | discovered flows with their input/output ports |
 | `napf check` | ✅     | validate everything — schema, edges, guards, references, env — with path-specific diagnostics and CI exit codes |
 | `napf run`   | ✅     | headless engine — full node catalog incl. python worker, full-value JSONL/blob history, prepared requests, exit codes 0/1/2/130 |
@@ -53,7 +53,7 @@ See the
 > and flow outputs. Greenfield `napf init` creates the root ignore rule;
 > interactive brownfield init asks before appending to an existing LF
 > `.gitignore` (or accepts explicit `--git-meta append`) and leaves
-> skipped/CRLF files unchanged. `napf check` warns with advisory W109,
+> skipped/CRLF files unchanged. `napf check` warns with advisory W108/W109,
 > but Git metadata is not sanitization or access control. Do not commit,
 > upload, attach, publish, or otherwise share this directory unless inspected.
 > Terminal/report masking does not modify the canonical JSONL or blob files.
@@ -66,9 +66,22 @@ Needs Python 3.12+; simplest with [uv](https://docs.astral.sh/uv/):
 uv tool install napflow
 napf init my-flows && cd my-flows
 napf check
-napf run flows/smoke   # headless, offline demo flow
 napf ui                # opens the canvas in your browser
 ```
+
+The default scaffold is intentionally small: one empty `flows/main`, an empty
+`data/` directory, and no environment files. For the complete runnable
+reference workspace used by napflow's own smoke and browser tests:
+
+```sh
+napf init example-flows --example && cd example-flows
+napf check
+napf run flows/smoke   # headless, fully offline
+```
+
+Embedding napflow in an existing repository? See
+[Embedding a workspace](docs/embedding-workspace.md) for configurable roots
+and collision-safe init examples.
 
 > Install from PyPI or a GitHub release artifact (wheel or sdist). Direct
 > VCS (`git+https`) installs and PEP 517 builds from a raw source checkout are
@@ -78,7 +91,8 @@ napf ui                # opens the canvas in your browser
 ## Use it from pytest
 
 The functional and workspace-bound forms create independent runs through the
-same core path—without importing the CLI or server:
+same core path—without importing the CLI or server. This example uses the
+`flows/smoke` reference created by `napf init --example`:
 
 ```python
 from pathlib import Path

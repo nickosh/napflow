@@ -121,7 +121,7 @@ export const CONFIG_FORMS: Record<string, FieldDescriptor[]> = {
     },
   ],
   fixture: [
-    { key: "file", label: "file", kind: "string", placeholder: "fixtures/data.json" },
+    { key: "file", label: "file", kind: "string", placeholder: "users.json" },
     { key: "format", label: "format", kind: "select", options: ["", "json", "csv"] },
   ],
   note: [{ key: "text", label: "text", kind: "text" }],

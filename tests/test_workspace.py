@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import napflow.core.workspace as workspace_module
 from napflow.core.workspace import (
     EnvFileError,
     WorkspaceBoundaryError,
@@ -310,22 +311,327 @@ def test_resolver_clone_destination_must_resolve_under_flows_root(
         resolver.clone_destination("flows/linked/copy")
 
 
+@pytest.mark.parametrize("flows_root", [".", "./"])
+def test_flows_root_must_be_a_proper_subdirectory(
+    tmp_path: Path, flows_root: str
+) -> None:
+    root = _make_workspace(tmp_path / "ws")
+
+    with pytest.raises(WorkspaceBoundaryError, match="proper subdirectory"):
+        WorkspaceResolver(root, flows_root_identity=flows_root)
+
+
+def test_flows_root_cannot_symlink_back_to_workspace_root(tmp_path: Path) -> None:
+    root = _make_workspace(tmp_path / "ws")
+    try:
+        (root / "flows").symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    with pytest.raises(WorkspaceBoundaryError, match="proper subdirectory"):
+        WorkspaceResolver(root)
+
+
+def test_data_root_cannot_symlink_back_to_workspace_root(tmp_path: Path) -> None:
+    root = _make_workspace(tmp_path / "ws")
+    try:
+        (root / "data").symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    with pytest.raises(WorkspaceBoundaryError, match="proper subdirectory"):
+        WorkspaceResolver(root)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "/absolute",
+        "../parent",
+        "nested/../parent",
+        "nested//empty",
+        "./nested",
+        r"nested\windows",
+        "C:/outside",
+    ],
+)
+@pytest.mark.parametrize("field", ["environments_root_identity", "data_root_identity"])
+def test_configurable_data_roots_reject_unsafe_identities(
+    tmp_path: Path, bad: str, field: str
+) -> None:
+    root = _make_workspace(tmp_path / "ws")
+
+    with pytest.raises(WorkspaceBoundaryError):
+        WorkspaceResolver(root, **{field: bad})
+
+
+@pytest.mark.parametrize("workspace_root_spelling", [".", "./"])
+def test_environment_root_accepts_workspace_root_spellings(
+    tmp_path: Path, workspace_root_spelling: str
+) -> None:
+    root = _make_workspace(tmp_path / "ws")
+    resolver = WorkspaceResolver(
+        root,
+        environments_root_identity=workspace_root_spelling,
+    )
+
+    assert resolver.environments_root_identity == "."
+    assert resolver.environments_root == root.resolve()
+
+
+@pytest.mark.parametrize("data_root", [".", "./"])
+def test_data_root_must_be_a_proper_subdirectory(
+    tmp_path: Path, data_root: str
+) -> None:
+    root = _make_workspace(tmp_path / "ws")
+
+    with pytest.raises(WorkspaceBoundaryError, match="proper subdirectory"):
+        WorkspaceResolver(root, data_root_identity=data_root)
+
+
+def test_workspace_threads_nested_configured_roots_to_resolver(tmp_path: Path) -> None:
+    root = _make_workspace(
+        tmp_path / "ws",
+        "schema: napflow/v1\n"
+        "flows: {root: qa/flows, main: qa/flows/main}\n"
+        "environments: {root: config/env}\n"
+        "data: {root: tests/data}\n",
+    )
+    workspace = load_workspace(root)
+
+    assert workspace.flows_root == root / "qa/flows"
+    assert workspace.environments_root == root / "config/env"
+    assert workspace.data_root == root / "tests/data"
+
+
+def test_configured_flows_root_derives_main_and_rejects_main_outside_it(
+    tmp_path: Path,
+) -> None:
+    root = _make_workspace(
+        tmp_path / "derived-main",
+        "schema: napflow/v1\nflows: {root: qa/flows}\n",
+    )
+
+    workspace = load_workspace(root)
+
+    assert workspace.manifest.model.flows.main == "qa/flows/main"
+
+    (root / "napflow.yaml").write_text(
+        "schema: napflow/v1\nflows: {root: qa/flows, main: other/main}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkspaceBoundaryError, match="flows.main.*flows.root"):
+        load_workspace(root)
+
+
+def test_configured_main_cannot_symlink_outside_flows_root(tmp_path: Path) -> None:
+    root = _make_workspace(
+        tmp_path / "linked-main",
+        "schema: napflow/v1\nflows: {root: qa/flows}\n",
+    )
+    flows = root / "qa/flows"
+    flows.mkdir(parents=True)
+    outside = root / "other-main"
+    outside.mkdir()
+    try:
+        (flows / "main").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    with pytest.raises(WorkspaceBoundaryError, match="flows.main.*flows.root"):
+        load_workspace(root)
+
+
+@pytest.mark.parametrize(
+    ("field", "link_name"),
+    [
+        ("environments_root_identity", "linked-env"),
+        ("data_root_identity", "linked-data"),
+    ],
+)
+def test_configured_data_roots_reject_symlink_escapes(
+    tmp_path: Path, field: str, link_name: str
+) -> None:
+    root = _make_workspace(tmp_path / "ws")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (root / link_name).symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    with pytest.raises(WorkspaceBoundaryError):
+        WorkspaceResolver(root, **{field: link_name})
+
+
+def test_fixture_paths_are_relative_to_configured_data_root(tmp_path: Path) -> None:
+    root = _make_workspace(tmp_path / "ws")
+    resolver = WorkspaceResolver(root, data_root_identity="tests/data")
+
+    assert resolver.fixture_file("users.json") == root / "tests/data/users.json"
+    assert resolver.fixture_file("nested/users.csv") == (
+        root / "tests/data/nested/users.csv"
+    )
+    with pytest.raises(WorkspaceBoundaryError):
+        resolver.fixture_file("../users.json")
+
+
+def test_default_data_root_resolves_fixture_paths_below_data_directory(
+    tmp_path: Path,
+) -> None:
+    root = _make_workspace(tmp_path / "ws")
+
+    assert WorkspaceResolver(root).fixture_file("users.json") == (
+        root / "data/users.json"
+    )
+
+
+def test_fixture_path_cannot_symlink_outside_configured_data_root(
+    tmp_path: Path,
+) -> None:
+    root = _make_workspace(tmp_path / "ws")
+    data = root / "data"
+    data.mkdir()
+    outside_fixture = root / "elsewhere.json"
+    outside_fixture.write_text("[]", encoding="utf-8")
+    try:
+        (data / "escape.json").symlink_to(outside_fixture)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    resolver = WorkspaceResolver(root)
+    with pytest.raises(WorkspaceBoundaryError):
+        resolver.fixture_file("escape.json")
+
+
 # --------------------------------------------------------------------------
 # Env profiles (FR-103)
 
 
-def test_env_profiles_discovered_by_stem(tmp_path: Path) -> None:
-    root = _make_workspace(tmp_path / "ws")
+def test_env_profiles_use_literal_filenames_for_all_supported_patterns(
+    tmp_path: Path,
+) -> None:
+    root = _make_workspace(
+        tmp_path / "ws",
+        "schema: napflow/v1\nenvironments: {root: envs}\n",
+    )
     envs = root / "envs"
     envs.mkdir()
+    (envs / ".env").write_text("A=root\n", encoding="utf-8")
+    (envs / ".env.staging").write_text("A=staging\n", encoding="utf-8")
     (envs / "dev.env").write_text("A=1\n", encoding="utf-8")
-    (envs / "staging.env").write_text("A=2\n", encoding="utf-8")
-    (envs / "example.env").write_text("A=\n", encoding="utf-8")
+    (envs / "UPPER.ENV").write_text("A=ignored\n", encoding="utf-8")
     (envs / "notes.txt").write_text("ignored", encoding="utf-8")
+    nested = envs / "nested"
+    nested.mkdir()
+    (nested / "hidden.env").write_text("A=hidden\n", encoding="utf-8")
 
-    profiles = load_workspace(root).env_profiles()
-    assert list(profiles) == ["dev", "example", "staging"]  # sorted
-    assert profiles["dev"] == envs / "dev.env"
+    workspace = load_workspace(root)
+    discovery = workspace.discover_env_profiles()
+
+    assert list(discovery.profiles) == [".env", ".env.staging", "dev.env"]
+    assert discovery.profiles[".env"].values == {"A": "root"}
+    assert discovery.profiles["dev.env"].path == envs / "dev.env"
+    assert discovery.issues == {}
+    assert workspace.env_profiles() == {
+        ".env": envs / ".env",
+        ".env.staging": envs / ".env.staging",
+        "dev.env": envs / "dev.env",
+    }
+
+
+@pytest.mark.parametrize("root_spelling", [".", "./"])
+def test_env_profiles_can_be_discovered_from_workspace_root(
+    tmp_path: Path, root_spelling: str
+) -> None:
+    root = _make_workspace(
+        tmp_path / "ws",
+        f'schema: napflow/v1\nenvironments: {{root: "{root_spelling}"}}\n',
+    )
+    (root / ".env").write_text("ROOT=yes\n", encoding="utf-8")
+
+    workspace = load_workspace(root)
+    assert workspace.env_profiles() == {".env": root / ".env"}
+
+
+def test_env_discovery_retains_invalid_nonregular_and_unreadable_issues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _make_workspace(
+        tmp_path / "ws",
+        "schema: napflow/v1\nenvironments: {root: envs}\n",
+    )
+    envs = root / "envs"
+    envs.mkdir()
+    (envs / "good.env").write_text("GOOD=yes\n", encoding="utf-8")
+    (envs / "bad.env").write_text("not a key-value line\n", encoding="utf-8")
+    (envs / ".env.binary").write_bytes(b"VALUE=\xff\n")
+    (envs / "directory.env").mkdir()
+    (envs / "unreadable.env").write_text("VALUE=x\n", encoding="utf-8")
+    real_parse = workspace_module.parse_env_file
+
+    def parse_or_refuse(path: Path) -> dict[str, str]:
+        if path.name == "unreadable.env":
+            raise PermissionError("owner denied read")
+        return real_parse(path)
+
+    monkeypatch.setattr(workspace_module, "parse_env_file", parse_or_refuse)
+
+    discovery = load_workspace(root).discover_env_profiles()
+
+    assert list(discovery.profiles) == ["good.env"]
+    assert discovery.profiles["good.env"].values == {"GOOD": "yes"}
+    assert {name: issue.reason for name, issue in discovery.issues.items()} == {
+        ".env.binary": "invalid_encoding",
+        "bad.env": "invalid_format",
+        "directory.env": "not_regular",
+        "unreadable.env": "unreadable",
+    }
+    assert "owner denied read" in discovery.issues["unreadable.env"].message
+
+
+def test_env_discovery_retains_escaping_candidate_as_boundary_issue(
+    tmp_path: Path,
+) -> None:
+    root = _make_workspace(
+        tmp_path / "ws",
+        "schema: napflow/v1\nenvironments: {root: envs}\n",
+    )
+    envs = root / "envs"
+    envs.mkdir()
+    outside = tmp_path / "outside.env"
+    outside.write_text("SECRET=outside\n", encoding="utf-8")
+    try:
+        (envs / "escape.env").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    discovery = load_workspace(root).discover_env_profiles()
+
+    assert discovery.profiles == {}
+    assert discovery.issues["escape.env"].reason == "workspace_boundary"
+    assert discovery.issues["escape.env"].path == envs / "escape.env"
+
+
+def test_env_discovery_allows_contained_regular_file_alias(tmp_path: Path) -> None:
+    root = _make_workspace(
+        tmp_path / "ws",
+        "schema: napflow/v1\nenvironments: {root: envs}\n",
+    )
+    envs = root / "envs"
+    envs.mkdir()
+    target = envs / "shared-profile"
+    target.write_text("SHARED=yes\n", encoding="utf-8")
+    try:
+        (envs / "alias.env").symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this platform/privilege level")
+
+    discovery = load_workspace(root).discover_env_profiles()
+
+    assert discovery.issues == {}
+    assert discovery.profiles["alias.env"].path == target
+    assert discovery.profiles["alias.env"].values == {"SHARED": "yes"}
 
 
 def test_env_profiles_no_envs_dir(tmp_path: Path) -> None:

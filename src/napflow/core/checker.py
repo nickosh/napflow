@@ -1,4 +1,4 @@
-"""`napf check` rules: E001–E012, W101–W107/W109 (engine spec §8).
+"""`napf check` rules: E001–E012, W101–W109 (engine spec §8).
 
 Errors block `napf run`; warnings print and proceed. Every diagnostic carries
 a file path and one-line fix hint; flow/YAML diagnostics add best-effort
@@ -23,6 +23,7 @@ from napflow.core.gitmeta import (
     GitMetadataInspection,
     GitMetadataState,
     default_git_metadata_rules,
+    gitignore_covered_paths,
     inspect_git_metadata,
 )
 from napflow.core.loader import LoadedFlow, LoadError, load_flow, locate
@@ -46,12 +47,7 @@ from napflow.core.templating import (
     referenced_nodes,
     template_syntax_error,
 )
-from napflow.core.workspace import (
-    EnvFileError,
-    Workspace,
-    WorkspaceBoundaryError,
-    parse_env_file,
-)
+from napflow.core.workspace import Workspace, WorkspaceBoundaryError
 
 GUARD_TYPES = ("counter", "timeout")
 _MERGE_INPUT_RE = re.compile(r"^in[1-9][0-9]*$")
@@ -85,7 +81,7 @@ def _python_callable_problem(
 
 @dataclass(frozen=True)
 class CheckDiagnostic:
-    code: str  # "E001".."E012" / "W101".."W109" (W108 reserved for F7)
+    code: str  # "E001".."E012" / "W101".."W109"
     message: str
     path: Path
     hint: str
@@ -571,7 +567,7 @@ class _FlowCheck:
                         self.add(
                             "E008",
                             f"fixture file {file!r} violates workspace boundary: {e}",
-                            "use a workspace-relative POSIX fixture path",
+                            "use a POSIX fixture path relative to data.root",
                             node=node.id,
                             loc_suffix=("config", "file"),
                             reason=e.reason,
@@ -580,8 +576,9 @@ class _FlowCheck:
                 if fixture_file is not None and not fixture_file.is_file():
                     self.add(
                         "E008",
-                        f"fixture file {file!r} not found under {ws.root}",
-                        "fixture paths are workspace-relative",
+                        f"fixture file {file!r} not found below data.root "
+                        f"{ws.resolver.data_root_identity!r}",
+                        "fixture paths are relative to data.root",
                         node=node.id,
                         loc_suffix=("config", "file"),
                     )
@@ -729,6 +726,17 @@ class _FlowCheck:
     # -- W104 -----------------------------------------------------------------
 
     def check_reachability(self) -> None:
+        empty_canvas = (
+            not self.flow.edges
+            and len(self.flow.nodes) == 2
+            and sum(isinstance(node, StartNode) for node in self.flow.nodes) == 1
+            and sum(isinstance(node, EndNode) for node in self.flow.nodes) == 1
+            and all(
+                not node.config.ports
+                for node in self.flow.nodes
+                if isinstance(node, (StartNode, EndNode))
+            )
+        )
         adjacency: dict[str, set[str]] = {n.id: set() for n in self.flow.nodes}
         for edge in self.flow.edges:
             a, _, _ = edge.from_.partition(".")
@@ -752,7 +760,11 @@ class _FlowCheck:
                     seen.add(succ)
                     stack.append(succ)
         for node in self.flow.nodes:
-            if node.type == "note" or node.id in seen:
+            if (
+                node.type == "note"
+                or node.id in seen
+                or (empty_canvas and isinstance(node, EndNode))
+            ):
                 continue
             self.add(
                 "W104",
@@ -976,12 +988,46 @@ def _git_metadata_diagnostics(workspace: Workspace) -> list[CheckDiagnostic]:
     return diagnostics
 
 
+def _env_gitignore_diagnostics(workspace: Workspace) -> list[CheckDiagnostic]:
+    """W108: actual env profile files need root-local ignore coverage."""
+
+    discovery = workspace.discover_env_profiles()
+    names = set(discovery.profiles)
+    names.update(
+        name
+        for name, issue in discovery.issues.items()
+        if issue.reason in {"unreadable", "invalid_encoding", "invalid_format"}
+    )
+    candidates: dict[str, Path] = {}
+    for name in sorted(names):
+        if name in {"example.env", ".env.example"}:
+            continue  # committed onboarding-template convention
+        logical_path = workspace.environments_root / name
+        relative = logical_path.relative_to(workspace.root).as_posix()
+        candidates[relative] = logical_path
+
+    covered = gitignore_covered_paths(workspace.root, candidates)
+    return [
+        CheckDiagnostic(
+            code="W108",
+            message=f"env profile {relative!r} is not ignored by root .gitignore",
+            path=path,
+            hint=(
+                "add a root .gitignore rule for this profile, or use "
+                "--no-git-meta-check when committing it is intentional"
+            ),
+        )
+        for relative, path in candidates.items()
+        if relative not in covered
+    ]
+
+
 def check_workspace(
     workspace: Workspace, *, check_git_metadata: bool = True
 ) -> list[CheckDiagnostic]:
     """`napf check`: every discovered flow, the closure of referenced
     flows (FR-308), reference-DAG validation (E007), env coverage (W105),
-    and advisory root Git-metadata coverage (W109)."""
+    and advisory root Git-metadata coverage (W108/W109)."""
     resolver = _SurfaceResolver(workspace)
     diags: list[CheckDiagnostic] = []
     loaded_flows: dict[str, LoadedFlow] = {}
@@ -1020,6 +1066,7 @@ def check_workspace(
     diags.extend(_reference_cycles(references, loaded_flows))
     diags.extend(_env_coverage(workspace, loaded_flows))
     if check_git_metadata:
+        diags.extend(_env_gitignore_diagnostics(workspace))
         diags.extend(_git_metadata_diagnostics(workspace))
     return sorted(diags, key=lambda d: (str(d.path), d.line or 0, d.code))
 
@@ -1104,18 +1151,21 @@ def _env_coverage(
 ) -> list[CheckDiagnostic]:
     diags = []
     available: set[str] = set()
-    for name, path in workspace.env_profiles().items():
-        try:
-            available |= parse_env_file(path).keys()
-        except EnvFileError as e:
-            diags.append(
-                CheckDiagnostic(
-                    code="W105",
-                    message=f"env profile {name!r} could not be parsed: {e}",
-                    path=path,
-                    hint="fix the profile; its keys cannot be checked (EC36 dialect)",
-                )
+    discovery = workspace.discover_env_profiles()
+    for profile in discovery.profiles.values():
+        available |= profile.values.keys()
+    for issue in discovery.issues.values():
+        diags.append(
+            CheckDiagnostic(
+                code="W105",
+                message=f"env profile {issue.name!r} was skipped: {issue.message}",
+                path=issue.path,
+                hint=(
+                    "make it a readable regular UTF-8 file using the documented "
+                    "KEY=VALUE dialect"
+                ),
             )
+        )
     for loaded in loaded_flows.values():
         env = loaded.model.env
         if env is None:
@@ -1128,8 +1178,10 @@ def _env_coverage(
                         code="W105",
                         message=f"env.required key {key!r} in no discovered profile",
                         path=loaded.path,
-                        hint="add it to an envs/*.env profile (process env can still "
-                        "provide it at run time — EC17)",
+                        hint=(
+                            "add it to a valid profile below environments.root "
+                            "(process env can still provide it at run time — EC17)"
+                        ),
                         line=pos[0] if pos else None,
                         column=pos[1] if pos else None,
                     )

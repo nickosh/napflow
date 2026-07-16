@@ -59,16 +59,16 @@ from napflow.server.runs import (
 
 
 def make_scaffold_ws(tmp_path: Path) -> Workspace:
-    """A real `napf init` workspace — flows/smoke is the offline
+    """A real `napf init --example` workspace — flows/smoke is the offline
     fixture→python→assert flow (EC34), i.e. it exercises the worker."""
     wsdir = tmp_path / "ws"
-    list(scaffold_workspace(wsdir))
+    list(scaffold_workspace(wsdir, example=True))
     return load_workspace(wsdir)
 
 
 def make_retained_scaffold_ws(tmp_path: Path, history: int = 1) -> Workspace:
     wsdir = tmp_path / "ws"
-    list(scaffold_workspace(wsdir))
+    list(scaffold_workspace(wsdir, example=True))
     manifest = wsdir / "napflow.yaml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8")
@@ -122,9 +122,12 @@ def test_workspace_endpoint(tmp_path):
         assert response.status == 200
         payload = await response.json()
         assert payload["flows_root"] == "flows"
+        assert payload["environments_root"] == "."
+        assert payload["data_root"] == "data"
         assert payload["main"] == "flows/main"
-        assert payload["env_profiles"] == ["dev", "example"]
-        assert payload["env_default"] == "dev"
+        assert payload["env_profiles"] == [".env", ".env.example"]
+        assert payload["env_profile_warnings"] == []
+        assert payload["env_default"] == ".env"
         assert payload["version"]
 
     with_client(ws, scenario)
@@ -220,7 +223,7 @@ def test_run_smoke_flow_to_passed_with_replay(tmp_path):
 def test_server_replay_preserves_raw_declared_secret_for_local_inspection(tmp_path):
     ws = make_scaffold_ws(tmp_path)
     secret = "server-secret-token"
-    dev_env = ws.root / "envs" / "dev.env"
+    dev_env = ws.root / ".env"
     dev_env.write_text(
         dev_env.read_text(encoding="utf-8") + f"\nAPI_TOKEN={secret}\n",
         encoding="utf-8",
@@ -829,6 +832,13 @@ edges:
         )
         assert bad_env.status == 400
         assert (await bad_env.json())["error"] == "env_not_found"
+
+        unsafe_env = await client.post(
+            "/api/runs",
+            content=JSONContent({"flow": "flows/smoke", "env": "../secret.env"}),
+        )
+        assert unsafe_env.status == 400
+        assert (await unsafe_env.json())["error"] == "workspace_boundary"
 
         bad_inputs = await client.post(
             "/api/runs",

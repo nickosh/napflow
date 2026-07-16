@@ -450,7 +450,7 @@ def smoke_release_artifact(
         _run([str(napf), "--version"], cwd=temp, environment=environment)
         workspace = temp / "workspace"
         _run(
-            [str(napf), "init", str(workspace)],
+            [str(napf), "init", "--example", str(workspace)],
             cwd=temp,
             environment=environment,
         )

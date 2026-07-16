@@ -127,6 +127,34 @@ def init(
     directory: Annotated[
         Path, typer.Argument(help="Workspace directory (created if missing).")
     ] = Path(),
+    example: Annotated[
+        bool,
+        typer.Option(
+            "--example",
+            help="Include runnable smoke/HTTP examples and sample env/data files.",
+        ),
+    ] = False,
+    flows_root: Annotated[
+        str,
+        typer.Option(
+            "--flows-root",
+            help="Workspace-relative flow directory (must be a subdirectory).",
+        ),
+    ] = "flows",
+    data_root: Annotated[
+        str,
+        typer.Option(
+            "--data-root",
+            help="Workspace-relative input-data directory (must be a subdirectory).",
+        ),
+    ] = "data",
+    environments_root: Annotated[
+        str,
+        typer.Option(
+            "--environments-root",
+            help="Environment-profile directory; use '.' for the workspace root.",
+        ),
+    ] = ".",
     git_meta: Annotated[
         _GitMetadataMode | None,
         typer.Option(
@@ -142,9 +170,10 @@ def init(
         ),
     ] = True,
 ) -> None:
-    """Scaffold a workspace: manifest, flows/{main,example,smoke}, envs."""
-    if (directory / "napflow.yaml").exists():
-        typer.echo(f"error: {directory / 'napflow.yaml'} already exists", err=True)
+    """Scaffold a minimal workspace, optionally with runnable examples."""
+    manifest_path = directory / "napflow.yaml"
+    if manifest_path.exists() or manifest_path.is_symlink():
+        typer.echo(f"error: {manifest_path} already exists", err=True)
         raise typer.Exit(2)
     if not git_meta_check and git_meta is _GitMetadataMode.APPEND:
         typer.echo(
@@ -167,10 +196,14 @@ def init(
     try:
         results = scaffold_workspace(
             directory,
+            example=example,
+            flows_root=flows_root,
+            data_root=data_root,
+            environments_root=environments_root,
             check_git_metadata=git_meta_check,
             decide_git_metadata=decide_git_metadata,
         )
-    except OSError as error:
+    except (OSError, WorkspaceBoundaryError) as error:
         typer.echo(f"error: could not initialize {directory}: {error}", err=True)
         raise typer.Exit(2) from error
     for result in results:
@@ -183,7 +216,15 @@ def init(
         suffix = " (rules covered)" if result.status == "exists" and covered else ""
         typer.echo(f"  {result.status:<8} {result.relative_path}{suffix}")
         _show_git_metadata_warning(result)
-    typer.echo("\nfirst touch: cd into the workspace, then `napf check`")
+    if example:
+        typer.echo(
+            "\nfirst touch: cd into the workspace, run `napf check`, then "
+            f"`napf run {flows_root}/smoke`"
+        )
+    else:
+        typer.echo(
+            "\nfirst touch: cd into the workspace, run `napf check`, then `napf ui`"
+        )
 
 
 @app.command("list")
@@ -292,7 +333,10 @@ def run(
     flow: Annotated[str, typer.Argument(help="Flow identity, e.g. flows/login.")],
     env: Annotated[
         str | None,
-        typer.Option("--env", help="Env profile name (default: environments.default)."),
+        typer.Option(
+            "--env",
+            help="Env profile filename (default: environments.default).",
+        ),
     ] = None,
     inputs: Annotated[
         list[str] | None,
@@ -314,7 +358,7 @@ def run(
     ws = _workspace()
     # LOAD + CHECK + ENV gate shared with the server (core/runprep.py):
     # E-codes block with exit 2 across the reference closure, warnings
-    # proceed; explicit --env must exist, the default is best-effort.
+    # proceed; explicit/default env filenames must both resolve and parse.
     try:
         prepared = prepare_run(ws, flow, env)
     except RunPrepError as e:

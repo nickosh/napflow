@@ -3,28 +3,52 @@
 Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
+Record project and engineering state, not branch/commit/PR/push/pull/merge
+bookkeeping or hosting-service identifiers.
+
+## 2026-07-16 — Project-memory scope clarified
+
+- Decided: memory records product behavior, engineering decisions, verified
+  outcomes, blockers, and the next technical action—not delivery bookkeeping.
+- Updated closeout guidance and current memory entries; durable release mechanics
+  remain in `RELEASING.md`, while transient Git/hosting state stays in chat/tools.
+- Next: keep future closeouts technical and evidence-based under this boundary.
+
+## 2026-07-16 — Backend CI ANSI false-negative fixed
+
+- Diagnosed: all four backend jobs shared one ANSI-fragmented Rich help
+  assertion; product behavior and compatibility imports passed.
+- Fixed: help coverage now runs in plain and Actions-style ANSI modes, strips only
+  terminal control codes, and keeps first-touch init as a separate real invocation.
+- Verified: 762 project tests pass (11 deselected); the isolated requests+botocore
+  gate passes 761 tests (1 skipped, 11 deselected), plus Ruff/import contracts.
+- Next: confirm the repair in the three-OS CI gate.
+
+## 2026-07-15 — F7 configurable roots and deterministic init complete
+
+- Done: configurable `flows`/`data`/environment roots, literal dotenv profiles,
+  W108, minimal init, and opt-in `init --example` are implemented under D42/D44.
+- Fixed: EC57 Windows xyflow measurement/retry isolation and EC58–EC59 stable
+  environment/init boundaries, including complete no-write scaffold preflight.
+- Verified: 760 pytest + 80 Vitest + 43 Playwright pass; Ruff and both import
+  contracts pass; UI, wheel/sdist, and isolated installed-artifact smoke pass.
+- Next: confirm F7 on Linux, macOS, and Windows, then resume F2.
 
 ## 2026-07-15 — F6 Windows CI portability fix
 
 - Fixed LF-intended Git-metadata fixtures and a path-render assertion so the
   F6 tests preserve their intended semantics on Windows; runtime behavior is unchanged.
 - Verified: 92 focused and 667 full tests pass (11 deselected); Ruff format/lint
-  and import contracts pass. Next: push, then rerun PR #5's three-OS gate.
-
-## 2026-07-15 — F6 completion evidence recorded
-
-- Done: PLAN now ties completed F6 to implementation commit `da245c8` and the
-  observed 99-focused/667-full local gates; PR cross-platform CI stays pending.
-- Next: open/finish the F6 PR, then F2; F7 remains deferred.
+  and import contracts pass. Next: confirm the three-OS gate.
 
 ## 2026-07-15 — F6-only boundary; F7 deferred
 
-- Decided by owner: this branch implements F6 only; F7 remains planned but is
-  skipped for now.
+- Decided by owner: the current development slice implements F6 only; F7 remains
+  planned but is skipped for now.
 - Removed the unused configurable environment-root rule builder/tests; F6 now
   exposes only the fixed `envs/*.env` + `!envs/example.env` contract.
 - Verified: 99 focused and 667 full tests pass (11 deselected); Ruff lint and
-  format checks pass. Next: open the F6 PR, pass its cross-platform gate, then F2.
+  format checks pass. Next: cross-platform validation, then F2.
 
 ## 2026-07-15 — F6 brownfield init Git metadata complete
 
@@ -34,12 +58,12 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   exclusive-create, root-source, and read-only-check regressions.
 - Verified: 102 focused tests and full 670-test pytest suite pass (11 deselected);
   Ruff lint and format checks pass across all Python sources/tests.
-- Uncommitted on `feat/f6-init-git-metadata`; next review/commit/PR, then F2.
+- Next: cross-platform validation, then F2.
 
 ## 2026-07-15 — rolling delivery adopted (D41) + F1–F7 backlog + D42
 
-- Decided D41: no version-scoped milestone plans after v0.2.0; features merge
-  independently via PR, owner cuts releases; `main` stays releasable per merge.
+- Decided D41: no version-scoped milestone plans after v0.2.0; features complete
+  independently, the integrated project stays releasable, and the owner cuts releases.
 - Decided D42: configurable directories (`flows.root`, `environments.root`,
   future keys) never escape the workspace root — no `..`/absolute; embedded
   workspaces raise the root (manifest at host level, keys point down).
@@ -54,28 +78,27 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   `--env dev.env`; D33 window) + W108 not-ignored warning (verified live:
   `flows.root` + free fixture paths already work — document, don't
   rebuild; no gitignore mutation outside init).
-- Docs only on `docs/rolling-feature-plan`: AGENTS.md build history item 6;
-  EC22/EC27/EC35 rows point at their scheduled F-entries, still OPEN.
-- Next: merge this branch, then start F2 as its own feature branch.
+- Updated AGENTS.md build history item 6; EC22/EC27/EC35 rows point at their
+  scheduled F-entries and remain OPEN.
+- Next: start F2; F7 remains deferred.
 
 ## 2026-07-15 — v0.2.0 release-memory closeout
 
-- Done: PR #2 and release dispatch #29352493848 passed the full three-OS gate;
-  uploaded wheel/sdist names and metadata are exact `0.2.0`.
+- Done: the full three-OS release gate passed; uploaded wheel/sdist names and
+  metadata are exact `0.2.0`.
 - Closed: TR-22 and EC55 remote evidence; public status, plan, decisions,
   requirements, release process, edge ledger, and changelog reconciled.
 - Unchanged: behavior/schema specs and compatibility notes remain accurate.
-- Next: merge this docs-only closeout, rerun the dry-run on exact `main`, then
-  create and push `v0.2.0`; verify PyPI install and GitHub Release artifacts.
+- Next: publish `v0.2.0`, then verify PyPI installation and release artifacts.
 
 ## 2026-07-15 — macOS release-gate browser fix
 
-- Reproduced dry-run #29348197790: a click-added Switch stayed below the fitted
-  viewport under the flow list; its serial retry then obscured the root failure.
+- Reproduced the release-gate failure: a click-added Switch stayed below the
+  fitted viewport under the flow list; its serial retry obscured the root failure.
 - Fixed click-add to retain collision-free placement and refit after measurement;
   strengthened drag/readiness assertions and retained Playwright failure artifacts.
 - Verified: typecheck/build, 76 Vitest, 43 Playwright, and 20 repeated failure-path
-  cases pass locally; next push the branch, pass PR CI, and rerun the dry-run.
+  cases pass locally; next rerun the full release gate.
 
 ## 2026-07-14 — v0.2 M7 release candidate prepared
 
@@ -83,10 +106,9 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   release-note wiring; closed EC44 and fixed the newly recorded EC53/EC54 gaps.
 - Verified locally: 618 pytest, 76 Vitest, 43 Playwright, Ruff/import contracts,
   production UI/notices, exact artifacts, and installed-artifact smoke pass.
-- Cross-platform baseline: PR #1 run #42 is green on Linux, macOS, and Windows;
-  the final prepared tree still needs its fresh PR and non-publishing tag gate.
-- Next: when authorized, push this release-candidate commit, observe both
-  gates, then merge and tag exact `main` as `v0.2.0` to publish and verify it.
+- Cross-platform baseline is green on Linux, macOS, and Windows; the final
+  prepared tree still needs its non-publishing release gate.
+- Next: run the authoritative gates, then publish and verify exact `v0.2.0`.
 
 ## 2026-07-14 — Windows CI portability fix
 
@@ -95,7 +117,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 - Hardened tests: redirect failures allow the adapter's connection/timeout
   mapping, and clone symlinks compare target identity rather than path spelling.
 - Verified: 593 pytest plus focused cases and Ruff check/format pass locally;
-  next push this fix and confirm the Windows PR job turns green.
+  next confirm the Windows gate.
 
 ## 2026-07-14 — v0.2 M7 reusable release-gate start
 
@@ -105,8 +127,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   three inherited formatter failures exposed by the authoritative gate.
 - Verified: 593 pytest, 76 Vitest, 43 Playwright; format, Ruff, import contracts,
   production build, notice audit, and isolated installed-artifact smoke pass.
-- Next: push this gate slice, observe PR + release dry-run gates, then finish
-  v0.2 compatibility notes/spec audit and separate version/tag preparation.
+- Next: run the release dry-run, then finish the v0.2 compatibility notes/spec
+  audit and separate version/tag preparation.
 
 ## 2026-07-13 — v0.2 M6 public/package/UI contracts complete
 
@@ -263,7 +285,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 
 ## 2026-07-12 — v0.2 M0 session handoff
 
-- Landed M0 code/tests `9a08209` → `fd25ccb` on `feat/v0.2`; no code changes remain.
+- Completed M0 code/tests; no implementation work remains.
 - Done: versioned/enforced history envelope, signal-correct audit ledger, exact
   Python/browser baselines, malformed-history regressions, and tested e2e cleanup.
 - Verified: 354 pytest passes + 35 Vitest + 32 Playwright; 10 Python perf + 2
@@ -285,7 +307,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 
 ## 2026-07-12 — v0.2 M0 baseline (format marker + audit probes + perf)
 
-- Done: `feat/v0.2` branch. **Box 2** — run-history is version-marked
+- Done: **Box 2** — run-history is version-marked
   before storage changes: `run_started` is the envelope header carrying
   `format: "napflow-run/1"` (`HISTORY_FORMAT`), reader gate
   (`parse_history_format`/`is_supported`/`HistoryFormatError`) + tests;
@@ -301,8 +323,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   — `tests/test_perf_baselines.py` (opt-in `perf` marker, CI-excluded via
   `-m "not perf"`) + `docs/perf-baselines.md`. 320 passed / 5 skipped /
   6 deselected / 8 xfailed; ruff clean.
-- Decided (owner): v0.2 ships as **larger feature PRs off `feat/v0.2`**,
-  not one branch per milestone. FR-1101 and NFR-08/18 stay open (they
+- Decided (owner): v0.2 ships as **larger independently verifiable feature
+  slices**, not one slice per milestone. FR-1101 and NFR-08/18 stay open (they
   close in M3–M5 / M7 with their real implementations); no REQUIREMENTS
   tick lands from a baseline or a failing test.
 - Baseline headlines: ~42k guarded laps/s; ~20ms spawn-dominated worker
@@ -319,23 +341,22 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   (`docs/release-notes-preamble-v0.md`, wired into release.yml) —
   PLAN M0 box 1 ticked. Owner: PyPI pending publisher registered,
   dry-run green.
-- Next: push → CI green → owner flips repo public → tag v0.1.0 → push
-  tag → verify `uv tool install napflow` + first-touch. Then PR-only
-  workflow and M0 baseline work.
+- Next: complete the three-OS gate, publish v0.1.0, verify
+  `uv tool install napflow` + first-touch, then begin M0 baseline work.
 
 ## 2026-07-11 — release workflow: PyPI trusted publishing + dry-run
 
 - Done: `release.yml` restructured into build → pypi → github-release
   jobs; automated tag↔version hard gate; `workflow_dispatch` dry-run
   (build + checks, no publish); `v0.*` Releases auto-marked pre-release
-  (D33). RELEASING.md updated in the same commit.
+  (D33). RELEASING.md updated in the same change.
 - Decided (owner): repo flips public AT the v0.1.0 tag; validation is
   dry-run only (no TestPyPI rc) — first real publish is v0.1.0 itself.
 - Verified: `napflow` name free on PyPI as of today; trusted publishing
   needs no repo-visibility change and no tokens.
 - Next: owner PyPI account + pending publisher (`napflow`/`nickosh`/
-  `release.yml`/env `pypi`), push + green dry-run, then release-prep
-  commit → flip public → tag v0.1.0.
+  `release.yml`/env `pypi`), green dry-run, release preparation, then
+  publish v0.1.0.
 
 ## 2026-07-11 — first-working-version review → v0.2 plan
 
@@ -365,7 +386,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 - Noted (owner, future): explore napflow flows as citizens of other
   frameworks — e.g. pytest integration over the importable engine
   (`from napflow.core import run_flow`). No design yet; parked.
-- Next: unchanged — push + CI sweep, manual dev4 window.
+- Next: unchanged — three-OS CI sweep, then the manual dev4 window.
 
 ## 2026-07-10 — NFR-08 resolution plan + R6
 
@@ -375,7 +396,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   default, automates the method later → backlog **R6** (also gains a
   `max_concurrency` peak-bound counting assertion — the semaphore
   bound is true by construction but nothing counts it today).
-- Next: unchanged — push + CI sweep, manual window, v0.1.0 promotion.
+- Next: unchanged — three-OS CI sweep, manual window, v0.1.0 promotion.
 
 ## 2026-07-09 — dev4 wrap-up: README + checklist audit
 
@@ -383,22 +404,20 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   ✅ row, try-it now runs `napf run flows/smoke` + `napf ui`); v1
   checklist audited — NFR-05 and TR-7 ticked (oversights: every clause
   had landed with tests), CHANGELOG left stale-by-design (regenerates
-  in the v0.1.0 release-prep commit, RELEASING).
+  during v0.1.0 release preparation, RELEASING).
 - Open: **NFR-08 is the single unticked v1 box** — "overhead
   negligible vs HTTP" was never measured; candidate for the
   manual-testing window.
-- Next: owner pushes + 3-OS CI sweep → manual testing on dev4 →
-  release-prep commit (version, `uvx git-cliff --tag v0.1.0`, ticks) →
-  tag v0.1.0 → PR-only workflow from there.
+- Next: three-OS CI sweep, manual testing on dev4, then v0.1.0 release
+  preparation and publication.
 
 ## 2026-07-09 — S4 stage close: 0.1.0.dev4
 
-- Done: version bumped in the stage-completing commit (RELEASING);
+- Done: version bumped at stage completion (RELEASING);
   PLAN S4 header flipped. All S4 FRs (1001–1007) ticked with tests.
-- Next: owner pushes → 3-OS CI sweep confirms the DoD; then the
-  manual-testing window on the dev4 checkpoint, release-prep only, and
-  the v0.1.0 promotion (tag-driven, RELEASING). From the v0.1.0 tag:
-  feature branches + PRs.
+- Next: the three-OS CI sweep confirms the DoD; then the manual-testing
+  window on the dev4 checkpoint and v0.1.0 promotion (tag-driven,
+  RELEASING).
 
 ## 2026-07-09 — S4/M6 subflow UX (FR-1007)
 
@@ -445,14 +464,14 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   wire/port click inspection, log append ring, run-mode inspector —
   pure UI) + **Post-v0.1.0 backlog R1–R4** (scrubber, pause/step,
   breakpoints, opt-in payload capture); RELEASING: dev4 → manual
-  testing → v0.1.0 promotion, then feature branches + PRs only.
-- Fixed the 3-OS `ui e2e` CI red from the M5 push: run.spec ran
+  testing → v0.1.0 promotion, then independently verified feature work.
+- Fixed the 3-OS `ui e2e` CI red during M5: run.spec ran
   flows/smoke while editing.spec (parallel worker, shared workspace)
   rewrites its nodes.py with a non-original summarize — deterministic
   on 2-core CI, masked locally. Lesson: spec files share ONE
   workspace; a spec that RUNS a flow must own it exclusively
   (flows/passcase copy) + mutating specs restore what they break.
-  Reproduce CI ordering with `--workers=1` before pushing e2e.
+  Reproduce CI ordering with `--workers=1` during diagnosis.
 - Next: M5.5, then M6 + stage close (0.1.0.dev4).
 
 ## 2026-07-08 — S4/M5 run on canvas + history
@@ -468,8 +487,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   from real events only; root-frame scope (containers pulse for their
   subtree; per-container child-frame attribution needs an engine event
   change → M6 if wanted); server-run reports stay deferred.
-- Next: S4/M6 — subflow UX + stage close (0.1.0.dev4); verify this
-  push's job-level CI first (NFR-10 lesson).
+- Next: S4/M6 — subflow UX + stage close (0.1.0.dev4); confirm job-level
+  CI evidence first (NFR-10 lesson).
 
 ## 2026-07-08 — S4 consistency audit: code clean, docs synced
 
@@ -505,7 +524,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   contenteditable needs nothing — that fragility matters in the
   default-browser, not-Chromium-pinned world).
 - Next: S4/M5 — run on canvas + history (FR-1005) over the M1 WS;
-  verify this push's job-level CI results first (NFR-10 lesson).
+  confirm job-level CI evidence first (NFR-10 lesson).
 
 ## 2026-07-07 — S4/M4 editing + write path
 
@@ -533,8 +552,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   hint at connect time** (W102 surfaces post-save via diagnostics).
 - Verification gap: the sandbox blocked socket binds, so the 8
   Playwright editing e2e + the uvicorn/port pytest cases ran ONLY in
-  CI for this commit — check job-level results on the M4 push before
-  trusting the FR ticks (NFR-10 lesson).
+  CI; confirm job-level results before trusting the FR ticks
+  (NFR-10 lesson).
 - Next: S4/M5 — run on canvas + history (FR-1005) over the M1 WS.
 
 ## 2026-07-06 — S4/M3 read-only canvas
@@ -565,17 +584,16 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   harness (fresh `napf init` per run via `e2e/serve.mjs`) + 2 smokes
   green locally; static tests made bundle-independent (monkeypatched
   STATIC_DIR). NFR-03 + FR-806 + FR-1001 ticked. Also: M1's CI red was
-  a missed `ruff format` — fixed; TR-9's Windows leg rides this push.
+  a missed `ruff format` — fixed; TR-9's Windows leg awaited confirmation.
 - Decided: e2e = chromium-only in v1 (default-browser UX, engine
   matrix is overkill); e2e always runs against the BUILT bundle
   through the real server (the wheel-user path, never vite dev);
   README run-row unstuck (was 🚧 S2).
 - Next: S4/M3 — read-only canvas (flow list, `main:` default open,
   nodes/edges/layout render, D11 port coloring, E/W on canvas;
-  FR-1002 render half). Verify the ui job + TR-9 Windows leg on this
-  push's CI first.
-- [Update, same day: CI run 28785741251 all 7 jobs green — TR-9
-  Windows leg + NFR-03 ui job both CONFIRMED, ticks finalized. The
+  FR-1002 render half). Confirm the UI job + TR-9 Windows leg first.
+- [Update, same day: all seven jobs passed — TR-9 Windows leg + NFR-03
+  UI job both CONFIRMED, ticks finalized. The
   windows Playwright install stalled minutes in `--with-deps` (known
   hosted-runner behavior, it installs nothing useful there) before
   recovering; fixed to Linux-only deps + 20-min job timeout, and Node
@@ -597,8 +615,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   `run_finished` event; registry buffers drop at run end.
 - Next: S4/M2 — UI scaffold (`ui/`: Vite+React+TS+Zustand+xyflow) +
   wheel walking-skeleton (hatchling force-include, CI Node build,
-  Playwright harness + first smoke). Confirm TR-9's WINDOWS CI leg on
-  this push before treating the tick as final (NFR-10 lesson).
+  Playwright harness + first smoke). Confirm TR-9's WINDOWS CI leg before
+  treating the tick as final (NFR-10 lesson).
 
 ## 2026-07-06 — S3/M5 hierarchical frames — STAGE S3 COMPLETE
 
@@ -608,7 +626,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   flow-timeout-aborts-child (TR-8), loop results/errors (EC06/EC36),
   fresh_session cookie isolation, `check_run_closure` run gate.
   TR-3/5/8 + FR-404/405/410/515/516 ticked. 265 tests (15+1 new).
-  Version 0.1.0.dev3 (stage-closing commit). Full node catalog
+  Version 0.1.0.dev3 at stage close. Full node catalog
   runnable — SUPPORTED_NODE_TYPES gate removed as dead code.
 - Decided (EN §5 pins): flow emits optional-unwritten as null, skips
   required-unwritten (child failed instead); loop errors emit only
@@ -625,13 +643,11 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   class of bug the worker-first order + 3-OS matrix existed to catch.]
 - [Update 2: compat-job post-mortem. The NFR-10 job was born broken —
   test_architecture.py's module-level import-linter import breaks
-  collection in the dev-less venv. It never had a green run: S2/M2–M5
-  were pushed as ONE batch, so the job (added at M4) first executed at
-  CI run #10 and failed there; the 2026-07-05 NFR-10 tick was
-  premature (amended in REQUIREMENTS). Fixed via pytest.importorskip;
-  run #19 = all four legs green. Lesson: batched pushes mean a
-  mid-batch CI change is never tested standalone — verify job-level
-  results, not just the run badge, when ticking CI-backed NFRs.]
+  collection in the dev-less venv. Batched S2/M2–M5 work meant the job
+  first executed only after it had been documented as complete; the
+  NFR-10 tick was premature (amended in REQUIREMENTS). Fixed via
+  pytest.importorskip; all four legs passed. Lesson: verify job-level
+  results, not just an aggregate gate, when ticking CI-backed NFRs.]
 
 ## 2026-07-06 — S3/M4 guards + flagship retry example
 
@@ -696,11 +712,11 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 
 ## 2026-07-06 — Linux first-class (D26) + S4 UI shell pinned
 
-- Done: verified zero platform-conditional code in src/tests and 3-OS CI
-  green since M0; updated CLAUDE.md, PRODUCT, NFR-02, PLAN S4 DoD, flow
+- Done: verified zero platform-conditional code in src/tests and the 3-OS CI
+  matrix green since M0; updated CLAUDE.md, PRODUCT, NFR-02, PLAN S4 DoD, flow
   schema, engine spec header; added OS classifiers to pyproject.
 - Decided: D26 — Linux same tier as macOS/Windows (owner call; "Linux
-  via CI" hedge dropped since CI already proves it on every commit).
+  via CI" hedge dropped since the continuous matrix already proves it).
 - Decided: S4 `napf ui` opens the default browser (stdlib `webbrowser`);
   no pywebview (Linux webview system deps would break the one-wheel
   promise; three render engines to test). Chromium app-mode
@@ -715,8 +731,8 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
   retention wiring, stdout End-outputs JSON (unmasked, pipeable),
   stderr summary, junit/json reports, Ctrl-C abort, exit codes
   0/1/2/130. S2 DoD test: request→assert via `napf run` against a
-  local server, exit 0/1. 205 tests green (31 new). Version bumped
-  `0.1.0.dev2` (stage-closing commit per RELEASING.md).
+  local server, exit 0/1. 205 tests green (31 new). Version bumped to
+  `0.1.0.dev2` at stage close per RELEASING.md.
 - Decided (WM pins): run gate = single-flow check until S3; stdout NOT
   masked (functional output); `--input-json` first, `-i` overrides;
   missing default profile = note + process env; report files next to
@@ -791,12 +807,12 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 ## 2026-07-05 — S1 closeout: README, versioning, release flow, rename
 
 - Done: real README (status table, install-from-git, flow example);
-  repo renamed `napflow-prototype` → `napflow` on GitHub (remote
-  updated; old URLs redirect); version bumped `0.1.0.dev1` +
+  repo renamed `napflow-prototype` → `napflow` (old URLs redirect);
+  version bumped `0.1.0.dev1` +
   `[project.urls]`; docs consistency pass (RELEASING.md wired into
   CLAUDE.md/PLAN; "prototype" wording → "v1" in WM).
 - Decided (`docs/RELEASING.md`, adopted): `0.1.0.devN` bumps in the
-  stage-closing commit; releases are tag-driven via `release.yml`
+  stage-closing change; releases are tag-driven via `release.yml`
   (gate → build → git-cliff notes → GitHub Release; inert until first
   tag); PyPI via trusted publishing deferred with a written checklist.
 - Next: S2/M-first — engine scheduler + frames (FR-401..), templating
@@ -869,13 +885,13 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 ## 2026-07-04 — S1/M0 repo scaffolding
 
 - Done: pyproject (hatchling, src layout, `napflow/{core,cli}`), pytest +
-  ruff + import-linter contract test (NFR-01 green), 3-OS GitHub Actions
+  ruff + import-linter contract test (NFR-01 green), 3-OS CI
   workflow, cliff.toml + generated CHANGELOG.md (NFR-11), README, LICENSE
   + NOTICE (NFR-07), uv.lock committed; wheel builds clean.
 - Decided: hatchling as build backend (S4 will need to force-include the
   pre-built UI in the wheel); dev on 3.12 via `.python-version`.
-- Next: S1/M1 (Pydantic models). [Update, same day: CI run #1 green on
-  all three OS in 33s — M0 closed.]
+- Next: S1/M1 (Pydantic models). [Update, same day: CI green on all
+  three OS — M0 closed.]
 
 ## 2026-07-04 — Session tooling
 
@@ -891,7 +907,7 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 
 - Done: full doc set adopted and internally consistent — specs
   (flow-schema v0.4, engine v0.2, manifest v0.3), D01–D25, EC01–EC37,
-  PRODUCT, REQUIREMENTS, yaml-profile, PLAN; five commits on `main`.
+  PRODUCT, REQUIREMENTS, yaml-profile, and PLAN.
 - Decided: tech stack stays as-is (niquests/BlackSheep, with adapter
   seam + compat CI as insurance); endpoint collections and
   Postman/OpenAPI import parked for v2; tooling = native tasks +

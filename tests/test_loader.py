@@ -28,7 +28,7 @@ def test_load_flow_returns_doc_and_view() -> None:
 def test_load_manifest_returns_doc_and_view() -> None:
     loaded = load_manifest(DATA_DIR / "napflow.yaml")
     assert isinstance(loaded.doc, CommentedMap)
-    assert loaded.model.environments.default == "dev"
+    assert loaded.model.environments.default == ".env"
 
 
 def test_parse_error_is_positioned(tmp_path: Path) -> None:

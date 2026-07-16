@@ -67,7 +67,10 @@ DEV_ENV = "BASE_URL=https://httpbin.org\n"
 
 
 def test_clean_flow_has_no_diagnostics(tmp_path: Path) -> None:
-    ws = make_ws(tmp_path, {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV})
+    ws = make_ws(
+        tmp_path,
+        {"flows/main/flow.yaml": OK_FLOW, ".env.example": DEV_ENV},
+    )
     assert check_workspace(ws) == []
 
 
@@ -252,7 +255,7 @@ def test_e008_broken_references(tmp_path: Path) -> None:
         "  - {id: start, type: start}\n"
         "  - {id: sub, type: flow, config: {flow: flows/ghost}}\n"
         '  - {id: dyn, type: flow, config: {flow: "flows/{{ x }}"}}\n'
-        "  - {id: fix, type: fixture, config: {file: fixtures/nope.json}}\n"
+        "  - {id: fix, type: fixture, config: {file: nope.json}}\n"
         "  - {id: py, type: python, config: {function: missing}}\n"
         "  - {id: end, type: end}\n"
     )
@@ -264,8 +267,27 @@ def test_e008_broken_references(tmp_path: Path) -> None:
     assert len(e008) == 4
     assert any("flows/ghost" in m for m in e008)
     assert any("static path" in m for m in e008)
-    assert any("fixtures/nope.json" in m for m in e008)
+    assert any("nope.json" in m for m in e008)
     assert any("'missing' not found" in m for m in e008)
+
+
+def test_fixture_check_uses_configured_data_root(tmp_path: Path) -> None:
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: fix, type: fixture, config: {file: users.json}}\n"
+        "  - {id: end, type: end, config: {ports: [{name: value}]} }\n",
+        "  - {from: fix.value, to: end.value}\n",
+    )
+    ws = make_ws(
+        tmp_path,
+        {
+            "napflow.yaml": "schema: napflow/v1\ndata: {root: testdata}\n",
+            "flows/t/flow.yaml": flow,
+            "testdata/users.json": "[]",
+        },
+    )
+
+    assert not any(d.code == "E008" for d in check_workspace(ws))
 
 
 def test_e008_rejects_lexical_workspace_boundary_paths(tmp_path: Path) -> None:
@@ -289,7 +311,7 @@ def test_e008_rejects_reference_and_fixture_symlink_escapes(tmp_path: Path) -> N
     flow = _flow(
         "  - {id: start, type: start}\n"
         "  - {id: sub, type: flow, config: {flow: flows/escape}}\n"
-        "  - {id: fix, type: fixture, config: {file: fixtures/escape.json}}\n"
+        "  - {id: fix, type: fixture, config: {file: escape.json}}\n"
         "  - {id: end, type: end}\n"
     )
     ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow})
@@ -298,10 +320,10 @@ def test_e008_rejects_reference_and_fixture_symlink_escapes(tmp_path: Path) -> N
     outside_flow = _flow("  - {id: start, type: start}\n  - {id: end, type: end}\n")
     (outside / "flow.yaml").write_text(outside_flow, encoding="utf-8")
     (outside / "data.json").write_text("[]", encoding="utf-8")
-    (tmp_path / "fixtures").mkdir()
+    (tmp_path / "data").mkdir()
     try:
         (tmp_path / "flows" / "escape").symlink_to(outside, target_is_directory=True)
-        (tmp_path / "fixtures" / "escape.json").symlink_to(outside / "data.json")
+        (tmp_path / "data" / "escape.json").symlink_to(outside / "data.json")
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable on this platform/privilege level")
 
@@ -542,11 +564,11 @@ def test_w104_unreachable_node(tmp_path: Path) -> None:
         "  - {id: start, type: start}\n"
         "  - {id: stranded, type: log, config: {}}\n"
         "  - {id: readme, type: note, config: {text: docs}}\n"
-        "  - {id: source, type: fixture, config: {file: fixtures/a.json}}\n"
+        "  - {id: source, type: fixture, config: {file: a.json}}\n"
         "  - {id: end, type: end, config: {ports: [{name: r, required: false}]}}\n",
         "  - {from: source.value, to: end.r}\n",
     )
-    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow, "fixtures/a.json": "[]"})
+    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow, "data/a.json": "[]"})
     w104 = [d for d in check_workspace(ws) if d.code == "W104"]
     # stranded (log, wired nowhere) — but NOT the note, NOT the
     # trigger-less fixture (it self-seeds), NOT end (fed by fixture)
@@ -561,7 +583,7 @@ def test_w105_env_key_in_no_profile(tmp_path: Path) -> None:
     flow = OK_FLOW  # requires BASE_URL
     ws = make_ws(
         tmp_path,
-        {"flows/main/flow.yaml": flow, "envs/dev.env": "OTHER=1\n"},
+        {"flows/main/flow.yaml": flow, ".env.example": "OTHER=1\n"},
     )
     w105 = [d for d in check_workspace(ws) if d.code == "W105"]
     assert len(w105) == 1
@@ -571,10 +593,100 @@ def test_w105_env_key_in_no_profile(tmp_path: Path) -> None:
 def test_w105_unparseable_profile(tmp_path: Path) -> None:
     ws = make_ws(
         tmp_path,
-        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": "not a kv line\n"},
+        {"flows/main/flow.yaml": OK_FLOW, ".env.example": "not a kv line\n"},
     )
     w105 = [d for d in check_workspace(ws) if d.code == "W105"]
-    assert any("could not be parsed" in d.message for d in w105)
+    assert any(
+        "was skipped" in d.message and "expected KEY=VALUE" in d.message for d in w105
+    )
+
+
+def test_w108_warns_for_each_unignored_profile_in_configured_root(
+    tmp_path: Path,
+) -> None:
+    ws = make_ws(
+        tmp_path,
+        {
+            "napflow.yaml": ("schema: napflow/v1\nenvironments: {root: config/env}\n"),
+            "config/env/dev.env": "TOKEN=secret\n",
+            "config/env/.env.staging": "TOKEN=stage\n",
+            ".gitignore": "/config/env/dev.env\n",
+        },
+        git_metadata=False,
+    )
+
+    warnings = [d for d in check_workspace(ws) if d.code == "W108"]
+
+    assert len(warnings) == 1
+    assert warnings[0].path == tmp_path / "config/env/.env.staging"
+    assert "config/env/.env.staging" in warnings[0].message
+
+
+def test_w108_uses_root_gitignore_semantics_and_order(tmp_path: Path) -> None:
+    ws = make_ws(
+        tmp_path,
+        {
+            "napflow.yaml": "schema: napflow/v1\nenvironments: {root: envs}\n",
+            "envs/dev.env": "A=1\n",
+            "envs/kept.env": "A=2\n",
+            ".gitignore": "envs/*.env\n!envs/kept.env\n",
+        },
+        git_metadata=False,
+    )
+
+    warnings = [d for d in check_workspace(ws) if d.code == "W108"]
+
+    assert [d.path.name for d in warnings] == ["kept.env"]
+
+
+def test_w108_supports_root_environment_layout_and_exempts_template(
+    tmp_path: Path,
+) -> None:
+    ws = make_ws(
+        tmp_path,
+        {
+            "napflow.yaml": "schema: napflow/v1\nenvironments: {root: .}\n",
+            ".env": "A=1\n",
+            ".env.example": "A=template\n",
+            ".gitignore": "/.env\n",
+        },
+        git_metadata=False,
+    )
+
+    assert not any(d.code == "W108" for d in check_workspace(ws))
+
+
+def test_w108_parent_gitignore_never_counts_and_opt_out_suppresses_it(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".gitignore").write_text("*.env\n", encoding="utf-8")
+    root = tmp_path / "workspace"
+    ws = make_ws(
+        root,
+        {".env": "A=1\n", ".gitignore": ".napflow/\n"},
+        git_metadata=False,
+    )
+
+    assert any(d.code == "W108" for d in check_workspace(ws))
+    assert not any(
+        d.code in {"W108", "W109"}
+        for d in check_workspace(ws, check_git_metadata=False)
+    )
+
+
+def test_w108_missing_root_gitignore_still_reports_exposed_profile(
+    tmp_path: Path,
+) -> None:
+    ws = make_ws(
+        tmp_path,
+        {".env": "TOKEN=secret\n"},
+        git_metadata=False,
+    )
+
+    diagnostics = check_workspace(ws)
+
+    assert [d.path for d in diagnostics if d.code == "W108"] == [tmp_path / ".env"]
+    assert any(d.code == "W109" and d.path.name == ".gitignore" for d in diagnostics)
 
 
 def test_w107_implicit_coercion_lint(tmp_path: Path) -> None:
@@ -598,7 +710,7 @@ def test_w107_implicit_coercion_lint(tmp_path: Path) -> None:
 def test_w109_missing_root_git_metadata_is_path_specific(tmp_path: Path) -> None:
     ws = make_ws(
         tmp_path,
-        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+        {"flows/main/flow.yaml": OK_FLOW, ".env.example": DEV_ENV},
         git_metadata=False,
     )
 
@@ -606,7 +718,7 @@ def test_w109_missing_root_git_metadata_is_path_specific(tmp_path: Path) -> None
 
     assert [d.path.name for d in diagnostics] == [".gitattributes", ".gitignore"]
     assert "*.yaml text eol=lf" in diagnostics[0].message
-    assert "envs/*.env" in diagnostics[1].message
+    assert ".napflow/" in diagnostics[1].message
     assert all(d.severity == "warning" and d.node_id is None for d in diagnostics)
     assert all(d.hint and str(d.path) in d.render() for d in diagnostics)
 
@@ -614,12 +726,12 @@ def test_w109_missing_root_git_metadata_is_path_specific(tmp_path: Path) -> None
 def test_w109_lists_only_canonical_additions_and_check_is_read_only(
     tmp_path: Path,
 ) -> None:
-    gitignore = "# owner\n.napflow/\n"
+    gitignore = "# owner\n"
     ws = make_ws(
         tmp_path,
         {
             "flows/main/flow.yaml": OK_FLOW,
-            "envs/dev.env": DEV_ENV,
+            ".env.example": DEV_ENV,
             ".gitignore": gitignore,
         },
     )
@@ -629,16 +741,15 @@ def test_w109_lists_only_canonical_additions_and_check_is_read_only(
     diagnostic = next(d for d in check_workspace(ws) if d.path == path)
 
     assert diagnostic.code == "W109"
-    assert "envs/*.env" in diagnostic.message
-    assert "!envs/example.env" in diagnostic.message
-    assert ".napflow/" not in diagnostic.message
+    assert ".napflow/" in diagnostic.message
+    assert "/.env" not in diagnostic.message
     assert path.read_bytes() == before
 
 
 def test_w109_non_lf_warns_even_when_rules_are_covered(tmp_path: Path) -> None:
     ws = make_ws(
         tmp_path,
-        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+        {"flows/main/flow.yaml": OK_FLOW, ".env.example": DEV_ENV},
     )
     path = tmp_path / ".gitattributes"
     path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
@@ -653,7 +764,7 @@ def test_w109_non_lf_warns_even_when_rules_are_covered(tmp_path: Path) -> None:
 def test_w109_invalid_utf8_warns_without_crashing(tmp_path: Path) -> None:
     ws = make_ws(
         tmp_path,
-        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+        {"flows/main/flow.yaml": OK_FLOW, ".env.example": DEV_ENV},
     )
     path = tmp_path / ".gitignore"
     path.write_bytes(b"owner=\xff\n")
@@ -669,7 +780,7 @@ def test_w109_can_be_disabled_for_intentional_workspace_policy(
 ) -> None:
     ws = make_ws(
         tmp_path,
-        {"flows/main/flow.yaml": OK_FLOW, "envs/dev.env": DEV_ENV},
+        {"flows/main/flow.yaml": OK_FLOW, ".env.example": DEV_ENV},
         git_metadata=False,
     )
 

@@ -52,16 +52,18 @@ my-workspace/
     login/
       flow.yaml
       nodes.py
-  fixtures/              # test data for fixture nodes (committed)
+  data/                  # input data for fixture nodes (committed)
     users.json
-  envs/                  # scaffold intends real profiles to stay local (D43)
-    dev.env
-    example.env          # committed onboarding template (maintained manually;
-                         #   future: `napf check --write-env-example`)
+  .env                   # optional local profile; exact filename is its id
+  .env.example           # optional committed onboarding template
   .napflow/              # raw run history/cache; scaffold adds an advisory ignore
 ```
 
 **Every canvas is a flow.** `flows/main` is simply the default entry flow.
+All three source roots are manifest-configurable and workspace-contained:
+`flows.root`, `data.root`, and `environments.root` (D42/D44). Fixture-node
+`file:` values are relative to `data.root`; environment discovery is
+non-recursive in `environments.root`.
 
 ## Execution model (message-driven)
 
@@ -232,7 +234,7 @@ Flows that treat exhaustion as success mark `job` `required: false` instead.
 | `timeout` | cycle guard: deadline gate | `seconds` | in; out: `continue`, `expired` |
 | `delay`   | wait before continuing | `seconds` (templatable) | in, out |
 | `log`     | show value in UI / stderr | `label`, `level` | in, out (pass-through) |
-| `fixture` | load JSON/CSV from `fixtures/` | `file`, `format` | in: `trigger` (optional); out: `value` |
+| `fixture` | load JSON/CSV below `data.root` | `file`, `format` | in: `trigger` (optional); out: `value` |
 | `note`    | canvas documentation (markdown) | `text` | none |
 
 Catalog notes:
