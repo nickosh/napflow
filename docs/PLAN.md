@@ -938,6 +938,21 @@ slices named here are the expected shape, not commitments.
       updates are deliberate and named in the change); production build and the
       frontend notices audit stay in the gate.
 
+Progress 2026-07-17: the owner supplied a complete visual design as a
+Claude Design handoff (Nocturne design system; owner picked the Soft
+aesthetic, dark+light, reduced card shadows) — it supersedes Slice 0's
+token-selection half. Landed as one slice: bundled Inter/JetBrains
+Mono/Phosphor icons (local-first, no CDN; OFL-1.1 reviewed into the
+notices gate), full-bleed canvas with floating chrome (flows menu +
+breadcrumb, ⌘K palette, zoom cluster, minimap, bottom add/tidy/run bar,
+drag-to-trash), per-type node cards (sizes, icons, always-editable quick
+fields) with the FULL config editor in-card — owner call: the right
+Inspector is dropped; a selected card grows to host its editors — plus a
+unified console (events/history/diagnostics tabs), tidy auto-layout, and
+restyled run visuals. Replay scrubber explicitly kept deferred (D39).
+Scaffold layouts widened for the new card sizes. Remaining F1 slices
+(store split, undo/redo, audit-driven ergonomics) unchanged.
+
 Exit: the owner completes a real API-testing task in the UI without
 dropping to hand-editing YAML for routine operations; only then do README
 demos/screenshots land (deferred owner call above).

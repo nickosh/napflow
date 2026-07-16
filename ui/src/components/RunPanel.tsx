@@ -1,4 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  ArrowLineDown,
+  CaretDown,
+  CheckCircle,
+  ClockCounterClockwise,
+  ListDashes,
+  Prohibit,
+  Stethoscope,
+  WarningCircle,
+  X,
+  XCircle,
+} from "@phosphor-icons/react";
 
 import { fetchRunEventDetail } from "../api";
 import {
@@ -12,15 +24,16 @@ import {
   type RunRecord,
 } from "../runview";
 import { useAppStore } from "../store";
+import DiagnosticsPanel from "./DiagnosticsPanel";
 
 const STATE_COLORS: Record<string, string> = {
-  running: "#1565c0",
-  passed: "#2e7d32",
-  failed: "#c62828",
-  error: "#b71c1c",
-  aborted: "#616161",
-  incomplete: "#ef6c00",
-  indeterminate: "#ef6c00",
+  running: "#5f8fd9",
+  passed: "#3a9e83",
+  failed: "#c75c5c",
+  error: "#b34a4a",
+  aborted: "#75798c",
+  incomplete: "#bd8a44",
+  indeterminate: "#bd8a44",
 };
 
 // keep the DOM sane on huge runs — the JSONL stays the full record
@@ -35,16 +48,10 @@ function StateChip({
 }) {
   return (
     <span
+      className="nf-state"
       data-testid={testId}
       data-state={state}
-      style={{
-        background: STATE_COLORS[state] ?? "#616161",
-        color: "#fff",
-        borderRadius: 8,
-        fontSize: 11,
-        fontWeight: 600,
-        padding: "1px 8px",
-      }}
+      style={{ background: STATE_COLORS[state] ?? "#75798c" }}
     >
       {state}
     </span>
@@ -131,7 +138,7 @@ function ExpandedRecord({ expansion }: { expansion: RecordExpansion }) {
     return (
       <p
         data-testid="run-event-detail-loading"
-        style={{ margin: "4px 0 6px 92px", color: "#666" }}
+        style={{ margin: "4px 0 6px 92px", color: "var(--muted)" }}
       >
         loading full event…
       </p>
@@ -141,7 +148,7 @@ function ExpandedRecord({ expansion }: { expansion: RecordExpansion }) {
     return (
       <p
         data-testid="run-event-detail-error"
-        style={{ margin: "4px 0 6px 92px", color: "#c62828" }}
+        style={{ margin: "4px 0 6px 92px", color: "var(--err)" }}
       >
         {expansion.error}
       </p>
@@ -154,12 +161,14 @@ function ExpandedRecord({ expansion }: { expansion: RecordExpansion }) {
       style={{
         margin: "2px 0 6px 92px",
         padding: "6px 8px",
-        background: "#f7f7f7",
-        borderRadius: 4,
+        background: "var(--surface2)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--rsm)",
         maxHeight: 300,
         overflow: "auto",
         whiteSpace: "pre-wrap",
         wordBreak: "break-all",
+        userSelect: "text",
       }}
     >
       {JSON.stringify(expansion.detail, null, 2)}
@@ -179,28 +188,38 @@ function EventRow({
     <li
       data-testid="run-event"
       data-event={record.event}
-      style={{ borderBottom: "1px solid #f0f0f0" }}
+      style={{ borderBottom: "1px solid var(--border)" }}
     >
       <div
         onClick={expansion.toggle}
         style={{
           display: "flex",
-          gap: 8,
-          padding: "1px 0",
+          gap: 10,
+          padding: "2px 0",
           cursor: "pointer",
           alignItems: "baseline",
           whiteSpace: "nowrap",
         }}
       >
-        <span style={{ color: "#aaa", minWidth: 84, fontVariantNumeric: "tabular-nums" }}>
+        <span
+          style={{
+            color: "var(--muted)",
+            minWidth: 84,
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
           {clock(record.ts)}
         </span>
         {record.frame !== undefined && record.frame !== ROOT_FRAME && (
-          <span style={{ color: "#7b1fa2" }}>{record.frame}</span>
+          <span style={{ color: "var(--accent)" }}>{record.frame}</span>
         )}
-        <span style={{ minWidth: 90, fontWeight: 600 }}>{record.node ?? "—"}</span>
-        <span style={{ minWidth: 120, color: "#555" }}>{record.event}</span>
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", color: "#333" }}>
+        <span style={{ minWidth: 90, fontWeight: 600 }}>
+          {record.node ?? "—"}
+        </span>
+        <span style={{ minWidth: 120, color: "var(--muted)" }}>
+          {record.event}
+        </span>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
           {summarize(record)}
         </span>
       </div>
@@ -222,33 +241,32 @@ function MessageRow({
   return (
     <li
       data-testid="run-message"
-      style={{ borderBottom: "1px solid #f0f0f0" }}
+      style={{ borderBottom: "1px solid var(--border)" }}
     >
       <div
         onClick={expansion.toggle}
         style={{
           display: "flex",
-          gap: 8,
-          padding: "1px 0",
+          gap: 10,
+          padding: "2px 0",
           cursor: "pointer",
           alignItems: "baseline",
           whiteSpace: "nowrap",
         }}
       >
-        <span style={{ color: "#aaa", minWidth: 84, fontVariantNumeric: "tabular-nums" }}>
-          {clock(record.ts)}
-        </span>
-        <span style={{ color: "#888", minWidth: 90, fontFamily: "ui-monospace, monospace" }}>
-          {String(record.msg_id ?? "—")}
-        </span>
         <span
           style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            color: "#333",
-            fontFamily: "ui-monospace, monospace",
+            color: "var(--muted)",
+            minWidth: 84,
+            fontVariantNumeric: "tabular-nums",
           }}
         >
+          {clock(record.ts)}
+        </span>
+        <span style={{ color: "var(--muted)", minWidth: 90 }}>
+          {String(record.msg_id ?? "—")}
+        </span>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
           {preview(messageValue(record), 200)}
         </span>
       </div>
@@ -264,36 +282,45 @@ function MessageRow({
 function HistoryTab() {
   const { runHistory, runId, openHistoryRun } = useAppStore();
   if (runHistory === null) {
-    return <p style={{ color: "#888", margin: "0.5rem 0" }}>loading…</p>;
+    return <p style={{ color: "var(--muted)", margin: "0.5rem 0" }}>loading…</p>;
   }
   if (runHistory.length === 0) {
     return (
-      <p data-testid="history-empty" style={{ color: "#888", margin: "0.5rem 0" }}>
+      <p
+        data-testid="history-empty"
+        style={{ color: "var(--muted)", margin: "0.5rem 0" }}
+      >
         no runs yet — every run (canvas or `napf run`) lands here
       </p>
     );
   }
   return (
     <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-      {runHistory.map((entry) => (
-        <li
-          key={entry.run_id}
-          data-testid="history-run"
-          onClick={() => void openHistoryRun(entry.run_id)}
-          style={{
-            display: "flex",
-            gap: 10,
-            alignItems: "baseline",
-            padding: "2px 0",
-            cursor: "pointer",
-            fontFamily: "ui-monospace, monospace",
-            background: entry.run_id === runId ? "#e3f2fd" : undefined,
-          }}
-        >
-          <StateChip state={entry.state} testId="history-state" />
-          <span>{entry.run_id}</span>
-        </li>
-      ))}
+      {runHistory.map((entry) => {
+        const StatusIcon =
+          entry.state === "passed"
+            ? CheckCircle
+            : entry.state === "failed" || entry.state === "error"
+              ? XCircle
+              : WarningCircle;
+        return (
+          <li
+            key={entry.run_id}
+            data-testid="history-run"
+            className={`nf-row${entry.run_id === runId ? " nf-active" : ""}`}
+            onClick={() => void openHistoryRun(entry.run_id)}
+            style={{ fontFamily: "var(--mono)", padding: "5px 8px" }}
+          >
+            <StatusIcon
+              size={14}
+              weight="fill"
+              color={STATE_COLORS[entry.state] ?? "var(--muted)"}
+            />
+            <StateChip state={entry.state} testId="history-state" />
+            <span>{entry.run_id}</span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -326,7 +353,7 @@ function FrameBrowser() {
     <div
       data-testid="run-frame-browser"
       style={{
-        borderBottom: "1px solid #e5e5e5",
+        borderBottom: "1px solid var(--border)",
         paddingBottom: 4,
         marginBottom: 4,
       }}
@@ -339,15 +366,17 @@ function FrameBrowser() {
           <>
             <button
               data-testid="run-frame-root"
+              className="nf-btn"
               onClick={() => void rootRunFrame()}
-              style={{ fontSize: 11 }}
+              style={{ fontSize: 11, padding: "1px 8px" }}
             >
               root
             </button>
             <button
               data-testid="run-frame-parent"
+              className="nf-btn"
               onClick={() => void backRunFrame()}
-              style={{ fontSize: 11 }}
+              style={{ fontSize: 11, padding: "1px 8px" }}
             >
               ← parent
             </button>
@@ -361,8 +390,9 @@ function FrameBrowser() {
         {runFrameChildrenAfterSeq > 0 && (
           <button
             data-testid="run-frames-first"
+            className="nf-btn"
             onClick={() => void pageRunFrames("first")}
-            style={{ fontSize: 11 }}
+            style={{ fontSize: 11, padding: "1px 8px" }}
           >
             first children
           </button>
@@ -370,20 +400,21 @@ function FrameBrowser() {
         {runFrameChildrenHasMore && (
           <button
             data-testid="run-frames-next"
+            className="nf-btn"
             onClick={() => void pageRunFrames("next")}
-            style={{ fontSize: 11 }}
+            style={{ fontSize: 11, padding: "1px 8px" }}
           >
             next children →
           </button>
         )}
       </div>
       {runFrameLoading && (
-        <span data-testid="run-frame-loading" style={{ color: "#777" }}>
+        <span data-testid="run-frame-loading" style={{ color: "var(--muted)" }}>
           loading frame detail…
         </span>
       )}
       {runFrameError !== null && (
-        <span data-testid="run-frame-error" style={{ color: "#c62828" }}>
+        <span data-testid="run-frame-error" style={{ color: "var(--err)" }}>
           {runFrameError}
         </span>
       )}
@@ -404,15 +435,14 @@ function FrameBrowser() {
               <button
                 data-testid="run-frame-child"
                 data-frame={summary.frame}
+                className="nf-btn"
                 onClick={() => void openRunFrame(summary)}
                 title={`${summary.frame} · ${Math.round(summary.duration_ms)}ms`}
                 style={{
-                  display: "flex",
                   gap: 5,
-                  alignItems: "center",
                   whiteSpace: "nowrap",
                   fontSize: 11,
-                  fontFamily: "inherit",
+                  padding: "2px 8px",
                 }}
               >
                 <StateChip state={summary.state} testId="run-frame-child-state" />
@@ -426,11 +456,13 @@ function FrameBrowser() {
   );
 }
 
-/** Bottom run surface (FR-1005): live/replayed event stream with
- * expandable full wire detail, plus the run history browser (replay =
- * re-read the JSONL, D13; EC20 dangling starts read `incomplete`). */
+/** F1 console (FR-1005): one bottom panel hosting the live/replayed
+ * event stream with expandable full wire detail, the run history
+ * browser (replay = re-read the JSONL, D13; EC20 dangling starts read
+ * `incomplete`), and the checker diagnostics as a third tab. */
 export default function RunPanel() {
   const {
+    detail,
     runView,
     runId,
     runLive,
@@ -452,6 +484,7 @@ export default function RunPanel() {
     abortRun,
     exitRun,
     openRunPanel,
+    closeRunPanel,
     pageRunEvents,
   } = useAppStore();
   const listRef = useRef<HTMLDivElement>(null);
@@ -460,6 +493,7 @@ export default function RunPanel() {
   // back to the bottom (or pressing it) re-engages
   const [follow, setFollow] = useState(true);
   const recordCount = runView?.recordCount ?? 0;
+  const diagnostics = detail?.diagnostics ?? [];
 
   // a fresh run (or replay) starts back at the tail
   useEffect(() => {
@@ -503,70 +537,81 @@ export default function RunPanel() {
       ? { runId, flow: selectedFlow }
       : null;
 
-  const tabStyle = (active: boolean): React.CSSProperties => ({
-    fontSize: 12,
-    padding: "2px 10px",
-    cursor: "pointer",
-    fontFamily: "inherit",
-    border: "none",
-    borderBottom: active ? "2px solid #1565c0" : "2px solid transparent",
-    background: "none",
-    fontWeight: active ? 600 : 400,
-  });
-
   return (
     <section
       data-testid="run-panel"
       style={{
-        borderTop: "1px solid #ddd",
-        height: 230,
+        borderTop: "1px solid var(--border)",
+        height: 250,
         display: "flex",
         flexDirection: "column",
         fontSize: 12,
-        background: "#fcfcfc",
+        background: "var(--surface)",
+        flexShrink: 0,
       }}
     >
       <header
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          padding: "0.3rem 1rem",
-          borderBottom: "1px solid #eee",
+          gap: 6,
+          padding: "6px 12px",
+          borderBottom: "1px solid var(--border)",
         }}
       >
         <button
           data-testid="tab-events"
-          style={tabStyle(tab === "events")}
+          className={`nf-tab${tab === "events" ? " nf-active" : ""}`}
           disabled={runView === null}
           onClick={() => openRunPanel("events")}
         >
-          events
+          <ListDashes size={13} />
+          Events
         </button>
         <button
           data-testid="tab-history"
-          style={tabStyle(tab === "history")}
+          className={`nf-tab${tab === "history" ? " nf-active" : ""}`}
           onClick={() => openRunPanel("history")}
         >
-          history
+          <ClockCounterClockwise size={13} />
+          History
+        </button>
+        <button
+          data-testid="tab-diagnostics"
+          className={`nf-tab${tab === "diag" ? " nf-active" : ""}`}
+          onClick={() => openRunPanel("diag")}
+        >
+          <Stethoscope size={13} />
+          Diagnostics
+          {diagnostics.length > 0 && (
+            <span className="nf-badge">{diagnostics.length}</span>
+          )}
         </button>
         {runView !== null && (
           <>
             <StateChip state={runView.state} />
-            <span style={{ color: "#888", fontFamily: "ui-monospace, monospace" }}>
+            <span style={{ color: "var(--muted)", fontFamily: "var(--mono)" }}>
               {runId}
             </span>
             {runView.durationMs !== null && (
               <span>{Math.round(runView.durationMs)}ms</span>
             )}
             <span data-testid="run-asserts">
-              asserts <span style={{ color: "#2e7d32" }}>{runView.asserts.passed}✓</span>{" "}
-              <span style={{ color: runView.asserts.failed > 0 ? "#c62828" : "#888" }}>
+              asserts{" "}
+              <span style={{ color: "var(--ok)" }}>
+                {runView.asserts.passed}✓
+              </span>{" "}
+              <span
+                style={{
+                  color:
+                    runView.asserts.failed > 0 ? "var(--err)" : "var(--muted)",
+                }}
+              >
                 {runView.asserts.failed}✗
               </span>
             </span>
             {runView.errorReason !== null && (
-              <span style={{ color: "#b71c1c" }} title={runView.errorReason}>
+              <span style={{ color: "var(--err-bright)" }} title={runView.errorReason}>
                 {runView.errorReason}
               </span>
             )}
@@ -575,18 +620,10 @@ export default function RunPanel() {
         {selectedNode !== null && (
           <button
             data-testid="run-filter"
+            className="nf-btn nf-btn-accent"
             title="showing this node's events only — click to clear"
             onClick={() => selectNode(null)}
-            style={{
-              fontSize: 11,
-              cursor: "pointer",
-              fontFamily: "inherit",
-              borderRadius: 8,
-              border: "1px solid #1565c0",
-              color: "#1565c0",
-              background: "#e3f2fd",
-              padding: "0 8px",
-            }}
+            style={{ fontSize: 11, padding: "0 8px", borderRadius: 8 }}
           >
             {selectedNode} ✕
           </button>
@@ -594,18 +631,10 @@ export default function RunPanel() {
         {runSelection !== null && (
           <button
             data-testid="traffic-filter"
+            className="nf-btn nf-btn-accent"
             title="showing the messages that crossed this wire/port — click to clear"
             onClick={() => selectRunTraffic(null)}
-            style={{
-              fontSize: 11,
-              cursor: "pointer",
-              fontFamily: "inherit",
-              borderRadius: 8,
-              border: "1px solid #1565c0",
-              color: "#1565c0",
-              background: "#e3f2fd",
-              padding: "0 8px",
-            }}
+            style={{ fontSize: 11, padding: "0 8px", borderRadius: 8 }}
           >
             {trafficLabel(runSelection)} ×{messages.length} ✕
           </button>
@@ -616,6 +645,7 @@ export default function RunPanel() {
             data-testid="follow-toggle"
             aria-pressed={follow}
             title="follow the live event tail (scrolling up releases it)"
+            className="nf-btn"
             onClick={() => {
               const next = !follow;
               setFollow(next);
@@ -623,51 +653,50 @@ export default function RunPanel() {
                 listRef.current.scrollTop = listRef.current.scrollHeight;
               }
             }}
-            style={{
-              fontSize: 12,
-              padding: "2px 10px",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              borderRadius: 3,
-              border: "1px solid #1565c0",
-              // pressed = held down: filled while following
-              background: follow ? "#1565c0" : "#fff",
-              color: follow ? "#fff" : "#1565c0",
-            }}
+            style={
+              follow
+                ? {
+                    background: "var(--accent-t)",
+                    borderColor: "var(--accent)",
+                    color: "var(--accent)",
+                  }
+                : undefined
+            }
           >
-            ⇣ follow
+            <ArrowLineDown size={12} />
+            follow
           </button>
         )}
         {runLive && (
           <button
             data-testid="abort-run"
+            className="nf-btn nf-btn-danger"
             onClick={() => void abortRun()}
-            style={{
-              fontSize: 12,
-              padding: "2px 10px",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              color: "#c62828",
-              border: "1px solid #c62828",
-              borderRadius: 3,
-              background: "#fff",
-            }}
           >
-            ■ abort
+            <Prohibit size={12} />
+            abort
+          </button>
+        )}
+        {runView !== null && (
+          <button
+            data-testid="exit-run"
+            className="nf-btn"
+            onClick={exitRun}
+            title={
+              runLive ? "stop watching (the run keeps going)" : "back to editing"
+            }
+          >
+            <X size={12} />
+            close
           </button>
         )}
         <button
-          data-testid="exit-run"
-          onClick={exitRun}
-          title={runLive ? "stop watching (the run keeps going)" : "back to editing"}
-          style={{
-            fontSize: 12,
-            padding: "2px 10px",
-            cursor: "pointer",
-            fontFamily: "inherit",
-          }}
+          className="nf-iconbtn"
+          title="Collapse console"
+          onClick={closeRunPanel}
+          style={{ padding: 4 }}
         >
-          ✕ close
+          <CaretDown size={14} />
         </button>
       </header>
       <div
@@ -679,16 +708,32 @@ export default function RunPanel() {
             el.scrollHeight - el.scrollTop - el.clientHeight < 40;
           if (follow !== atBottom) setFollow(atBottom);
         }}
-        style={{ flex: 1, overflowY: "auto", padding: "0.3rem 1rem" }}
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "0.4rem 1rem",
+          fontFamily: "var(--mono)",
+          fontSize: 11.5,
+          lineHeight: 1.75,
+          display: "flex",
+          flexDirection: "column",
+        }}
       >
+        {tab === "diag" && <DiagnosticsPanel diagnostics={diagnostics} />}
         {tab === "events" && runSource === "history" && <FrameBrowser />}
         {tab === "events" && runReplayLoading && (
-          <p data-testid="run-replay-loading" style={{ color: "#666", margin: 0 }}>
+          <p
+            data-testid="run-replay-loading"
+            style={{ color: "var(--muted)", margin: 0 }}
+          >
             loading replay page…
           </p>
         )}
         {tab === "events" && runReplayError !== null && (
-          <p data-testid="run-replay-error" style={{ color: "#c62828", margin: 0 }}>
+          <p
+            data-testid="run-replay-error"
+            style={{ color: "var(--err)", margin: 0 }}
+          >
             {runReplayError}
           </p>
         )}
@@ -704,8 +749,9 @@ export default function RunPanel() {
             {runEventPage === null && activeView.recordCount > 0 && (
                 <button
                   data-testid="run-events-first"
+                  className="nf-btn"
                   onClick={() => void pageRunEvents("first")}
-                  style={{ fontSize: 11 }}
+                  style={{ fontSize: 11, padding: "1px 8px" }}
                 >
                   browse from first event
                 </button>
@@ -716,8 +762,9 @@ export default function RunPanel() {
                 {runEventPageAfterSeq > 0 && (
                   <button
                     data-testid="run-events-first"
+                    className="nf-btn"
                     onClick={() => void pageRunEvents("first")}
-                    style={{ fontSize: 11 }}
+                    style={{ fontSize: 11, padding: "1px 8px" }}
                   >
                     first
                   </button>
@@ -725,8 +772,9 @@ export default function RunPanel() {
                 {runEventPageHasMore && (
                   <button
                     data-testid="run-events-next"
+                    className="nf-btn"
                     onClick={() => void pageRunEvents("next")}
-                    style={{ fontSize: 11 }}
+                    style={{ fontSize: 11, padding: "1px 8px" }}
                   >
                     next →
                   </button>
@@ -737,10 +785,13 @@ export default function RunPanel() {
         )}
         {tab === "history" ? (
           <HistoryTab />
-        ) : runSelection !== null ? (
+        ) : tab === "events" && runSelection !== null ? (
           <>
             {messages.length === 0 && (
-              <p data-testid="traffic-empty" style={{ color: "#888", margin: "0.5rem 0" }}>
+              <p
+                data-testid="traffic-empty"
+                style={{ color: "var(--muted)", margin: "0.5rem 0" }}
+              >
                 nothing crossed here in this run
               </p>
             )}
@@ -754,10 +805,10 @@ export default function RunPanel() {
               ))}
             </ul>
           </>
-        ) : (
+        ) : tab === "events" ? (
           <>
             {overflow > 0 && (
-              <p style={{ color: "#888", margin: "0 0 4px" }}>
+              <p style={{ color: "var(--muted)", margin: "0 0 4px" }}>
                 … {overflow} earlier events (full record in the run's JSONL)
               </p>
             )}
@@ -770,8 +821,13 @@ export default function RunPanel() {
                 />
               ))}
             </ul>
+            {records.length === 0 && !runReplayLoading && (
+              <p style={{ color: "var(--muted)", margin: "0.5rem 0" }}>
+                no events yet — press Run.
+              </p>
+            )}
           </>
-        )}
+        ) : null}
       </div>
     </section>
   );

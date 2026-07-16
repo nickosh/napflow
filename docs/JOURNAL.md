@@ -6,6 +6,21 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-17 — F1 UI redesign slice: Nocturne design + in-card editing
+
+- Done: applied the owner's Claude Design handoff (Nocturne, Soft, dark+light,
+  bundled fonts/icons — no CDN): full-bleed canvas with floating chrome (flows
+  menu, breadcrumb, ⌘K palette, zoom/minimap, bottom add/tidy/run bar,
+  drag-to-trash), per-type node cards with quick fields, unified console
+  (events/history/diagnostics), tidy auto-layout, restyled run visuals.
+- Decided (owner): the right Inspector is dropped — full config editing lives
+  in-card (selected cards grow); one Soft aesthetic + theme toggle only;
+  per-type card sizes; replay scrubber stays deferred under D39.
+- Verified: Vitest 80, Playwright e2e 43, pytest 762, Ruff — all green;
+  scaffold layouts widened for card sizes; OFL-1.1 reviewed into notices gate.
+- Next: F2 `server/app.py` pure-move split, then F1 Slice 1 (store.ts split)
+  ahead of Slice 2 undo/redo.
+
 ## 2026-07-16 — Project-memory scope clarified
 
 - Decided: memory records product behavior, engineering decisions, verified

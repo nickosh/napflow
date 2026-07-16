@@ -8,16 +8,6 @@ import { useAppStore } from "../store";
 
 const PORT_TYPES = ["any", "string", "number", "boolean", "object", "list"];
 
-const cellInput: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  fontSize: 12,
-  fontFamily: "ui-monospace, monospace",
-  padding: "2px 5px",
-  border: "1px solid #ccc",
-  borderRadius: 3,
-};
-
 type StartPort = { name: string; type?: string; default?: unknown };
 type EndPort = { name: string; required?: boolean };
 
@@ -116,11 +106,8 @@ function DefaultCell({
     <span style={{ display: "flex", flex: 2, gap: 3, alignItems: "center" }}>
       <input
         data-testid={`start-port-default-${index}`}
-        style={{
-          ...cellInput,
-          flex: 1,
-          borderColor: bad ? "#c62828" : "#ccc",
-        }}
+        className={`nf-input nodrag${bad ? " nf-bad" : ""}`}
+        style={{ flex: 1 }}
         value={text}
         placeholder={enabled ? "(empty value)" : "(required)"}
         title={`default value (${type}); use the checkbox to distinguish empty from required`}
@@ -141,7 +128,8 @@ function DefaultCell({
       />
       <label
         title="default is present; unchecked means this input is required"
-        style={{ fontSize: 10, whiteSpace: "nowrap", color: "#666" }}
+        className="nodrag"
+        style={{ fontSize: 10, whiteSpace: "nowrap", color: "var(--muted)" }}
       >
         <input
           data-testid={`start-port-default-enabled-${index}`}
@@ -202,21 +190,21 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
 
   return (
     <div data-testid="start-ports">
-      <p style={{ fontSize: 11, color: "#666", margin: "8px 0 4px" }}>
+      <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 4px" }}>
         flow inputs (bind via <code>napf run -i key=value</code>)
       </p>
       {list.map((port, index) => (
         <div key={index} style={{ display: "flex", gap: 4, marginBottom: 4 }}>
           <input
             data-testid={`start-port-name-${index}`}
-            style={{ ...cellInput, flex: 2 }}
+            className="nf-input nodrag" style={{ flex: 2 }}
             value={port.name}
             placeholder="name"
             onChange={(e) => update(index, { name: e.target.value })}
           />
           <select
             data-testid={`start-port-type-${index}`}
-            style={{ ...cellInput, flex: 1.4 }}
+            className="nf-select nodrag" style={{ flex: 1.4 }}
             value={port.type ?? "any"}
             onChange={(e) => update(index, { type: e.target.value })}
           >
@@ -234,7 +222,8 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
           <button
             data-testid={`start-port-remove-${index}`}
             onClick={() => setPorts(list.filter((_, i) => i !== index))}
-            style={{ cursor: "pointer", fontFamily: "inherit" }}
+            className="nf-btn nodrag"
+            style={{ padding: "2px 7px" }}
           >
             ×
           </button>
@@ -245,7 +234,7 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
         onClick={() =>
           setPorts([...list, { name: `input${list.length + 1}` }])
         }
-        style={{ fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
+        className="nf-btn nodrag"
       >
         + input
       </button>
@@ -259,7 +248,7 @@ export function EndPortEditor({ nodeId }: { nodeId: string }) {
 
   return (
     <div data-testid="end-ports">
-      <p style={{ fontSize: 11, color: "#666", margin: "8px 0 4px" }}>
+      <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 4px" }}>
         flow outputs (required + unreached ⇒ run failed, D18)
       </p>
       {list.map((port, index) => (
@@ -269,7 +258,7 @@ export function EndPortEditor({ nodeId }: { nodeId: string }) {
         >
           <input
             data-testid={`end-port-name-${index}`}
-            style={{ ...cellInput, flex: 2 }}
+            className="nf-input nodrag" style={{ flex: 2 }}
             value={port.name}
             placeholder="name"
             onChange={(e) =>
@@ -280,7 +269,7 @@ export function EndPortEditor({ nodeId }: { nodeId: string }) {
               )
             }
           />
-          <label style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+          <label className="nodrag" style={{ fontSize: 11, whiteSpace: "nowrap" }}>
             <input
               data-testid={`end-port-required-${index}`}
               type="checkbox"
@@ -303,7 +292,8 @@ export function EndPortEditor({ nodeId }: { nodeId: string }) {
           <button
             data-testid={`end-port-remove-${index}`}
             onClick={() => setPorts(list.filter((_, i) => i !== index))}
-            style={{ cursor: "pointer", fontFamily: "inherit" }}
+            className="nf-btn nodrag"
+            style={{ padding: "2px 7px" }}
           >
             ×
           </button>
@@ -314,7 +304,7 @@ export function EndPortEditor({ nodeId }: { nodeId: string }) {
         onClick={() =>
           setPorts([...list, { name: `out${list.length + 1}` }])
         }
-        style={{ fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
+        className="nf-btn nodrag"
       >
         + output
       </button>

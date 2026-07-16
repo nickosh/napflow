@@ -122,7 +122,8 @@ type AppState = {
   runId: string | null;
   runLive: boolean; // a WebSocket is attached (live run, not replay)
   runSource: "live" | "history" | null;
-  runPanelTab: "events" | "history" | null; // null = panel closed
+  // F1: the bottom console also hosts check diagnostics as a tab
+  runPanelTab: "events" | "history" | "diag" | null; // null = panel closed
   runHistory: RunListEntry[] | null;
   runEnv: string | null; // selected env profile for the next run
   runNotice: string | null; // run-prep warnings + start/abort failures
@@ -156,7 +157,8 @@ type AppState = {
   startRun: (inputs: Record<string, unknown>) => Promise<void>;
   abortRun: () => Promise<void>;
   exitRun: () => void;
-  openRunPanel: (tab: "events" | "history") => void;
+  openRunPanel: (tab: "events" | "history" | "diag") => void;
+  closeRunPanel: () => void;
   openHistoryRun: (runId: string) => Promise<void>;
   openRunFrame: (summary: RunFrameSummary) => Promise<void>;
   backRunFrame: () => Promise<void>;
@@ -1012,6 +1014,12 @@ export const useAppStore = create<AppState>((set, get) => {
     openRunPanel: (tab) => {
       set({ runPanelTab: tab });
       if (tab === "history") void refreshHistory();
+    },
+
+    closeRunPanel: () => {
+      // collapses the console only — an active run overlay stays (the
+      // Edit pill / exit-run leaves run mode)
+      set({ runPanelTab: null });
     },
 
     openHistoryRun: async (runId) => {

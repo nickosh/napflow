@@ -17,7 +17,7 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
   await expect(page.getByTestId("node-verify")).toBeVisible();
   // editing surfaces are up before the run
   await expect(page.getByTestId("add-node")).toBeVisible();
-  await expect(page.getByTestId("inspector")).toBeVisible();
+  await expect(page.getByTestId("run-button")).toBeVisible();
 
   // smoke declares no Start ports → the hybrid popover skips itself
   await page.getByTestId("run-button").click();
@@ -36,11 +36,11 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
   }
   await expect(page.getByTestId("run-asserts")).toContainText("2✓");
 
-  // run mode locks editing: the palette goes away and the edit
-  // inspector gives way to the RUN inspector (M5.5)
-  await expect(page.getByTestId("open-code")).toBeVisible(); // header intact
+  // run mode locks editing: the add/tidy/run cluster goes away and
+  // the in-card editors give way to the RUN inspector (M5.5)
+  await expect(page.getByTestId("open-code")).toBeVisible(); // chrome intact
   await expect(page.getByTestId("add-node")).toHaveCount(0);
-  await expect(page.getByTestId("inspector")).toHaveCount(0);
+  await expect(page.getByTestId("run-button")).toHaveCount(0);
   await expect(page.getByTestId("run-inspector")).toBeVisible();
 
   // full wire detail: expand the assert_result event row
@@ -66,7 +66,7 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
   // leaving run mode restores the editing surfaces
   await page.getByTestId("exit-run").click();
   await expect(page.getByTestId("run-panel")).toHaveCount(0);
-  await expect(page.getByTestId("inspector")).toBeVisible();
+  await expect(page.getByTestId("add-node")).toBeVisible();
 });
 
 test("failing run: red assert, live log value, travelled wires", async ({

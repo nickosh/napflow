@@ -36,7 +36,7 @@ MAIN_FLOW = {
         {"id": "end", "type": "end"},
     ],
     "edges": [],
-    "layout": {"start": [40, 120], "end": [260, 120]},
+    "layout": {"start": [40, 120], "end": [380, 120]},
 }
 
 EXAMPLE_MAIN_FLOW = {
@@ -47,7 +47,7 @@ EXAMPLE_MAIN_FLOW = {
         {"id": "end", "type": "end", "config": {"ports": [{"name": "done"}]}},
     ],
     "edges": [{"from": "start.out", "to": "end.done"}],
-    "layout": {"start": [40, 120], "end": [260, 120]},
+    "layout": {"start": [40, 120], "end": [380, 120]},
 }
 
 EXAMPLE_FLOW = {
@@ -121,10 +121,10 @@ EXAMPLE_FLOW = {
     ],
     "layout": {
         "start": [40, 160],
-        "get_echo": [240, 160],
-        "verify": [460, 160],
-        "transport_log": [240, 320],
-        "end": [680, 160],
+        "get_echo": [340, 160],
+        "verify": [720, 160],
+        "transport_log": [340, 400],
+        "end": [1060, 160],
     },
 }
 
@@ -186,10 +186,10 @@ SMOKE_FLOW = {
     ],
     "layout": {
         "start": [40, 40],
-        "users": [40, 160],
-        "summarize": [260, 160],
-        "verify": [480, 160],
-        "end": [700, 160],
+        "users": [40, 220],
+        "summarize": [340, 220],
+        "verify": [640, 220],
+        "end": [940, 220],
     },
 }
 

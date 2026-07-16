@@ -1,6 +1,7 @@
 import {
   Background,
-  Controls,
+  BackgroundVariant,
+  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   applyEdgeChanges,
@@ -16,20 +17,26 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import "@xyflow/react/dist/style.css";
-import "./run.css";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "./theme.css";
 
 import CodeEditor from "./components/CodeEditor";
+import CommandPalette from "./components/CommandPalette";
 import ConnectHint from "./components/ConnectHint";
-import DiagnosticsPanel from "./components/DiagnosticsPanel";
-import FlowList from "./components/FlowList";
+import ConsoleButton from "./components/ConsoleButton";
 import FlowNode from "./components/FlowNode";
-import Inspector from "./components/Inspector";
 import NodePalette from "./components/NodePalette";
 import RunControls from "./components/RunControls";
 import RunEdge from "./components/RunEdge";
 import RunInspector from "./components/RunInspector";
 import RunPanel from "./components/RunPanel";
-import SaveStatus from "./components/SaveStatus";
+import TopLeftBar from "./components/TopLeftBar";
+import TopRightBar from "./components/TopRightBar";
+import TrashZone from "./components/TrashZone";
 import { PALETTE_DRAG_TYPE } from "./forms";
 import {
   drillTarget,
@@ -40,9 +47,30 @@ import {
 import { identityFromPath } from "./identity";
 import { persistenceRegistry } from "./persistence";
 import { ETAG_POLL_MS, useAppStore } from "./store";
+import { tidyPositions } from "./tidy";
+import { useChrome } from "./uiChrome";
 
 const nodeTypes = { napflow: FlowNode };
 const edgeTypes = { napflow: RunEdge };
+
+function overTrashZone(event: MouseEvent | TouchEvent | React.MouseEvent): boolean {
+  const zone = document.querySelector('[data-testid="trash-zone"]');
+  if (zone === null) return false;
+  const point =
+    "clientX" in event
+      ? { x: event.clientX, y: event.clientY }
+      : event.touches.length > 0
+        ? { x: event.touches[0].clientX, y: event.touches[0].clientY }
+        : null;
+  if (point === null) return false;
+  const rect = zone.getBoundingClientRect();
+  return (
+    point.x >= rect.left &&
+    point.x <= rect.right &&
+    point.y >= rect.top &&
+    point.y <= rect.bottom
+  );
+}
 
 function Canvas() {
   const {
@@ -69,6 +97,10 @@ function Canvas() {
   const { fitView, screenToFlowPosition } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
   const nodesInitialized = useNodesInitialized();
+  const minimapOn = useChrome((s) => s.minimapOn);
+  const tidyTick = useChrome((s) => s.tidyTick);
+  const { setFlowsOpen, closePicker, openPickerAt, setDragging, setOverTrash } =
+    useChrome();
 
   // xyflow holds interactive state (drag positions, selection); the
   // store's model stays authoritative — graphVersion bumps rebuild
@@ -76,8 +108,11 @@ function Canvas() {
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [fitAfterAddCount, setFitAfterAddCount] = useState<number | null>(null);
+  const [tidying, setTidying] = useState(false);
   const renderedIdentity = useRef<string | null>(null);
   const internalsRefreshFrame = useRef<number | null>(null);
+  const lastTidyTick = useRef(0);
+  const tidySettle = useRef<number | null>(null);
   const identity = canvasDetail?.identity ?? null;
   const allNodesMeasured = nodes.every(
     (node) =>
@@ -124,9 +159,42 @@ function Canvas() {
       if (internalsRefreshFrame.current !== null) {
         cancelAnimationFrame(internalsRefreshFrame.current);
       }
+      if (tidySettle.current !== null) {
+        clearTimeout(tidySettle.current);
+      }
     },
     [],
   );
+
+  // F1 tidy wand: layered auto-layout over the CURRENT graph, animated
+  // via a transient transform transition, persisted like any drag
+  useEffect(() => {
+    if (tidyTick === lastTidyTick.current) return;
+    lastTidyTick.current = tidyTick;
+    if (inRunMode || nodes.length === 0) return;
+    const placed = tidyPositions(
+      nodes,
+      edges
+        .filter((e) => !e.id.startsWith("ghost:"))
+        .map((e) => ({ source: e.source, target: e.target })),
+    );
+    setTidying(true);
+    setNodes((current) =>
+      current.map((node) =>
+        placed[node.id] ? { ...node, position: placed[node.id] } : node,
+      ),
+    );
+    for (const [id, pos] of Object.entries(placed)) {
+      moveNode(id, Math.round(pos.x), Math.round(pos.y));
+    }
+    if (tidySettle.current !== null) clearTimeout(tidySettle.current);
+    tidySettle.current = window.setTimeout(() => {
+      setTidying(false);
+      void fitView({ padding: 0.15 });
+      tidySettle.current = null;
+    }, 450);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tidyTick]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
@@ -223,15 +291,23 @@ function Canvas() {
   if (runFramePath.length === 0 && detailError !== null) {
     // broken flow: no canvas to draw — the E-codes ARE the view
     return (
-      <div style={{ flex: 1, padding: "1rem", overflowY: "auto" }}>
-        <p data-testid="detail-error" style={{ color: "#c62828" }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          padding: "70px 1.5rem 1rem",
+          overflowY: "auto",
+        }}
+        data-testid="canvas"
+      >
+        <p data-testid="detail-error" style={{ color: "var(--err)" }}>
           {detailError.message}
         </p>
         <ul data-testid="detail-error-diagnostics" style={{ fontSize: 13 }}>
           {detailError.diagnostics.map((d, i) => (
-            <li key={i}>
+            <li key={i} style={{ marginBottom: 4 }}>
               <strong>{d.code}</strong> {d.message}{" "}
-              <em style={{ color: "#888" }}>({d.hint})</em>
+              <em style={{ color: "var(--muted)" }}>({d.hint})</em>
             </li>
           ))}
         </ul>
@@ -239,12 +315,23 @@ function Canvas() {
     );
   }
   if (canvasDetail === null) {
-    return <div style={{ flex: 1 }} data-testid="canvas" />;
+    return <div style={{ position: "absolute", inset: 0 }} data-testid="canvas" />;
   }
   return (
     <div
-      style={{ flex: 1, minWidth: 0, position: "relative" }}
+      className={tidying ? "nf-tidying" : undefined}
+      style={{ position: "absolute", inset: 0 }}
       data-testid="canvas"
+      onDoubleClick={(event) => {
+        // double-clicking empty canvas opens the add-node picker there
+        // (node double-click stays drill-in, FR-1007)
+        if (
+          !inRunMode &&
+          (event.target as HTMLElement).classList?.contains("react-flow__pane")
+        ) {
+          openPickerAt(event.clientX, event.clientY);
+        }
+      }}
     >
       <ReactFlow
         key={`${canvasDetail.identity}:${runFramePath.at(-1)?.frame ?? "root"}`}
@@ -259,10 +346,21 @@ function Canvas() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
-        onNodeDragStart={() => setInteracting(true)}
-        onNodeDragStop={(_event, node) => {
+        onNodeDragStart={(_event, node) => {
+          setInteracting(true);
+          setDragging(node.id);
+        }}
+        onNodeDrag={(event, _node) => {
+          setOverTrash(overTrashZone(event));
+        }}
+        onNodeDragStop={(event, node) => {
           setInteracting(false);
-          moveNode(node.id, Math.round(node.position.x), Math.round(node.position.y));
+          setDragging(null);
+          if (overTrashZone(event)) {
+            deleteNode(node.id);
+          } else {
+            moveNode(node.id, Math.round(node.position.x), Math.round(node.position.y));
+          }
         }}
         onNodeClick={(_event, node) => selectNode(node.id)}
         onNodeDoubleClick={(_event, node) => {
@@ -283,13 +381,22 @@ function Canvas() {
             });
           }
         }}
-        onPaneClick={() => selectNode(null)}
+        onPaneClick={() => {
+          selectNode(null);
+          setFlowsOpen(false);
+          closePicker();
+        }}
         onDragOver={inRunMode ? undefined : onDragOver}
         onDrop={inRunMode ? undefined : onDrop}
         deleteKeyCode={inRunMode ? null : ["Backspace", "Delete"]}
       >
-        <Background />
-        <Controls />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={24}
+          size={1.5}
+          color="var(--grid-dot)"
+        />
+        {minimapOn && <MiniMap pannable zoomable />}
         <ConnectHint />
       </ReactFlow>
       {!inRunMode && <NodePalette onAdd={addVisibleNode} />}
@@ -298,10 +405,16 @@ function Canvas() {
 }
 
 export default function App() {
-  const { workspace, error, detail, load, popFlow, pollEtags } = useAppStore();
+  const { detail, load, popFlow, pollEtags } = useAppStore();
   const inRunMode = useAppStore((s) => s.runView !== null);
-  const runPanelOpen = useAppStore((s) => s.runPanelTab !== null);
-  const [codeOpen, setCodeOpen] = useState(false);
+  const theme = useChrome((s) => s.theme);
+  const codeOpen = useChrome((s) => s.codeOpen);
+  const {
+    setCodeOpen,
+    setCmdkOpen,
+    setFlowsOpen,
+    closePicker,
+  } = useChrome();
 
   useEffect(() => {
     void load();
@@ -351,75 +464,48 @@ export default function App() {
     return () => clearInterval(timer);
   }, [pollEtags]);
 
+  // F1: keyboard chrome — ⌘K palette, Escape unwinds overlays
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCmdkOpen(!useChrome.getState().cmdkOpen);
+      } else if (event.key === "Escape") {
+        const chrome = useChrome.getState();
+        if (chrome.cmdkOpen) setCmdkOpen(false);
+        else if (chrome.runPopoverOpen) chrome.setRunPopoverOpen(false);
+        else if (chrome.pickerAt !== null) closePicker();
+        else if (chrome.flowsOpen) setFlowsOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closePicker, setCmdkOpen, setFlowsOpen]);
+
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100vh",
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <header
-        style={{
-          padding: "0.5rem 1rem",
-          borderBottom: "1px solid #ddd",
-          display: "flex",
-          gap: "0.75rem",
-          alignItems: "baseline",
-        }}
-      >
-        <strong>napflow</strong>
-        <span data-testid="workspace-name">{workspace?.name ?? "…"}</span>
-        {workspace && (
-          <span style={{ color: "#888", fontSize: "0.85rem" }}>
-            v{workspace.version}
-          </span>
-        )}
-        {error && (
-          <span data-testid="load-error" style={{ color: "#c00" }}>
-            {error}
-          </span>
-        )}
-        <span style={{ flex: 1 }} />
-        <RunControls />
-        {detail && (
-          <button
-            data-testid="open-code"
-            onClick={() => setCodeOpen(true)}
-            style={{
-              fontSize: 12,
-              padding: "2px 10px",
-              cursor: "pointer",
-              fontFamily: "inherit",
-            }}
-          >
-            nodes.py
-          </button>
-        )}
-        <SaveStatus />
-      </header>
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <FlowList />
-        <ReactFlowProvider>
+    <ReactFlowProvider>
+      <div className="nf-root" data-th={theme}>
+        <div className="nf-canvas-wrap">
           <Canvas />
-        </ReactFlowProvider>
-        {/* run mode: the edit forms give way to the run inspector —
-            selected node's run data (M5.5); node clicks also filter
-            the event stream */}
-        {inRunMode ? <RunInspector /> : <Inspector />}
-      </div>
-      {runPanelOpen ? (
+          <TopLeftBar />
+          <TopRightBar />
+          <RunControls />
+          <ConsoleButton />
+          <TrashZone />
+          {/* run mode: the edit forms give way to the run inspector —
+              selected node's run data (M5.5); node clicks also filter
+              the event stream */}
+          {inRunMode && <RunInspector />}
+        </div>
         <RunPanel />
-      ) : (
-        <DiagnosticsPanel diagnostics={detail?.diagnostics ?? []} />
-      )}
-      {codeOpen && detail && (
-        <CodeEditor
-          identity={detail.identity}
-          onClose={() => setCodeOpen(false)}
-        />
-      )}
-    </div>
+        <CommandPalette />
+        {codeOpen && detail && (
+          <CodeEditor
+            identity={detail.identity}
+            onClose={() => setCodeOpen(false)}
+          />
+        )}
+      </div>
+    </ReactFlowProvider>
   );
 }

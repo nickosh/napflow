@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { pickFlow } from "./helpers";
+
 // S4/M4: the editing write path (FR-1003 + FR-1002/FR-1006 edit
 // halves) against the real server + built bundle. Every edit goes
 // through debounced autosave → PUT /api/flows → merge → canonical
@@ -372,7 +374,7 @@ test("start-port defaults save with the declared type, not as strings", async ({
   // a non-numeric default stays local (red border), never saves
   await cell.fill("not-a-number");
   await cell.blur();
-  await expect(cell).toHaveCSS("border-color", "rgb(198, 40, 40)");
+  await expect(cell).toHaveCSS("border-color", "rgb(217, 112, 112)");
 
   await cell.fill("42");
   await cell.blur();
@@ -548,7 +550,7 @@ test("immediate flow navigation flushes the pending canvas edit", async ({
 
   // Click before the one-second debounce expires. openFlow must drain the
   // coordinator before it replaces the current detail.
-  await page.getByRole("button", { name: "flows/smoke" }).click();
+  await pickFlow(page, "flows/smoke");
   await expect(page).toHaveURL(/\/flow\/flows\/smoke$/);
   const after = await flowModel(page, "flows/main");
   expect(after.flow.layout.start).not.toEqual(before.flow.layout.start);
@@ -649,7 +651,7 @@ test("an ETag conflict blocks navigation until the user resolves it", async ({
   });
   expect(external.ok()).toBeTruthy();
 
-  await page.getByRole("button", { name: "flows/smoke" }).click();
+  await pickFlow(page, "flows/smoke");
   await expect(page).toHaveURL(/\/flow\/flows\/main$/);
   await expect(page.getByTestId("save-conflict")).toBeVisible();
 
@@ -657,6 +659,6 @@ test("an ETag conflict blocks navigation until the user resolves it", async ({
   await waitSaved(page);
   const saved = await flowModel(page, "flows/main");
   expect(saved.flow.layout.start).not.toEqual(before.flow.layout.start);
-  await page.getByRole("button", { name: "flows/smoke" }).click();
+  await pickFlow(page, "flows/smoke");
   await expect(page).toHaveURL(/\/flow\/flows\/smoke$/);
 });

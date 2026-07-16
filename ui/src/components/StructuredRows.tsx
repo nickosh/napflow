@@ -6,16 +6,6 @@ import { useEffect, useState } from "react";
 // Both lists are min_length=1 in the model, so the last row can't be
 // removed.
 
-const cellInput: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  fontSize: 12,
-  fontFamily: "ui-monospace, monospace",
-  padding: "2px 5px",
-  border: "1px solid #ccc",
-  borderRadius: 3,
-};
-
 const rowStyle: React.CSSProperties = {
   display: "flex",
   gap: 4,
@@ -68,7 +58,7 @@ function ValueCell({
   return (
     <input
       data-testid={testId}
-      style={{ ...cellInput, flex }}
+      className="nf-input nodrag" style={{ flex }}
       value={text}
       placeholder={placeholder}
       onChange={(e) => setText(e.target.value)}
@@ -92,21 +82,15 @@ function RemoveButton({
       onClick={onClick}
       disabled={disabled}
       title={disabled ? "at least one row is required" : "remove"}
-      style={{
-        cursor: disabled ? "default" : "pointer",
-        fontFamily: "inherit",
-      }}
+      className="nf-btn nodrag"
+      style={{ cursor: disabled ? "default" : "pointer", padding: "2px 7px" }}
     >
       ×
     </button>
   );
 }
 
-const addButton: React.CSSProperties = {
-  fontSize: 12,
-  cursor: "pointer",
-  fontFamily: "inherit",
-};
+
 
 // ---------------------------------------------------------------- checks
 
@@ -161,7 +145,7 @@ export function ChecksEditor({
         <div key={index} style={rowStyle}>
           <select
             data-testid={`check-kind-${index}`}
-            style={{ ...cellInput, flex: 1.4 }}
+            className="nf-select nodrag" style={{ flex: 1.4 }}
             value={(check.kind as string) ?? "expr"}
             onChange={(e) => update(index, freshCheck(e.target.value))}
           >
@@ -174,7 +158,7 @@ export function ChecksEditor({
           {check.kind === "status" && (
             <input
               data-testid={`check-equals-${index}`}
-              style={{ ...cellInput, flex: 2 }}
+              className="nf-input nodrag" style={{ flex: 2 }}
               value={String(check.equals ?? "")}
               placeholder="200"
               onChange={(e) =>
@@ -185,7 +169,7 @@ export function ChecksEditor({
           {check.kind === "response_time" && (
             <input
               data-testid={`check-under-ms-${index}`}
-              style={{ ...cellInput, flex: 2 }}
+              className="nf-input nodrag" style={{ flex: 2 }}
               value={String(check.under_ms ?? "")}
               placeholder="1000"
               onChange={(e) =>
@@ -200,7 +184,7 @@ export function ChecksEditor({
             <>
               <input
                 data-testid={`check-expr-${index}`}
-                style={{ ...cellInput, flex: 3 }}
+                className="nf-input nodrag" style={{ flex: 3 }}
                 value={(check.expr as string) ?? ""}
                 placeholder="trigger.value.status"
                 onChange={(e) =>
@@ -209,7 +193,7 @@ export function ChecksEditor({
               />
               <select
                 data-testid={`check-op-${index}`}
-                style={{ ...cellInput, flex: 1.6 }}
+                className="nf-select nodrag" style={{ flex: 1.6 }}
                 value={(check.op as string) ?? "present"}
                 onChange={(e) => {
                   const op = e.target.value;
@@ -246,7 +230,7 @@ export function ChecksEditor({
       <button
         data-testid="check-add"
         onClick={() => onChange([...list, freshCheck("expr")])}
-        style={addButton}
+        className="nf-btn nodrag"
       >
         + check
       </button>
@@ -269,14 +253,14 @@ export function CasesEditor({
 
   return (
     <div data-testid="cases-editor">
-      <p style={{ fontSize: 11, color: "#666", margin: "2px 0 4px" }}>
+      <p style={{ fontSize: 11, color: "var(--muted)", margin: "2px 0 4px", textTransform: "none", letterSpacing: 0 }}>
         output port ← taken when expr equals
       </p>
       {list.map((case_, index) => (
         <div key={index} style={rowStyle}>
           <input
             data-testid={`case-name-${index}`}
-            style={{ ...cellInput, flex: 2 }}
+            className="nf-input nodrag" style={{ flex: 2 }}
             value={case_.name ?? ""}
             placeholder="port name"
             onChange={(e) =>
@@ -309,7 +293,7 @@ export function CasesEditor({
         onClick={() =>
           onChange([...list, { name: `case${list.length + 1}`, equals: "" }])
         }
-        style={addButton}
+        className="nf-btn nodrag"
       >
         + case
       </button>

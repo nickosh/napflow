@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { openFlowsMenu } from "./helpers";
+
 // S4/M6: subflow UX (FR-1007, D09) — ghost-wires, drill-in, "used in
 // N places", clone-to-new-flow. This spec OWNS flows/parent,
 // flows/child, and flows/ghostcase (the clone test repoints
@@ -41,7 +43,7 @@ test("the drilled-in flow reports where it is used (D09)", async ({
   await expect(page).toHaveURL(/\/flow\/flows\/parent$/);
 });
 
-test("the inspector opens a flow node's target", async ({ page }) => {
+test("the in-card editor opens a flow node's target", async ({ page }) => {
   await page.goto("/flow/flows/parent");
   await page.getByTestId("node-sub").click();
   await page.getByTestId("drill-in").click();
@@ -59,12 +61,15 @@ test("clone-to-new-flow forks the target and repoints the node", async ({
     "flows/child_copy",
   );
   await page.getByTestId("clone-confirm").click();
-  // the fork appears in the sidebar and THIS node now references it
+  // the fork appears in the flows menu and THIS node now references it
+  await openFlowsMenu(page);
   await expect(
     page
       .getByTestId("flow-list")
       .getByRole("button", { name: "flows/child_copy" }),
   ).toBeVisible();
+  await page.getByTestId("flows-toggle").click(); // close the menu again
+  await page.getByTestId("node-sub").getByText("raw config").click();
   await expect(page.getByTestId("node-config")).toContainText(
     "flows/child_copy",
   );

@@ -4,7 +4,6 @@
 import type { Edge, Node } from "@xyflow/react";
 
 import type { Diagnostic, FlowDetail, FlowModel } from "./api";
-import { portColor } from "./colors";
 
 export type PortHandle = {
   name: string;
@@ -61,8 +60,9 @@ export function reconcileGraphNodes(
   });
 }
 
-const COLUMN_X = 240;
-const ROW_Y = 130;
+// F1 card sizes: 240px cards (320 for wide types) need real column air
+const COLUMN_X = 380;
+const ROW_Y = 170;
 const MARGIN = 40;
 
 function splitRef(ref: string): [string, string] {
@@ -240,13 +240,6 @@ export function toGraph(detail: FlowDetail): {
     };
   });
 
-  const outputType = new Map<string, string>();
-  for (const node of nodes) {
-    for (const port of node.data.outputs) {
-      outputType.set(`${node.id}.${port.name}`, port.type);
-    }
-  }
-
   const edges: Edge[] = detail.flow.edges.map((edge) => {
     const [source, sourceHandle] = splitRef(edge.from);
     const [target, targetHandle] = splitRef(edge.to);
@@ -254,13 +247,13 @@ export function toGraph(detail: FlowDetail): {
       // the model refs ARE the identity (edges match by (from,to) in
       // the merge) — deletion maps back through this id
       id: `${edge.from}→${edge.to}`,
-      type: "napflow", // RunEdge: plain wire that animates in run mode
+      type: "napflow", // RunEdge: wire color + run animation live there
       source,
       sourceHandle,
       target,
       targetHandle,
       data: { from: edge.from, to: edge.to },
-      style: { stroke: portColor(outputType.get(edge.from)), strokeWidth: 1.5 },
+      style: { strokeWidth: 2 },
     };
   });
 
