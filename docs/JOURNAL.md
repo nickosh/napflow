@@ -4,6 +4,16 @@ Newest first. One short entry per working session / milestone:
 **done / decided / next**, 2–5 lines each. This is the cross-session
 progress log — keep it lean; details live in specs, DECISIONS, and git.
 
+## 2026-07-16 — Backend CI ANSI false-negative fixed
+
+- Diagnosed: all four backend jobs shared one ANSI-fragmented Rich help
+  assertion; product behavior and compatibility imports passed.
+- Fixed: help coverage now runs in plain and Actions-style ANSI modes, strips only
+  terminal control codes, and keeps first-touch init as a separate real invocation.
+- Verified: 762 project tests pass (11 deselected); the isolated requests+botocore
+  gate passes 761 tests (1 skipped, 11 deselected), plus Ruff/import contracts.
+- Next: confirm the repair in the three-OS CI gate.
+
 ## 2026-07-15 — F7 configurable roots and deterministic init complete
 
 - Done: configurable `flows`/`data`/environment roots, literal dotenv profiles,

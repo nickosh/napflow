@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 import napflow.cli.main as cli_main
@@ -203,15 +204,35 @@ def test_init_reports_preexisting_napflow_directory_as_exists(tmp_path: Path) ->
     assert "created  .napflow/" not in result.output
 
 
-def test_init_help_and_first_touch_distinguish_example_mode(tmp_path: Path) -> None:
-    help_result = runner.invoke(app, ["init", "--help"])
+@pytest.mark.parametrize(
+    "help_env",
+    [
+        {"NO_COLOR": "1", "FORCE_COLOR": None, "PY_COLORS": None},
+        {
+            "NO_COLOR": None,
+            "FORCE_COLOR": "1",
+            "PY_COLORS": "1",
+            "CI": "true",
+            "GITHUB_ACTIONS": "true",
+            "TERM": "xterm-256color",
+        },
+    ],
+    ids=["plain", "ansi"],
+)
+def test_init_help_lists_example_and_root_options(
+    help_env: dict[str, str | None],
+) -> None:
+    help_result = runner.invoke(app, ["init", "--help"], env=help_env)
     assert help_result.exit_code == 0
-    assert "--example" in help_result.output
-    assert "--flows-root" in help_result.output
-    assert "--data-root" in help_result.output
-    assert "--environments-ro" in help_result.output  # Rich may ellipsize the tail
-    assert "optionally with runnable examples" in " ".join(help_result.output.split())
+    help_output = unstyle(help_result.output)
+    assert "--example" in help_output
+    assert "--flows-root" in help_output
+    assert "--data-root" in help_output
+    assert "--environments-ro" in help_output  # Rich may ellipsize the tail
+    assert "optionally with runnable examples" in " ".join(help_output.split())
 
+
+def test_init_first_touch_distinguishes_example_mode(tmp_path: Path) -> None:
     minimal = runner.invoke(app, ["init", str(tmp_path / "minimal")])
     example = runner.invoke(app, ["init", str(tmp_path / "with-examples"), "--example"])
     assert minimal.exit_code == example.exit_code == 0
