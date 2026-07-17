@@ -198,7 +198,9 @@ either were the accepted v0.2 design.
    roots, literal dotenv profiles, minimal/example init, W108) are complete.
    Current next: F2 `server/app.py` pure-move split, then the F1
    UI-rework track, with F3 (EC22 tree-kill) and F4 (EC27/EC35 render guards)
-   interleaved; F5 perf drift remains unscheduled.
+   interleaved; F5 perf drift and F8 (custom-block plugin system —
+   investigation note only; UI seam = `NODE_META`/`CONFIG_FORMS`
+   registries) remain unscheduled.
 
 ## Testing priorities (in order of bug-risk)
 

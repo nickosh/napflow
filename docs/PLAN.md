@@ -1165,10 +1165,72 @@ xyflow rebuilds preserve stable-node measurements, the E2E assertion checks
 real post-Fit-View geometry, and every retry worker restores immutable editing
 seeds before the serial suite.
 
+### F8 — custom block (plugin) system (unscheduled; investigation recorded 2026-07-17)
+
+Owner intent (2026-07-17, during the F1 redesign): let users add their
+own blocks — Python behavior plus custom card presentation — within
+napflow's functionality, eventually shareable between workspaces. The
+`python` node already covers the *behavior* half; the gap is a reusable,
+declared block: named ports + config schema + picker/card presentation,
+referenced from flows as a first-class citizen. Recorded now because the
+F1 redesign deliberately shaped the UI seams for it; **not scheduled** —
+promote via the priority criteria with an owner decision.
+
+Expected shape (hypothesis, not commitment):
+
+- A block is a folder, git-friendly like flows: `blocks/<name>/` holding
+  `block.yaml` + `impl.py`. `block.yaml` declares display name,
+  description, picker category, icon (a NAME into the bundled Phosphor
+  set — assets stay in the wheel, nothing remote), declared input/output
+  ports with soft types (D11), config field descriptors (the same
+  vocabulary as `ui/src/forms.ts` `CONFIG_FORMS`: kind/label/options/
+  placeholder/templatability), quick-field keys, and card width.
+  `impl.py` is an ordinary python-node-style function run under the
+  EXISTING worker-subprocess contract (JSON-serializable I/O, declared
+  inputs only, `max_seconds`, error port routing) — blocks add zero new
+  execution semantics.
+- Flow reference: additive, like `flow:` — e.g. `type: block` +
+  `config.block: blocks/retry_probe` (or a namespaced `type:`; needs an
+  owner decision + flow-schema spec update). Additive keys avoid a
+  schema-marker change; cheapest inside the v0.x compat window (D33).
+- UI: presentation stays DATA-driven. The server ships the block
+  catalog (name, category, icon name, description, field descriptors,
+  quick keys, width) with the workspace payload; the UI's per-type
+  registries — `ui/src/catalog.ts` `NODE_META` and `CONFIG_FORMS` —
+  fall back to server-provided metadata for unknown types. **Boundary:
+  "custom design logic" means declarative presentation (icon, category,
+  quick fields, width, field editors), never plugin-supplied JS in the
+  browser** — that would break the built-wheel integrity and the D37
+  local trust boundary.
+
+Prerequisites, in order, before an implementation slice makes sense:
+
+1. **F2** server split lands (a catalog endpoint belongs in a small
+   module, not in the current monolithic `app.py`).
+2. **F1 Slice 1** `ui/src/store.ts` split lands (the UI-side registry
+   fallback threads through the store/detail payloads).
+3. Keep the F1 invariant that already landed: all per-type UI behavior
+   flows through `NODE_META` + `CONFIG_FORMS` as *data* — no per-type
+   rendering hardcoded in components. This is the plugin seam; guard it
+   during F1 follow-up slices.
+4. Core loader work: block discovery under a configurable root with D42
+   containment; checker coverage (new E/W codes: missing/invalid block
+   manifest, port-name collisions incl. the reserved `error` name,
+   E011-style id rules); port surface derivation from the manifest with
+   the python-node AST fallback.
+5. Owner decisions to take at promotion time: reference syntax
+   (additive key vs namespaced type), whether block config schemas can
+   declare NEW field kinds or only compose existing ones, and
+   sharing/distribution story (copy-the-folder first; anything richer
+   is a separate feature).
+6. Design constraint to preserve now: future codegen (core promise 6)
+   must be able to emit a block's `impl.py` as a plain function — keep
+   block behavior expressible as ordinary Python with declared I/O.
+
 ### Unscheduled backlog
 
 The "Explicitly after v0.2" list above is the unscheduled backlog. Items
-promote into F-numbered entries here (F8+) when prioritized by the
+promote into F-numbered entries here (F9+) when prioritized by the
 criteria; nothing is dropped by not being scheduled.
 
 ## Working agreements
