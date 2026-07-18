@@ -937,6 +937,12 @@ slices named here are the expected shape, not commitments.
 - [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
       updates are deliberate and named in the change); production build and the
       frontend notices audit stay in the gate.
+- [ ] Every slice keeps per-type UI behavior registry-driven — icon,
+      category, description, quick fields, and card width come from
+      `NODE_META` (`ui/src/catalog.ts`) and field editors from
+      `CONFIG_FORMS` (`ui/src/forms.ts`); no per-type rendering
+      hardcoded in components. This is F8's plugin seam, guarded by
+      `ui/src/catalog.test.ts` registry coverage.
 
 Progress 2026-07-17: the owner supplied a complete visual design as a
 Claude Design handoff (Nocturne design system; owner picked the Soft
