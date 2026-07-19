@@ -890,10 +890,10 @@ Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
 F6 was selected by the owner as the first rollout implementation and completed
-on 2026-07-15. Current order resumes with **F2** (small enabler, days), then the
-**F1 track** as headline work, with **F3** and **F4** interleaved between F1
-slices as small core/CLI changes. Owner direction then pulled **F7** forward;
-it is implemented. **F5** remains unscheduled/low.
+on 2026-07-15. Owner direction then pulled **F7** forward; it is implemented.
+**F2** completed on 2026-07-18. Current order resumes with **F1 Slice 1**,
+with **F3** and **F4** interleaved between F1 slices as small core/CLI changes.
+**F5** remains unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
@@ -965,29 +965,29 @@ demos/screenshots land (deferred owner call above).
 
 ### F2 — `server/app.py` split by pure moves (approved 2026-07-15)
 
-`server/app.py` is 1,810 lines mixing four separable concerns. Split by
-pure moves — no behavior, route, contract, or logic changes — so later
-work (F1 server touches, D30 controls) lands in small files.
+The pre-split `server/app.py` was 1,821 lines mixing four separable concerns.
+It was split by pure moves — no behavior, route, contract, or logic changes —
+so later work (F1 server touches, D30 controls) lands in small files.
 
-- [ ] `server/replay.py` — the replay read/view layer:
-      `_ReplayQueryError`, `_ReplayMetadata`, `_ReplaySnapshot`,
-      `_ReplayViewBuilder`; replay record iteration and paging
-      (`_iter_replay_records`, `_parse_replay_integer`,
-      `_parse_replay_page_query`, `_parse_frame_query`,
-      `_metadata_from_header`, `_read_replay_page`, `_read_replay_event`,
-      `_replay_envelope`, `_replay_run_summary`, `_replay_frame_summary`,
-      `_capture_replay_snapshot`, `_replay_history_state`,
-      `_has_external_active_marker`).
-- [ ] `server/ws.py` — live websocket streaming: `_ws_close_reason`,
-      `_SlowSubscriber`, `_send_ws_record`, `_send_history_range`,
-      `_close_ws`, `_stream_run_websocket`, plus the `WS_*` constants
+- [x] `server/replay.py` — the replay read/view layer:
+      `ReplayQueryError`, `ReplayMetadata`, `ReplaySnapshot`,
+      `ReplayViewBuilder`; replay record iteration and paging
+      (`iter_records`, `read_records`, `iter_replay_records`,
+      `parse_replay_integer`, `parse_replay_page_query`, `parse_frame_query`,
+      `metadata_from_header`, `read_replay_page`, `read_replay_event`,
+      `replay_envelope`, `replay_run_summary`, `replay_frame_summary`,
+      `capture_replay_snapshot`, `replay_history_state`,
+      `has_external_active_marker`).
+- [x] `server/ws.py` — live websocket streaming: `ws_close_reason`,
+      `SlowSubscriber`, `send_ws_record`, `send_history_range`,
+      `close_ws`, `stream_run_websocket`, plus the `WS_*` constants
       they own.
-- [ ] `server/boundary.py` — the local-request trust boundary (D37) and
-      write serialization: `_Authority`, `_request_scheme`,
-      `_parse_authority`, `_is_loopback_host`, `_request_authority`,
-      `_origin_matches`, `_LocalRequestBoundary`,
-      `_SourceWriteCoordinator`.
-- [ ] `app.py` keeps `build_app`, route handlers, and small response
+- [x] `server/boundary.py` — the local-request trust boundary (D37) and
+      write serialization: `Authority`, `request_scheme`,
+      `parse_authority`, `is_loopback_host`, `request_authority`,
+      `origin_matches`, `LocalRequestBoundary`,
+      `SourceWriteCoordinator`.
+- [x] `app.py` keeps `build_app`, route handlers, and small response
       helpers (`_diag_payload`, `_prep_error`, `_etag`, `_bad_request`,
       `_json_object`, …).
 
@@ -998,15 +998,18 @@ Rules and definition of done:
   renames, no signature or logic changes.
 - Import direction unchanged: new server modules import `core` and each
   other downward only; import-linter contracts stay green.
-- `tests/test_server.py` imports `_read_records`, `_send_ws_record`,
-  `_send_history_range`, `_SourceWriteCoordinator`, `WS_HISTORY_FORMAT`,
-  and `WS_REQUEST_ORIGIN` from `napflow.server.app`, and
-  `tests/test_perf_baselines.py` imports `_read_records`; those imports
-  are updated mechanically — no test logic changes.
-- DoD: `app.py` well under ~700 lines; the diff reads as moves; the full
-  gate is green with no behavior diff.
+- `tests/test_server.py` imports the moved helpers/constants from their owning
+  modules, and `tests/test_perf_baselines.py` imports `read_records` from
+  `server.replay`; those updates are mechanical — no test logic changes.
+- DoD completed 2026-07-18: `app.py` is route-focused at 958 physical lines.
+  Its retained `build_app`/route block alone was already 735 lines, so the
+  planned "~700" estimate was incompatible with the approved pure-move
+  boundary; no extra route split was invented to chase it. Token-normalized
+  comparisons confirm the three extracted bodies are exact moves after the
+  approved public renames, and the full local gate is green with no behavior
+  diff.
 - Optional follow-up change (not part of this slice): split
-  `tests/test_server.py` (2,151 lines) along the same seams.
+  `tests/test_server.py` (2,160 lines) along the same seams.
 
 ### F3 — EC22 descendant-process cleanup
 
@@ -1211,8 +1214,8 @@ Expected shape (hypothesis, not commitment):
 
 Prerequisites, in order, before an implementation slice makes sense:
 
-1. **F2** server split lands (a catalog endpoint belongs in a small
-   module, not in the current monolithic `app.py`).
+1. **F2** server split — complete 2026-07-18 (a catalog endpoint now has a
+   small-module seam rather than adding to the former monolith).
 2. **F1 Slice 1** `ui/src/store.ts` split lands (the UI-side registry
    fallback threads through the store/detail payloads).
 3. Keep the F1 invariant that already landed: all per-type UI behavior

@@ -22,8 +22,8 @@ from blacksheep.contents import Content, JSONContent
 from blacksheep.testing import TestClient
 
 import napflow.core.events as events_module
-import napflow.server.app as app_module
 import napflow.server.runs as runs_module
+import napflow.server.ws as ws_module
 from napflow.cli.main import DEFAULT_UI_PORT, _pick_ui_port
 from napflow.cli.scaffold import scaffold_workspace
 from napflow.core.engine import RunResult
@@ -35,15 +35,8 @@ from napflow.core.events import (
 )
 from napflow.core.workspace import Workspace, load_workspace
 from napflow.server import build_app
-from napflow.server.app import (
-    WS_HISTORY_FORMAT,
-    WS_REQUEST_ORIGIN,
-    _read_records,
-    _send_history_range,
-    _send_ws_record,
-    _SourceWriteCoordinator,
-    _stream_run_websocket,
-)
+from napflow.server.boundary import WS_REQUEST_ORIGIN, SourceWriteCoordinator
+from napflow.server.replay import read_records
 from napflow.server.runs import (
     SUBSCRIBER_QUEUE_LIMIT,
     SUBSCRIBER_RESYNC,
@@ -52,6 +45,12 @@ from napflow.server.runs import (
     RunManager,
     SubscriberLimitError,
     _LiveSink,
+)
+from napflow.server.ws import (
+    WS_HISTORY_FORMAT,
+    send_history_range,
+    send_ws_record,
+    stream_run_websocket,
 )
 
 # --------------------------------------------------------------------------
@@ -719,7 +718,7 @@ def test_empty_completed_history_is_rejected(tmp_path):
 def test_empty_live_history_prefix_is_readable(tmp_path):
     log_path = tmp_path / "live.jsonl"
     log_path.touch()
-    assert _read_records(log_path, allow_empty=True) == []
+    assert read_records(log_path, allow_empty=True) == []
 
 
 def test_history_endpoints_reject_final_log_symlink_escape(tmp_path):
@@ -787,7 +786,7 @@ def test_history_reader_tolerates_a_trailing_partial_record(tmp_path):
         f"{json.dumps(header)}\n" + '{"event":"node_fired"',
         encoding="utf-8",
     )
-    assert _read_records(log_path) == [header]
+    assert read_records(log_path) == [header]
 
 
 def test_prepare_gate_maps_to_http_statuses(tmp_path):
@@ -1379,7 +1378,7 @@ def test_concurrent_code_puts_serialize_the_etag_check(tmp_path):
 
 def test_source_write_coordinator_serializes_yielding_critical_sections(tmp_path):
     async def scenario():
-        coordinator = _SourceWriteCoordinator()
+        coordinator = SourceWriteCoordinator()
         path = tmp_path / "flow.yaml"
         active = 0
         maximum = 0
@@ -1794,7 +1793,7 @@ def test_ws_history_range_resumes_without_duplicates(tmp_path):
 
     socket = Socket()
     last_sent = asyncio.run(
-        _send_history_range(socket, path, after_seq=2, through_seq=4)
+        send_history_range(socket, path, after_seq=2, through_seq=4)
     )
 
     assert [record["seq"] for record in socket.sent] == [3, 4]
@@ -1844,7 +1843,7 @@ def test_ws_overflow_catches_up_exactly_once_on_same_socket(tmp_path):
 
     async def scenario():
         socket = Socket()
-        serving = asyncio.create_task(_stream_run_websocket(socket, run, manager))
+        serving = asyncio.create_task(stream_run_websocket(socket, run, manager))
         await socket.first_send.wait()
         final_seq = SUBSCRIBER_QUEUE_LIMIT + 20
         with log.open("a", encoding="utf-8") as history:
@@ -1923,7 +1922,7 @@ def test_finished_ws_reader_lease_blocks_newer_run_retention(tmp_path):
 
     async def scenario():
         socket = Socket()
-        serving = asyncio.create_task(_stream_run_websocket(socket, run, manager))
+        serving = asyncio.create_task(stream_run_websocket(socket, run, manager))
         await socket.started.wait()
         assert len(list(tmp_path.glob(f"{old_id}.reader-*"))) == 1
         assert apply_retention(tmp_path, history=1) == []
@@ -1937,15 +1936,15 @@ def test_finished_ws_reader_lease_blocks_newer_run_retention(tmp_path):
 
 
 def test_ws_send_timeout_bounds_blocked_subscriber(monkeypatch):
-    monkeypatch.setattr(app_module, "WS_SEND_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(ws_module, "WS_SEND_TIMEOUT_S", 0.01)
 
     class BlockedSocket:
         async def send_text(self, _text):
             await asyncio.Event().wait()
 
     async def scenario():
-        with pytest.raises(app_module._SlowSubscriber):
-            await _send_ws_record(BlockedSocket(), {"event": "node_fired", "seq": 1})
+        with pytest.raises(ws_module.SlowSubscriber):
+            await send_ws_record(BlockedSocket(), {"event": "node_fired", "seq": 1})
 
     asyncio.run(scenario())
 

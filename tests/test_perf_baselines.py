@@ -30,7 +30,7 @@ import pytest
 from napflow.core.engine import FlowRun
 from napflow.core.events import HISTORY_FORMAT, EventStream, SecretMasker
 from napflow.core.worker import WorkerPool, default_interpreter
-from napflow.server.app import _read_records
+from napflow.server.replay import read_records
 from test_engine import end, flow, manifest, run, start
 from test_frames import loop, write_flow
 
@@ -374,7 +374,7 @@ def _write_history_log(log, target_mb):
 
 @pytest.mark.parametrize("target_mb", [10, 100], ids=["10MB", "100MB"])
 def test_history_replay_read_memory(tmp_path, target_mb):
-    """Server-side replay reads the whole JSONL into RAM (`_read_records`).
+    """Server-side replay reads the whole JSONL into RAM (`read_records`).
     Time an uninstrumented read, release it, then measure peak heap on a
     separate read so `tracemalloc` does not distort the timing. Browser first
     render at these sizes is measured by the opt-in Playwright harness."""
@@ -383,7 +383,7 @@ def test_history_replay_read_memory(tmp_path, target_mb):
     size_mb = log.stat().st_size / (1024 * 1024)
     gc.collect()
     t = time.perf_counter()
-    records = _read_records(log)
+    records = read_records(log)
     elapsed = time.perf_counter() - t
     assert len(records) == count
     del records
@@ -391,7 +391,7 @@ def test_history_replay_read_memory(tmp_path, target_mb):
 
     tracemalloc.start()
     try:
-        records = _read_records(log)
+        records = read_records(log)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()

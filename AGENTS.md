@@ -194,13 +194,13 @@ either were the accepted v0.2 design.
    priority criteria) and completed as independently verifiable slices;
    the owner cuts releases when accumulated value warrants. Invariant:
    the integrated project stays releasable — slice large features accordingly.
-   F6 (EC56 brownfield-init root Git metadata) and F7 (configurable source
-   roots, literal dotenv profiles, minimal/example init, W108) are complete.
-   Current next: F2 `server/app.py` pure-move split, then the F1
-   UI-rework track, with F3 (EC22 tree-kill) and F4 (EC27/EC35 render guards)
-   interleaved; F5 perf drift and F8 (custom-block plugin system —
-   investigation note only; UI seam = `NODE_META`/`CONFIG_FORMS`
-   registries) remain unscheduled.
+   F6 (EC56 brownfield-init root Git metadata), F7 (configurable source roots,
+   literal dotenv profiles, minimal/example init, W108), and F2
+   (`server/app.py` pure-move replay/WS/boundary split) are complete.
+   Current next: F1 Slice 1 (`ui/src/store.ts` pure-move split), with F3
+   (EC22 tree-kill) and F4 (EC27/EC35 render guards) interleaved; F5 perf drift
+   and F8 (custom-block plugin system — investigation note only; UI seam =
+   `NODE_META`/`CONFIG_FORMS` registries) remain unscheduled.
 
 ## Testing priorities (in order of bug-risk)
 

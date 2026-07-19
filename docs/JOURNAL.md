@@ -6,6 +6,20 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-18 — F2 server adapter split complete
+
+- Done: pure-moved replay reads/views, live WebSocket streaming, and the D37
+  request/write boundary into `server/replay.py`, `server/ws.py`, and
+  `server/boundary.py`; `app.py` now owns routes and small response helpers.
+- Reconciled: `app.py` is 958 lines; its retained route block was already 735,
+  so the stale "~700" estimate was incompatible with the approved no-route-move
+  scope. Token-normalized comparisons prove the extracted bodies are exact.
+- Verified: Ruff/import contracts, 762 pytest, isolated requests+botocore
+  761-pass compatibility, notices, 84 Vitest, production build, 43 Playwright,
+  and release-artifact smoke all pass.
+- Next: F1 Slice 1, the `ui/src/store.ts` pure-move split; interleave F3/F4
+  per rolling priority.
+
 ## 2026-07-17 — F1 UI redesign slice: Nocturne design + in-card editing
 
 - Done: applied the owner's Claude Design handoff (Nocturne, Soft, dark+light,
