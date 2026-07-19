@@ -891,8 +891,8 @@ Demos, screenshots, and README media wait until F1 ships (owner call
 
 F6 was selected by the owner as the first rollout implementation and completed
 on 2026-07-15. Owner direction then pulled **F7** forward; it is implemented.
-**F2** completed on 2026-07-18. Current order resumes with **F1 Slice 1**,
-with **F3** and **F4** interleaved between F1 slices as small core/CLI changes.
+**F2** completed on 2026-07-18 and **F1 Slice 1** on 2026-07-19. Current
+order moves to **F3**, then **F4**, before **F1 Slice 2** resumes the UI track.
 **F5** remains unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
@@ -909,10 +909,11 @@ slices named here are the expected shape, not commitments.
       color, dark/light) and component conventions; produce the concrete
       slice list for owner sign-off. Output is a short doc + tokens,
       minimal behavior change.
-- [ ] Slice 1 — split `ui/src/store.ts` (1,302 lines, one Zustand store)
+- [x] Slice 1 — split `ui/src/store.ts` (1,346 lines at split time, one Zustand store)
       into slices (canvas / persistence / run-replay) as a pure-move
       enabler, mirroring F2 on the frontend, before feature slices pile
-      onto it. `RunPanel.tsx` (778 lines) may split along the same seams.
+      onto it. `RunPanel.tsx` (834 lines at review time) may split along
+      the same seams.
 - [ ] Slice 2 — canvas undo/redo (owner request 2026-07-15). In-memory,
       per-open-canvas bounded snapshot stack over the *document* slice
       only (nodes/edges/config/layout/Start/End ports) — depends on
@@ -957,7 +958,17 @@ Inspector is dropped; a selected card grows to host its editors — plus a
 unified console (events/history/diagnostics tabs), tidy auto-layout, and
 restyled run visuals. Replay scrubber explicitly kept deferred (D39).
 Scaffold layouts widened for the new card sizes. Remaining F1 slices
-(store split, undo/redo, audit-driven ergonomics) unchanged.
+(undo/redo and audit-driven ergonomics) unchanged.
+
+Slice 1 completed 2026-07-19: `store.ts` is a 24-line stable facade over
+canvas/document, persistence/session, and run-replay slice factories. One
+Zustand store and all existing public imports remain unchanged; `detail` has
+one canvas-owned initialization, document mutations cross one injected
+autosave bridge, and flow navigation applies the run reset in its original
+single state update. Independent parity review found defaults, generation
+ordering, socket lifecycle, reset patches, and action bodies unchanged.
+`RunPanel.tsx` stayed intact because the store boundary did not require its
+optional split. The full Python/frontend/package gate is green.
 
 Exit: the owner completes a real API-testing task in the UI without
 dropping to hand-editing YAML for routine operations; only then do README
@@ -1216,8 +1227,8 @@ Prerequisites, in order, before an implementation slice makes sense:
 
 1. **F2** server split — complete 2026-07-18 (a catalog endpoint now has a
    small-module seam rather than adding to the former monolith).
-2. **F1 Slice 1** `ui/src/store.ts` split lands (the UI-side registry
-   fallback threads through the store/detail payloads).
+2. **F1 Slice 1** `ui/src/store.ts` split — complete 2026-07-19 (the UI-side
+   registry fallback now has separate store/detail seams to thread through).
 3. Keep the F1 invariant that already landed: all per-type UI behavior
    flows through `NODE_META` + `CONFIG_FORMS` as *data* — no per-type
    rendering hardcoded in components. This is the plugin seam; guard it

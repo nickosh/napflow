@@ -2,8 +2,7 @@ import { create } from "zustand";
 
 // F1 chrome state: view preferences (persisted per browser) plus the
 // ephemeral overlay coordination the floating chrome shares — kept out
-// of store.ts on purpose (that file is the document/run state and has
-// its own split pending, F1 Slice 1).
+// of the canvas/persistence/run-replay slices in store/ on purpose.
 
 export type Theme = "dark" | "light";
 

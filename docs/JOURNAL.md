@@ -6,6 +6,21 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-19 — F1 Slice 1 frontend store split complete
+
+- Done: replaced the 1,346-line `ui/src/store.ts` with a 24-line stable facade
+  over canvas/document, persistence/session, and run-replay slice factories;
+  the optional `RunPanel.tsx` split was unnecessary.
+- Reconciled: one `useAppStore` and its public exports remain unchanged;
+  `detail.flow` has a canvas-owned boundary for future history, persistence
+  owns its autosave bridge, and parity review found no state/action/lifecycle
+  drift.
+- Verified: Ruff/import contracts, 762 pytest plus isolated requests+botocore
+  compatibility, notices, 84 Vitest, production build, 43 Playwright, and
+  release-artifact smoke all pass.
+- Next: implement F3 descendant-process cleanup, then interleave F4 ahead of
+  F1 Slice 2 undo/redo per rolling priority.
+
 ## 2026-07-18 — F2 server adapter split complete
 
 - Done: pure-moved replay reads/views, live WebSocket streaming, and the D37
