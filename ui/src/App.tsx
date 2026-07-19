@@ -47,6 +47,7 @@ import {
 import { identityFromPath } from "./identity";
 import { persistenceRegistry } from "./persistence";
 import { ETAG_POLL_MS, useAppStore } from "./store";
+import { documentHistoryShortcut } from "./store/history";
 import { tidyPositions } from "./tidy";
 import { useChrome } from "./uiChrome";
 
@@ -72,6 +73,15 @@ function overTrashZone(event: MouseEvent | TouchEvent | React.MouseEvent): boole
   );
 }
 
+function hasNativeUndoScope(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      "input, textarea, select, [contenteditable], [role='textbox'], .cm-editor",
+    ) !== null
+  );
+}
+
 function Canvas() {
   const {
     detail,
@@ -80,10 +90,9 @@ function Canvas() {
     runFrameDetail,
     graphVersion,
     selectNode,
-    moveNode,
+    moveNodes,
     connectEdge,
-    deleteEdges,
-    deleteNode,
+    deleteElements,
     addNode,
     setInteracting,
     selectRunTraffic,
@@ -184,9 +193,14 @@ function Canvas() {
         placed[node.id] ? { ...node, position: placed[node.id] } : node,
       ),
     );
-    for (const [id, pos] of Object.entries(placed)) {
-      moveNode(id, Math.round(pos.x), Math.round(pos.y));
-    }
+    moveNodes(
+      Object.fromEntries(
+        Object.entries(placed).map(([id, pos]) => [
+          id,
+          [Math.round(pos.x), Math.round(pos.y)] as [number, number],
+        ]),
+      ),
+    );
     if (tidySettle.current !== null) clearTimeout(tidySettle.current);
     tidySettle.current = window.setTimeout(() => {
       setTidying(false);
@@ -196,30 +210,13 @@ function Canvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tidyTick]);
 
-  const onNodesChange = useCallback(
-    (changes: NodeChange<CanvasNode>[]) => {
-      setNodes((current) => applyNodeChanges(changes, current));
-      for (const change of changes) {
-        if (change.type === "remove") deleteNode(change.id);
-      }
-    },
-    [deleteNode],
-  );
+  const onNodesChange = useCallback((changes: NodeChange<CanvasNode>[]) => {
+    setNodes((current) => applyNodeChanges(changes, current));
+  }, []);
 
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange[]) => {
-      setEdges((current) => applyEdgeChanges(changes, current));
-      const gone = changes
-        .filter((c) => c.type === "remove")
-        .map((c) => {
-          const [from, to] = c.id.split("→");
-          return { from, to };
-        })
-        .filter((e) => e.from && e.to);
-      if (gone.length > 0) deleteEdges(gone);
-    },
-    [deleteEdges],
-  );
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    setEdges((current) => applyEdgeChanges(changes, current));
+  }, []);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     if (event.dataTransfer.types.includes(PALETTE_DRAG_TYPE)) {
@@ -345,6 +342,17 @@ function Canvas() {
         nodesConnectable={!inRunMode}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onDelete={({ nodes: removedNodes, edges: removedEdges }) => {
+          deleteElements(
+            removedNodes.map((node) => node.id),
+            removedEdges
+              .map((edge) => {
+                const [from, to] = edge.id.split("→");
+                return { from, to };
+              })
+              .filter((edge) => edge.from && edge.to),
+          );
+        }}
         onConnect={onConnect}
         onNodeDragStart={(_event, node) => {
           setInteracting(true);
@@ -353,13 +361,26 @@ function Canvas() {
         onNodeDrag={(event, _node) => {
           setOverTrash(overTrashZone(event));
         }}
-        onNodeDragStop={(event, node) => {
+        onNodeDragStop={(event, _node, draggedNodes) => {
           setInteracting(false);
           setDragging(null);
           if (overTrashZone(event)) {
-            deleteNode(node.id);
+            deleteElements(
+              draggedNodes.map((node) => node.id),
+              [],
+            );
           } else {
-            moveNode(node.id, Math.round(node.position.x), Math.round(node.position.y));
+            moveNodes(
+              Object.fromEntries(
+                draggedNodes.map((node) => [
+                  node.id,
+                  [
+                    Math.round(node.position.x),
+                    Math.round(node.position.y),
+                  ] as [number, number],
+                ]),
+              ),
+            );
           }
         }}
         onNodeClick={(_event, node) => selectNode(node.id)}
@@ -467,7 +488,31 @@ export default function App() {
   // F1: keyboard chrome — ⌘K palette, Escape unwinds overlays
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      const key = event.key.toLowerCase();
+      const primary = event.metaKey || event.ctrlKey;
+      const historyAction = documentHistoryShortcut(event);
+      if (
+        !event.defaultPrevented &&
+        historyAction !== null &&
+        !hasNativeUndoScope(event.target)
+      ) {
+        const chrome = useChrome.getState();
+        const state = useAppStore.getState();
+        const overlayOpen =
+          chrome.codeOpen ||
+          chrome.cmdkOpen ||
+          chrome.runPopoverOpen ||
+          chrome.pickerAt !== null;
+        const available =
+          historyAction === "undo" ? state.canUndo : state.canRedo;
+        if (state.runView === null && !overlayOpen && available) {
+          event.preventDefault();
+          if (historyAction === "undo") state.undo();
+          else state.redo();
+          return;
+        }
+      }
+      if (primary && key === "k") {
         event.preventDefault();
         setCmdkOpen(!useChrome.getState().cmdkOpen);
       } else if (event.key === "Escape") {

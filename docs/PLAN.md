@@ -891,8 +891,9 @@ Demos, screenshots, and README media wait until F1 ships (owner call
 
 F6 was selected by the owner as the first rollout implementation and completed
 on 2026-07-15. Owner direction then pulled **F7** forward; it is implemented.
-**F2** completed on 2026-07-18 and **F1 Slice 1** on 2026-07-19. Current
-order moves to **F3**, then **F4**, before **F1 Slice 2** resumes the UI track.
+**F2** completed on 2026-07-18 and **F1 Slice 1** on 2026-07-19. Owner
+direction then pulled **F1 Slice 2** ahead of the queued trust work; it
+completed on 2026-07-19. The current order returns to **F3**, then **F4**.
 **F5** remains unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
@@ -914,17 +915,18 @@ slices named here are the expected shape, not commitments.
       enabler, mirroring F2 on the frontend, before feature slices pile
       onto it. `RunPanel.tsx` (834 lines at review time) may split along
       the same seams.
-- [ ] Slice 2 — canvas undo/redo (owner request 2026-07-15). In-memory,
+- [x] Slice 2 — canvas undo/redo (owner request 2026-07-15). In-memory,
       per-open-canvas bounded snapshot stack over the *document* slice
       only (nodes/edges/config/layout/Start/End ports) — depends on
       Slice 1's document/session state boundary; zundo-or-equivalent
       temporal middleware. Bounds: stack cap (~100 steps) + coalescing
       (drag commits on release; config typing groups; multi-delete is
       one step); memory is per-step deltas via immutable structural
-      sharing — no serialization, no server round-trips. Guards: hidden/
-      disabled in run mode (D29); external-change reload clears the
-      stack; autosave needs no special handling (an undo is an ordinary
-      state change through the save coordinator). Shortcuts scoped by
+      sharing — no serialization or history-specific server round-trips.
+      Guards: hidden/disabled in run mode (D29); an external flow-document
+      reload clears the stack, while code-only metadata refresh does not;
+      autosave needs no special handling (an undo is an ordinary state
+      change through the save coordinator). Shortcuts scoped by
       focus — CodeMirror keeps its own native text undo for `nodes.py`
       and config editors. **Owner call 2026-07-15: undo history is
       never a workspace file** (git-friendliness + conflict semantics;
@@ -969,6 +971,17 @@ single state update. Independent parity review found defaults, generation
 ordering, socket lifecycle, reset patches, and action bodies unchanged.
 `RunPanel.tsx` stayed intact because the store boundary did not require its
 optional split. The full Python/frontend/package gate is green.
+
+Slice 2 completed 2026-07-19: a store-local controller retains at most 100
+immutable `FlowModel` roots and relies on path-copying actions for structural
+sharing. One edit bridge records document changes only; drag release, keyed
+config focus bursts, tidy, and mixed deletion form semantic steps. Toolbar and
+macOS/Windows/Linux shortcuts restore through the existing autosave coordinator,
+leave focused config/CodeMirror undo alone, hide and guard in run/replay mode,
+and reset on flow navigation, conflict reload, or an external flow revision.
+Post-save and code-only detail refreshes preserve both history and accepted root
+identity. Focused temporal/canvas/persistence tests plus the full
+Python/frontend/package gate are green.
 
 Exit: the owner completes a real API-testing task in the UI without
 dropping to hand-editing YAML for routine operations; only then do README

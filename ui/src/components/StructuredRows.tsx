@@ -132,12 +132,19 @@ export function ChecksEditor({
   onChange,
 }: {
   checks: unknown;
-  onChange: (checks: Check[]) => void;
+  onChange: (checks: Check[], historyGroup?: string) => void;
 }) {
   const list = (Array.isArray(checks) ? checks : []) as Check[];
 
-  const update = (index: number, patch: Check) =>
-    onChange(list.map((c, i) => (i === index ? patch : { ...c })));
+  const update = (
+    index: number,
+    patch: Check,
+    historyGroup?: string,
+  ) =>
+    onChange(
+      list.map((c, i) => (i === index ? patch : { ...c })),
+      historyGroup,
+    );
 
   return (
     <div data-testid="checks-editor">
@@ -162,7 +169,11 @@ export function ChecksEditor({
               value={String(check.equals ?? "")}
               placeholder="200"
               onChange={(e) =>
-                update(index, { ...check, equals: parseNumeric(e.target.value) })
+                update(
+                  index,
+                  { ...check, equals: parseNumeric(e.target.value) },
+                  `row:${index}:equals`,
+                )
               }
             />
           )}
@@ -173,10 +184,14 @@ export function ChecksEditor({
               value={String(check.under_ms ?? "")}
               placeholder="1000"
               onChange={(e) =>
-                update(index, {
-                  ...check,
-                  under_ms: parseNumeric(e.target.value),
-                })
+                update(
+                  index,
+                  {
+                    ...check,
+                    under_ms: parseNumeric(e.target.value),
+                  },
+                  `row:${index}:under_ms`,
+                )
               }
             />
           )}
@@ -188,7 +203,11 @@ export function ChecksEditor({
                 value={(check.expr as string) ?? ""}
                 placeholder="trigger.value.status"
                 onChange={(e) =>
-                  update(index, { ...check, expr: e.target.value })
+                  update(
+                    index,
+                    { ...check, expr: e.target.value },
+                    `row:${index}:expr`,
+                  )
                 }
               />
               <select
@@ -247,7 +266,7 @@ export function CasesEditor({
   onChange,
 }: {
   cases: unknown;
-  onChange: (cases: Case[]) => void;
+  onChange: (cases: Case[], historyGroup?: string) => void;
 }) {
   const list = (Array.isArray(cases) ? cases : []) as Case[];
 
@@ -268,6 +287,7 @@ export function CasesEditor({
                 list.map((c, i) =>
                   i === index ? { ...c, name: e.target.value } : { ...c },
                 ),
+                `row:${index}:name`,
               )
             }
           />

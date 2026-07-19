@@ -284,6 +284,17 @@ Vitest, so a new field must gain a visual path or an explicit classification.
   collision-free below-graph placement and refits after the new node is
   measured, so the node is immediately reachable in the current canvas;
   drag-from-palette retains exact drop-point placement.
+- Canvas undo/redo retains at most 100 immutable, structurally shared
+  `FlowModel` roots for the currently open canvas only. It covers nodes, edges,
+  config (including Start/End ports), and layout; drag commits on release,
+  field typing coalesces by control/focus burst, and a multi-delete or tidy is
+  one step. Restores re-enter the ordinary autosave coordinator and rebuild the
+  xyflow view. Flow navigation, conflict reload, and a successful external
+  flow-document reload clear both stacks; post-save and code-only metadata
+  refreshes do not.
+  History is memory-only, never a workspace/flow file, and run/replay mode
+  hides and guards the controls (D29). Text-focused controls and CodeMirror
+  retain their native undo scope.
 - `max_seconds` is shown for every node, including Start/End and instant nodes,
   and is saved at node level (beside `id`/`type`/`config`), never inside config.
 - Templatable number/boolean controls accept either a native value or Jinja
@@ -434,7 +445,9 @@ as everywhere else.
   writes. A clean canvas polls for external changes and reloads; dirty/stale
   writes receive 409 and require reload or explicit force-overwrite (the
   last-write-wins ceiling). Navigation, code-editor close, and run start flush
-  pending writes; unload prompts while work remains (EC46).
+  pending writes; unload prompts while work remains (EC46). In-memory canvas
+  undo/redo uses that same accepted-edit path; it stores only the current
+  `FlowModel` document, never ETags, diagnostics, run state, or editor chrome.
 - Run history: JSONL per run at `.napflow/runs/<flow>/<run-id>.jsonl`,
   append-only, raw, and identical to the local live WebSocket stream. JSONL
   creation is exclusive, while directories/files otherwise use ordinary

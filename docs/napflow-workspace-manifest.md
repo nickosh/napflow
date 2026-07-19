@@ -521,7 +521,14 @@ the durable path below; canvas persistence is serialized and lifecycle-aware.
   exactly once, keeping `/` as hierarchy and spaces/`#`/`%`/`?` as data.
   Namespacing prevents valid identities such as `api/workspace` or
   `assets/canvas` from colliding with REST/static paths. Back/forward crosses
-  the same save barrier and restores a blocked history transition.
+  the same save barrier and restores a blocked history transition. Canvas
+  document undo/redo (FR-1118) is a separate, memory-only 100-step stack for
+  the currently open `FlowModel`: structurally shared roots cover
+  nodes/edges/config/ports/layout without retaining ETags, diagnostics, or run
+  state. Undo and redo enqueue ordinary coordinator revisions; navigation,
+  conflict reload, and successful external flow-document reload clear the
+  stack, while post-save and code-only detail refreshes preserve it. Run/replay
+  mode guards the actions, and focused text/code editors retain native undo.
 - **Subflow UX** (S4/M6, FR-1007): the flow-detail payload also carries
   `template_refs: {node: [node_ids]}` — cross-node `nodes.<id>`
   references, AST-derived (the same Jinja2 parse E009 runs) from

@@ -1,5 +1,7 @@
 import { useState } from "react";
 import {
+  ArrowClockwise,
+  ArrowCounterClockwise,
   ClockCounterClockwise,
   MagicWand,
   PencilSimple,
@@ -66,6 +68,10 @@ export default function RunControls() {
     runEnv,
     runLive,
     runNotice,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
     setRunEnv,
     startRun,
     exitRun,
@@ -172,6 +178,38 @@ export default function RunControls() {
             onClick={requestTidy}
           >
             <MagicWand size={16} />
+          </button>
+          <button
+            data-testid="undo-canvas"
+            className="nf-btn"
+            title="Undo canvas edit (⌘Z / Ctrl+Z)"
+            aria-label="Undo canvas edit"
+            disabled={!canUndo}
+            style={{
+              ...roundBtn,
+              background: "var(--surface)",
+              boxShadow: "var(--shadow)",
+              color: "var(--muted)",
+            }}
+            onClick={undo}
+          >
+            <ArrowCounterClockwise size={16} />
+          </button>
+          <button
+            data-testid="redo-canvas"
+            className="nf-btn"
+            title="Redo canvas edit (⌘⇧Z / Ctrl+Shift+Z)"
+            aria-label="Redo canvas edit"
+            disabled={!canRedo}
+            style={{
+              ...roundBtn,
+              background: "var(--surface)",
+              boxShadow: "var(--shadow)",
+              color: "var(--muted)",
+            }}
+            onClick={redo}
+          >
+            <ArrowClockwise size={16} />
           </button>
           {(workspace?.env_profiles.length ?? 0) > 0 && (
             <select

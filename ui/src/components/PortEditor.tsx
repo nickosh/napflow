@@ -155,7 +155,10 @@ function DefaultCell({
 
 function usePorts(nodeId: string): {
   ports: Record<string, unknown>[];
-  setPorts: (ports: Record<string, unknown>[]) => void;
+  setPorts: (
+    ports: Record<string, unknown>[],
+    historyGroup?: string,
+  ) => void;
 } {
   const detail = useAppStore((s) => s.detail);
   const updateNodeConfig = useAppStore((s) => s.updateNodeConfig);
@@ -164,7 +167,12 @@ function usePorts(nodeId: string): {
   const ports = (config.ports ?? []) as Record<string, unknown>[];
   return {
     ports,
-    setPorts: (next) => updateNodeConfig(nodeId, { ...config, ports: next }),
+    setPorts: (next, historyGroup) =>
+      updateNodeConfig(
+        nodeId,
+        { ...config, ports: next },
+        historyGroup === undefined ? undefined : `ports:${historyGroup}`,
+      ),
   };
 }
 
@@ -172,7 +180,11 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
   const { ports, setPorts } = usePorts(nodeId);
   const list = ports as StartPort[];
 
-  const update = (index: number, patch: Partial<StartPort>) => {
+  const update = (
+    index: number,
+    patch: Partial<StartPort>,
+    historyGroup?: string,
+  ) => {
     setPorts(
       list.map((p, i) => {
         if (i !== index) return { ...p };
@@ -185,6 +197,7 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
         if (patch.type === "any") delete next.type; // model default
         return next;
       }),
+      historyGroup,
     );
   };
 
@@ -200,7 +213,13 @@ export function StartPortEditor({ nodeId }: { nodeId: string }) {
             className="nf-input nodrag" style={{ flex: 2 }}
             value={port.name}
             placeholder="name"
-            onChange={(e) => update(index, { name: e.target.value })}
+            onChange={(e) =>
+              update(
+                index,
+                { name: e.target.value },
+                `row:${index}:name`,
+              )
+            }
           />
           <select
             data-testid={`start-port-type-${index}`}
@@ -266,6 +285,7 @@ export function EndPortEditor({ nodeId }: { nodeId: string }) {
                 list.map((p, i) =>
                   i === index ? { ...p, name: e.target.value } : { ...p },
                 ),
+                `row:${index}:name`,
               )
             }
           />

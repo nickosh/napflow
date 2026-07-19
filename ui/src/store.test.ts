@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiMocks = vi.hoisted(() => ({
   abortRun: vi.fn(),
+  fetchEtags: vi.fn(),
   fetchFlows: vi.fn(),
   fetchRunEventPage: vi.fn(),
   fetchRunFramePage: vi.fn(),
   fetchFlowDetail: vi.fn(),
   fetchWorkspace: vi.fn(),
   openRunSocket: vi.fn(),
+  putFlow: vi.fn(),
   startRun: vi.fn(),
 }));
 
@@ -16,12 +18,14 @@ vi.mock("./api", async (importOriginal) => {
   return {
     ...actual,
     abortRun: apiMocks.abortRun,
+    fetchEtags: apiMocks.fetchEtags,
     fetchFlows: apiMocks.fetchFlows,
     fetchRunEventPage: apiMocks.fetchRunEventPage,
     fetchRunFramePage: apiMocks.fetchRunFramePage,
     fetchFlowDetail: apiMocks.fetchFlowDetail,
     fetchWorkspace: apiMocks.fetchWorkspace,
     openRunSocket: apiMocks.openRunSocket,
+    putFlow: apiMocks.putFlow,
     startRun: apiMocks.startRun,
   };
 });
@@ -38,6 +42,7 @@ import {
   type NodeRunState,
   type RunFrameSummary,
 } from "./runview";
+import { persistenceRegistry } from "./persistence";
 import { useAppStore } from "./store";
 
 const RUN_ID = "20260713-000000-abcdef";
@@ -217,9 +222,19 @@ beforeEach(() => {
     ) => framePage(options.parentFrame),
   );
   apiMocks.fetchFlowDetail.mockResolvedValue(detail("flows/item"));
+  apiMocks.fetchEtags.mockResolvedValue({
+    identity: FLOW,
+    etag: "etag",
+    code_etag: null,
+  });
   apiMocks.fetchFlows.mockResolvedValue([{ identity: FLOW, valid: true }]);
   apiMocks.fetchWorkspace.mockResolvedValue(workspace());
   apiMocks.openRunSocket.mockReturnValue(fakeSocket());
+  apiMocks.putFlow.mockImplementation(async (identity: string) => ({
+    identity,
+    etag: "etag-saved",
+    diagnostics: [],
+  }));
   apiMocks.startRun.mockResolvedValue({
     run_id: RUN_ID,
     flow: FLOW,
@@ -316,6 +331,65 @@ describe("bounded history store", () => {
     expect(state.runFrameChildren).toEqual([]);
     expect(state.runFrameError).toContain("durable frame events remain inspectable");
     expect(state.runFrameError).toContain("flow not found");
+  });
+});
+
+describe("canvas persistence history boundary", () => {
+  it("retains the accepted flow root across save refetch before the next edit", async () => {
+    const opened = detail("flows/history");
+    opened.flow = {
+      flow: { name: "history" },
+      nodes: [
+        { id: "start", type: "start", config: { ports: [] } },
+        { id: "end", type: "end", config: { ports: [] } },
+      ],
+      edges: [],
+      layout: { start: [0, 0], end: [200, 0] },
+    };
+    apiMocks.fetchFlowDetail.mockResolvedValueOnce(opened);
+    await useAppStore.getState().openFlow(opened.identity, { push: false });
+
+    useAppStore.getState().moveNode("start", 20, 10);
+    const firstEditedRoot = useAppStore.getState().detail!.flow;
+    const sharedNodes = firstEditedRoot.nodes;
+    apiMocks.fetchFlowDetail.mockResolvedValueOnce({
+      ...opened,
+      flow: structuredClone(firstEditedRoot),
+      etag: "etag-saved",
+      functions: ["server_derived"],
+    });
+
+    await persistenceRegistry.flushAll();
+    await vi.waitFor(() => {
+      expect(useAppStore.getState().detail?.functions).toEqual([
+        "server_derived",
+      ]);
+    });
+    expect(useAppStore.getState().detail?.flow).toBe(firstEditedRoot);
+
+    apiMocks.fetchEtags.mockResolvedValueOnce({
+      identity: opened.identity,
+      etag: "etag-saved",
+      code_etag: "code-after",
+    });
+    apiMocks.fetchFlowDetail.mockResolvedValueOnce({
+      ...useAppStore.getState().detail!,
+      flow: structuredClone(firstEditedRoot),
+      code_etag: "code-after",
+      functions: ["code_changed"],
+    });
+    await useAppStore.getState().pollEtags();
+    expect(useAppStore.getState().detail?.flow).toBe(firstEditedRoot);
+    expect(useAppStore.getState().detail?.functions).toEqual(["code_changed"]);
+    expect(useAppStore.getState().canUndo).toBe(true);
+
+    useAppStore.getState().moveNode("end", 220, 10);
+    expect(useAppStore.getState().detail?.flow.nodes).toBe(sharedNodes);
+    useAppStore.getState().undo();
+    expect(useAppStore.getState().detail?.flow).toBe(firstEditedRoot);
+
+    apiMocks.fetchFlowDetail.mockResolvedValue(detail(FLOW));
+    await useAppStore.getState().openFlow(FLOW, { push: false });
   });
 });
 

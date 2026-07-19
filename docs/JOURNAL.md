@@ -6,6 +6,18 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-19 — F1 Slice 2 canvas undo/redo complete
+
+- Done: added a bounded, per-open-flow document history with structural sharing,
+  semantic drag/config/tidy/delete steps, toolbar actions, and scoped shortcuts.
+- Reconciled: undo/redo reuses autosave, survives self-save and code-metadata
+  refreshes, clears on navigation/external flow revision, and stays locked in
+  run mode.
+- Verified: Ruff/import/notices, 762 pytest, 96 Vitest, production build,
+  45 Playwright, and isolated wheel/sdist artifact smoke pass.
+- Next: return to F3 descendant-process cleanup, then F4 render guards;
+  F1 Slices 3+ remain audit-driven.
+
 ## 2026-07-19 — F1 Slice 1 frontend store split complete
 
 - Done: replaced the 1,346-line `ui/src/store.ts` with a 24-line stable facade

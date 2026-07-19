@@ -66,7 +66,7 @@ function Field({
   field: FieldDescriptor;
   value: unknown;
   functions: string[] | null;
-  onChange: (value: unknown) => void;
+  onChange: (value: unknown, historyGroup?: string) => void;
   quick?: boolean;
 }) {
   const testId = `config-${field.key}`;
@@ -89,7 +89,12 @@ function Field({
           value={(value as string) ?? ""}
           placeholder={quick ? field.label : field.placeholder}
           title={quick ? field.label : undefined}
-          onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
+          onChange={(e) =>
+            onChange(
+              e.target.value === "" ? undefined : e.target.value,
+              "typing",
+            )
+          }
         />
       );
     case "text":
@@ -100,7 +105,7 @@ function Field({
           style={quickStyle}
           rows={4}
           value={(value as string) ?? ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.target.value, "typing")}
         />
       );
     case "number":
@@ -114,7 +119,10 @@ function Field({
           title={quick ? field.label : undefined}
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(e) =>
-            onChange(e.target.value === "" ? undefined : Number(e.target.value))
+            onChange(
+              e.target.value === "" ? undefined : Number(e.target.value),
+              "typing",
+            )
           }
         />
       );
@@ -144,7 +152,9 @@ function Field({
           value={value === undefined || value === null ? "" : String(value)}
           placeholder={quick ? field.label : field.placeholder}
           title="number or Jinja template"
-          onChange={(e) => onChange(parseTemplatableNumber(e.target.value))}
+          onChange={(e) =>
+            onChange(parseTemplatableNumber(e.target.value), "typing")
+          }
         />
       );
     case "templatable-boolean":
@@ -158,7 +168,9 @@ function Field({
             value={value === undefined || value === null ? "" : String(value)}
             placeholder={quick ? field.label : field.placeholder}
             title="true, false, or Jinja template"
-            onChange={(e) => onChange(parseTemplatableBoolean(e.target.value))}
+            onChange={(e) =>
+              onChange(parseTemplatableBoolean(e.target.value), "typing")
+            }
           />
           <datalist id={`${testId}-values`}>
             <option value="true" />
@@ -199,7 +211,7 @@ function Field({
             placeholder={quick ? field.label : undefined}
             title={quick ? field.label : undefined}
             value={(value as string) ?? ""}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => onChange(e.target.value, "typing")}
           />
           <datalist id="nodes-py-functions">
             {(functions ?? []).map((fn) => (
@@ -252,14 +264,22 @@ export default function ConfigForm({
   }
   if (fields.length === 0) return null;
 
-  const setField = (key: string, value: unknown) => {
+  const setField = (
+    key: string,
+    value: unknown,
+    historyGroup?: string,
+  ) => {
     const next = { ...config };
     if (value === undefined) {
       delete next[key]; // absent key = model default (exclude_unset)
     } else {
       next[key] = value;
     }
-    updateNodeConfig(nodeId, next);
+    updateNodeConfig(
+      nodeId,
+      next,
+      historyGroup === undefined ? undefined : `${key}:${historyGroup}`,
+    );
   };
 
   if (quick) {
@@ -271,7 +291,9 @@ export default function ConfigForm({
             field={field}
             value={config[field.key]}
             functions={functions}
-            onChange={(value) => setField(field.key, value)}
+            onChange={(value, historyGroup) =>
+              setField(field.key, value, historyGroup)
+            }
             quick
           />
         ))}
@@ -287,7 +309,9 @@ export default function ConfigForm({
             field={field}
             value={config[field.key]}
             functions={functions}
-            onChange={(value) => setField(field.key, value)}
+            onChange={(value, historyGroup) =>
+              setField(field.key, value, historyGroup)
+            }
           />
         );
         const caption = (

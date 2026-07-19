@@ -243,6 +243,7 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
   const inRunMode = run !== undefined;
   const storeSelected = useAppStore((s) => s.selectedNode === data.nodeId);
   const selectRunTraffic = useAppStore((s) => s.selectRunTraffic);
+  const endHistoryGroup = useAppStore((s) => s.endHistoryGroup);
   const [pinned, setPinned] = useState(false);
   const meta = nodeMeta(data.nodeType);
   const NodeIcon = meta.icon;
@@ -263,6 +264,7 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
       className={`nf-node${
         selected || storeSelected ? " nf-selected" : ""
       }${run?.active ? " napf-node-active" : ""}`}
+      onBlurCapture={endHistoryGroup}
       style={{
         // per-type sizes (owner call); the editor grows the card
         width: expanded ? Math.max(meta.width, EDITOR_WIDTH) : meta.width,

@@ -48,7 +48,7 @@ export type PersistenceSlice = {
 };
 
 export type CanvasSlice = {
-  // The open canvas document. Future temporal middleware snapshots flow only;
+  // The open canvas document. Temporal history snapshots flow only;
   // diagnostics, etags, and the surrounding session remain non-historical.
   detail: FlowDetail | null;
   selectedNode: string | null;
@@ -56,18 +56,32 @@ export type CanvasSlice = {
   graphVersion: number;
   // A drag is live — hold off external reloads.
   interacting: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
   selectNode: (id: string | null) => void;
-  // Every canvas edit mutates detail.flow then autosaves.
+  // Every canvas edit mutates detail.flow then autosaves. Multi-item canvas
+  // gestures cross this boundary once so they remain one history step.
   moveNode: (id: string, x: number, y: number) => void;
+  moveNodes: (positions: Record<string, [number, number]>) => void;
   connectEdge: (from: string, to: string) => void;
-  deleteEdges: (edges: { from: string; to: string }[]) => void;
+  deleteElements: (
+    nodeIds: string[],
+    edges: { from: string; to: string }[],
+  ) => void;
   deleteNode: (id: string) => void;
   addNode: (type: string, position?: [number, number]) => void;
-  updateNodeConfig: (id: string, config: Record<string, unknown>) => void;
+  updateNodeConfig: (
+    id: string,
+    config: Record<string, unknown>,
+    historyGroup?: string,
+  ) => void;
   updateNodeMaxSeconds: (
     id: string,
     maxSeconds: number | undefined,
   ) => void;
+  undo: () => void;
+  redo: () => void;
+  endHistoryGroup: () => void;
   setInteracting: (interacting: boolean) => void;
 };
 
@@ -134,7 +148,11 @@ export type StoreGet = Parameters<AppStateCreator>[1];
 
 export type EditFlow = (
   mutate: (flow: FlowModel) => FlowModel,
-  opts?: { rebuild?: boolean },
+  opts?: {
+    rebuild?: boolean;
+    recordHistory?: boolean;
+    historyGroup?: string;
+  },
 ) => void;
 
 type RunReplayAction =

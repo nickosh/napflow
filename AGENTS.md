@@ -197,11 +197,12 @@ either were the accepted v0.2 design.
    F6 (EC56 brownfield-init root Git metadata), F7 (configurable source roots,
    literal dotenv profiles, minimal/example init, W108), F2
    (`server/app.py` pure-move replay/WS/boundary split), and F1 Slice 1
-   (`ui/src/store.ts` canvas/persistence/run-replay split) are complete.
-   Current next: F3 (EC22 tree-kill), then F4 (EC27/EC35 render guards), before
-   F1 Slice 2 undo/redo; F5 perf drift and F8 (custom-block plugin system —
-   investigation note only; UI seam = `NODE_META`/`CONFIG_FORMS` registries)
-   remain unscheduled.
+   (`ui/src/store.ts` canvas/persistence/run-replay split) plus Slice 2
+   (bounded canvas document undo/redo) are complete.
+   Current next: F3 (EC22 tree-kill), then F4 (EC27/EC35 render guards);
+   F1 Slices 3+ remain audit-driven. F5 perf drift and F8 (custom-block plugin
+   system — investigation note only; UI seam = `NODE_META`/`CONFIG_FORMS`
+   registries) remain unscheduled.
 
 ## Testing priorities (in order of bug-risk)
 

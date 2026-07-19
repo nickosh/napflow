@@ -15,6 +15,7 @@ import {
   persistenceRegistry,
   SaveCoordinator,
 } from "../persistence";
+import type { DocumentHistory } from "./history";
 import { joinOperatorNotices } from "./notices";
 import type {
   EditFlow,
@@ -43,6 +44,7 @@ export function createPersistenceSlice(
   set: StoreSet,
   get: StoreGet,
   resetRunForFlow: () => RunResetPatch,
+  documentHistory: DocumentHistory<FlowModel>,
 ): { slice: PersistenceSlice; editFlow: EditFlow } {
   let navigationGeneration = 0;
   let detailGeneration = 0;
@@ -91,12 +93,24 @@ export function createPersistenceSlice(
     const { detail, runView } = get();
     if (detail === null) return;
     if (runView !== null) return; // run mode locks editing (owner fork)
-    detailGeneration += 1;
     const flow = mutate(detail.flow);
+    if (documentHistory.same(detail.flow, flow)) return;
+    if (
+      opts?.recordHistory !== false &&
+      documentHistory.record(
+        detail.flow,
+        flow,
+        opts?.historyGroup,
+      ) === false
+    ) {
+      return;
+    }
+    detailGeneration += 1;
     set({
       detail: { ...detail, flow },
       saveError: null,
       saveDiagnostics: [],
+      ...documentHistory.status,
       ...(opts?.rebuild ? { graphVersion: get().graphVersion + 1 } : {}),
     });
     flowSaves.edit({ identity: detail.identity, flow });
@@ -122,7 +136,26 @@ export function createPersistenceSlice(
       ) {
         detailGeneration += 1;
         flowSaves.reset(fresh.etag);
-        set({ detail: fresh, graphVersion: s.graphVersion + 1 });
+        const externalDocumentRevision = fresh.etag !== expectedEtag;
+        // The post-save refetch carries server-derived ports/functions, but
+        // reparses the same YAML into an unrelated object tree. Keep the
+        // accepted local root when the document is unchanged so adjacent
+        // history entries continue to share every untouched branch.
+        const refreshedFlow = documentHistory.same(s.detail.flow, fresh.flow)
+          ? s.detail.flow
+          : fresh.flow;
+        set({
+          detail: { ...fresh, flow: refreshedFlow },
+          selectedNode:
+            s.selectedNode !== null &&
+            refreshedFlow.nodes.some((node) => node.id === s.selectedNode)
+              ? s.selectedNode
+              : null,
+          graphVersion: s.graphVersion + 1,
+          ...(externalDocumentRevision
+            ? documentHistory.reset()
+            : documentHistory.status),
+        });
       }
     } catch {
       // transient — the poll or next save will surface real trouble
@@ -207,6 +240,7 @@ export function createPersistenceSlice(
           selectedNode: null,
           saveError: null,
           saveDiagnostics: [],
+          ...documentHistory.reset(),
           ...runReset,
         });
         if (
@@ -302,12 +336,14 @@ export function createPersistenceSlice(
           return; // dirty edits conflict via the PUT's 409, not the poll
         }
         const identity = s.detail.identity;
+        const detailVersion = detailGeneration;
         try {
           const etags = await fetchEtags(identity);
           const current = get().detail;
           if (
             current !== null &&
             current.identity === identity &&
+            detailVersion === detailGeneration &&
             get().saveState === "clean" &&
             (etags.etag !== current.etag ||
               etags.code_etag !== current.code_etag)

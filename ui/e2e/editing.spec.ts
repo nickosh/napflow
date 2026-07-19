@@ -91,6 +91,13 @@ test("dragging a node autosaves a layout-only change", async ({ page }) => {
   expect(after.flow.nodes).toEqual(before.flow.nodes); // layout ONLY
   expect(after.flow.edges).toEqual(before.flow.edges);
   expect(after.etag).not.toBe(before.etag);
+
+  // One drag release records the entire gesture as one document step.
+  await page.getByTestId("undo-canvas").click();
+  await waitSaved(page);
+  const restored = await flowModel(page, "flows/main");
+  expect(restored.flow.layout).toEqual(before.flow.layout);
+  await expect(page.getByTestId("undo-canvas")).toBeDisabled();
 });
 
 test("adding a node from the palette persists it", async ({ page }) => {
@@ -158,6 +165,177 @@ test("config form edits a node's config and autosaves", async ({ page }) => {
   const model = await flowModel(page, "flows/main");
   const log = model.flow.nodes.find((n: { id: string }) => n.id === "log");
   expect(log.config).toEqual({ label: "hello from e2e" });
+});
+
+test("canvas undo/redo is grouped, autosaved, focus-scoped, and run-locked", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/main");
+  await expect(page.getByTestId("undo-canvas")).toBeDisabled();
+  await expect(page.getByTestId("redo-canvas")).toBeDisabled();
+
+  const before = await flowModel(page, "flows/main");
+  const originalLabel = before.flow.nodes.find(
+    (node: { id: string }) => node.id === "log",
+  ).config.label;
+
+  await page.getByTestId("node-log").click();
+  const label = page.getByTestId("config-label");
+  await label.fill("");
+  await label.pressSequentially("grouped history");
+  await label.blur();
+  await waitSaved(page);
+  await expect(page.getByTestId("undo-canvas")).toBeEnabled();
+
+  // A focused config input owns the shortcut: the canvas handler must leave
+  // the browser event unclaimed and the existing canvas step untouched.
+  await label.focus();
+  await label.press("End");
+  await label.pressSequentially("!");
+  await expect(label).toHaveValue("grouped history!");
+  await page.evaluate(() => {
+    const target = window as Window & {
+      __canvasUndoPrevented?: boolean;
+    };
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        queueMicrotask(() => {
+          target.__canvasUndoPrevented = event.defaultPrevented;
+        });
+      },
+      { once: true },
+    );
+  });
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __canvasUndoPrevented?: boolean })
+            .__canvasUndoPrevented,
+      ),
+    )
+    .toBe(false);
+  // Controlled inputs do not expose a native undo stack consistently across
+  // browsers. Return to the group baseline if the browser left the edit in
+  // place; this must collapse the no-op history group either way.
+  if ((await label.inputValue()) === "grouped history!") {
+    await label.press("Backspace");
+  }
+  await expect(label).toHaveValue("grouped history");
+  await label.blur();
+  await waitSaved(page);
+  await expect(page.getByTestId("undo-canvas")).toBeEnabled();
+  let saved = await flowModel(page, "flows/main");
+  expect(
+    saved.flow.nodes.find((node: { id: string }) => node.id === "log").config
+      .label,
+  ).toBe("grouped history");
+
+  // Every keystroke above is one focus/typing group.
+  await page.locator(".react-flow__pane").click({ position: { x: 8, y: 8 } });
+  await page.keyboard.press("ControlOrMeta+z");
+  await waitSaved(page);
+  saved = await flowModel(page, "flows/main");
+  expect(
+    saved.flow.nodes.find((node: { id: string }) => node.id === "log").config
+      .label,
+  ).toBe(originalLabel);
+
+  const redoShortcut = await page.evaluate(() =>
+    navigator.platform.startsWith("Mac") ? "Meta+Shift+z" : "Control+y",
+  );
+  await page.keyboard.press(redoShortcut);
+  await waitSaved(page);
+  saved = await flowModel(page, "flows/main");
+  expect(
+    saved.flow.nodes.find((node: { id: string }) => node.id === "log").config
+      .label,
+  ).toBe("grouped history");
+
+  // CodeMirror retains its own native undo after a real edit; opening it
+  // cannot consume canvas history even when the editor has focus.
+  await page.getByTestId("open-code").click();
+  const code = page.getByTestId("code-text").locator(".cm-content");
+  await expect(code).toBeVisible();
+  const codeBefore = await code.textContent();
+  await code.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.insertText("\n# native editor undo");
+  await expect(code).toContainText("# native editor undo");
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect
+    .poll(() => code.textContent())
+    .toBe(codeBefore);
+  await page.getByTestId("code-close").click();
+  await expect(page.getByTestId("undo-canvas")).toBeEnabled();
+
+  await page.getByTestId("undo-canvas").click();
+  await waitSaved(page);
+
+  // History remains available while D29 run mode hides and guards editing.
+  // Remove the intentionally unwired log so this editing fixture passes the
+  // run gate; both edits are restored after leaving run mode.
+  await page.getByTestId("node-log").click();
+  await page.getByTestId("delete-node").click();
+  await expect(page.getByTestId("node-log")).toHaveCount(0);
+  await page.getByTestId("add-node").click();
+  await page.getByTestId("palette-note").click();
+  await expect(page.getByTestId("node-note")).toBeVisible();
+  await page.getByTestId("run-button").click();
+  await expect(page.getByTestId("run-pill-edit")).toBeVisible();
+  await expect(page.getByTestId("undo-canvas")).toHaveCount(0);
+  await expect(page.getByTestId("redo-canvas")).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.getByTestId("node-note")).toBeVisible();
+
+  await page.getByTestId("run-pill-edit").click();
+  await expect(page.getByTestId("undo-canvas")).toBeEnabled();
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.getByTestId("node-note")).toHaveCount(0);
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.getByTestId("node-log")).toBeVisible();
+  await waitSaved(page);
+});
+
+test("multi-node deletion is one canvas history step", async ({ page }) => {
+  await page.goto("/flow/flows/main");
+  await expect(page.getByTestId("node-start")).toBeVisible();
+  await expect(page.getByTestId("node-end")).toBeVisible();
+
+  const wrappers = page.locator(".react-flow__node");
+  const nodeCount = await wrappers.count();
+  const boxes = await Promise.all(
+    Array.from({ length: nodeCount }, (_, index) =>
+      wrappers.nth(index).boundingBox(),
+    ),
+  );
+  const present = boxes.filter((box) => box !== null);
+  const left = Math.min(...present.map((box) => box.x)) - 8;
+  const top = Math.min(...present.map((box) => box.y)) - 8;
+  const right = Math.max(...present.map((box) => box.x + box.width)) + 8;
+  const bottom = Math.max(...present.map((box) => box.y + box.height)) + 8;
+
+  // Shift-drag is React Flow's platform-neutral multi-selection gesture.
+  await page.keyboard.down("Shift");
+  await page.waitForTimeout(50);
+  await page.mouse.move(left, top);
+  await page.mouse.down();
+  await page.mouse.move(right, bottom, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(page.locator(".react-flow__node.selected")).toHaveCount(
+    nodeCount,
+  );
+  await page.keyboard.press("Delete");
+  await expect(page.getByTestId("node-start")).toHaveCount(0);
+  await expect(page.getByTestId("node-end")).toHaveCount(0);
+
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.getByTestId("node-start")).toBeVisible();
+  await expect(page.getByTestId("node-end")).toBeVisible();
+  await waitSaved(page);
 });
 
 test("safety and typed request fields preserve native values and templates", async ({
@@ -492,6 +670,9 @@ test("external file change while clean live-reloads the canvas", async ({
 }) => {
   await page.goto("/flow/flows/main");
   await waitSaved(page);
+  await dragNodeBy(page, "node-start", 25, 15);
+  await waitSaved(page);
+  await expect(page.getByTestId("undo-canvas")).toBeEnabled();
   const before = await flowModel(page, "flows/main");
 
   // simulate a git checkout / hand edit: PUT with force from outside
@@ -502,11 +683,14 @@ test("external file change while clean live-reloads the canvas", async ({
   });
   expect(external.ok()).toBeTruthy();
 
-  // the etag poll (2s) picks it up and reloads WITHOUT a conflict
-  // prompt — the canvas was clean, so it's a silent live-reload
-  await page.waitForTimeout(3_000); // > ETAG_POLL_MS
+  // the etag poll picks it up and reloads WITHOUT a conflict prompt — the
+  // canvas was clean, so it's a silent live-reload
+  await expect(page.getByTestId("undo-canvas")).toBeDisabled({
+    timeout: 10_000,
+  });
   await expect(page.getByTestId("save-conflict")).toHaveCount(0);
   await waitSaved(page);
+  await expect(page.getByTestId("redo-canvas")).toBeDisabled();
 });
 
 async function dragNodeBy(page: Page, testId: string, dx: number, dy: number) {
@@ -552,6 +736,8 @@ test("immediate flow navigation flushes the pending canvas edit", async ({
   // coordinator before it replaces the current detail.
   await pickFlow(page, "flows/smoke");
   await expect(page).toHaveURL(/\/flow\/flows\/smoke$/);
+  await expect(page.getByTestId("undo-canvas")).toBeDisabled();
+  await expect(page.getByTestId("redo-canvas")).toBeDisabled();
   const after = await flowModel(page, "flows/main");
   expect(after.flow.layout.start).not.toEqual(before.flow.layout.start);
 });
