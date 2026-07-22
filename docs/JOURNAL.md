@@ -6,6 +6,16 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-22 — Cross-platform focus-shortcut gate repaired
+
+- Fixed: the Playwright focus-scope probe now observes the actual Ctrl/Meta+Z
+  keydown instead of React Flow's preceding multi-selection modifier event;
+  canvas and native text undo behavior are unchanged.
+- Verified: 96 Vitest, production typecheck/build, 21 editing Playwright, and
+  the full 45-test Playwright suite pass locally on macOS.
+- Next: confirm the Linux/Windows gate, then use the pre-audition review queue
+  during manual audition and scope accepted F1 slices.
+
 ## 2026-07-22 — F1 pre-audition review queue reconciled
 
 - Planned: unify every run-input entry path and make run-inspector port peeks

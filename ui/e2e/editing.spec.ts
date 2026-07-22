@@ -197,15 +197,22 @@ test("canvas undo/redo is grouped, autosaved, focus-scoped, and run-locked", asy
     const target = window as Window & {
       __canvasUndoPrevented?: boolean;
     };
-    window.addEventListener(
-      "keydown",
-      (event) => {
-        queueMicrotask(() => {
-          target.__canvasUndoPrevented = event.defaultPrevented;
-        });
-      },
-      { once: true },
-    );
+    const observeUndoKey = (event: KeyboardEvent) => {
+      // Playwright presses the modifier before z. React Flow legitimately
+      // claims that standalone modifier for multi-selection, so observe the
+      // undo chord itself instead of the first keydown in the sequence.
+      if (
+        event.key.toLowerCase() !== "z" ||
+        (!event.ctrlKey && !event.metaKey)
+      ) {
+        return;
+      }
+      window.removeEventListener("keydown", observeUndoKey);
+      queueMicrotask(() => {
+        target.__canvasUndoPrevented = event.defaultPrevented;
+      });
+    };
+    window.addEventListener("keydown", observeUndoKey);
   });
   await page.keyboard.press("ControlOrMeta+z");
   await expect
