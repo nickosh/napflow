@@ -6,6 +6,16 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-22 — Local branch build and install path documented
+
+- Done: expanded the README development workflow with prerequisites, the
+  UI-first package build, version-independent checkout install, and manual-test
+  handoff.
+- Verified: locked frontend install, production UI build, wheel/sdist build,
+  local tool install, and installed `init --example` → `check` → `run` smoke.
+- Next: begin the owner's real API-testing audition with the installed build
+  and record only accepted follow-ups before resuming F3.
+
 ## 2026-07-22 — F1 pre-audition review queue implemented
 
 - Done: made Start/End fully undoable authoring objects, added missing-boundary
