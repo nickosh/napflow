@@ -986,9 +986,10 @@ Post-save and code-only detail refreshes preserve both history and accepted root
 identity. Focused temporal/canvas/persistence tests plus the full
 Python/frontend/package gate are green.
 
-Pre-audition review queue recorded 2026-07-22 (planned, not landed):
+Pre-audition review queue recorded 2026-07-22 (implementation complete;
+owner audition pending):
 
-- [ ] **Boundary authoring, execution-source cues, and disconnected islands.**
+- [x] **Boundary authoring, execution-source cues, and disconnected islands.**
       Preserve E006's exactly-one Start/End structural contract, but allow both
       boundary cards to be deleted through the ordinary canvas deletion paths.
       In particular, dragging Start or End must reveal and activate the existing
@@ -1028,18 +1029,18 @@ Pre-audition review queue recorded 2026-07-22 (planned, not landed):
       save-and-reopen of missing-boundary flows, the E006 run gate,
       duplicate-add defense, Start's permanent source cue, and a fixture cue
       toggling as its trigger edge is connected or removed.
-- [ ] **One run-input opening contract.** The bottom Run control and command
+- [x] **One run-input opening contract.** The bottom Run control and command
       palette must call the same owner for popover initialization, configured
       defaults, edited-blank semantics, validation, close/reset, and flow
       navigation. Acceptance covers both entry paths, every Start-port type,
       untouched template defaults, intentional empty overrides, and stale-state
       prevention.
-- [ ] **Lazy full-value port peek.** A run-inspector port row must retain an
+- [x] **Lazy full-value port peek.** A run-inspector port row must retain an
       event sequence/content locator and resolve that canonical event only when
       its modal opens, for both live and replay views. Preserve zero eager blob
       reads; show verified full values, and localize missing/corrupt-content
       errors to the requested modal without damaging the run view or console.
-- [ ] **Registry boundary follow-up.** Treat bounded built-in semantic branches
+- [x] **Registry boundary follow-up.** Treat bounded built-in semantic branches
       as the current working direction, not a completed F8 decision. Inventory
       each exception, keep generic presentation declarative, add consumer-level
       registry tests, and narrow `catalog.test.ts` comments/assertions so key
@@ -1047,6 +1048,17 @@ Pre-audition review queue recorded 2026-07-22 (planned, not landed):
       The cross-platform focus-shortcut failure is owned by the next dedicated
       session; selected-card collapse remains part of manual audition rather
       than this queue.
+
+Implementation closeout (2026-07-22): all four review items are covered by
+unit, server, and browser tests. The registry audit keeps generic picker/card
+icon, category, description, quick-field, width, and form presentation in
+`NODE_META` / `CONFIG_FORMS`. Its explicit built-in exceptions are bounded to
+model-valid default construction; Start/End cardinality, editors, callouts,
+styling, and frame-source semantics; Start-port run binding; flow/loop static
+drill targets and reference keys; assert/note/boundary collapsed summaries;
+and descriptor-field, structured-row, port-type, and runtime-event protocol
+switches. This inventory is current implementation evidence, not an F8 plugin
+contract or scheduling decision.
 
 Exit: the owner completes a real API-testing task in the UI without
 dropping to hand-editing YAML for routine operations; only then do README

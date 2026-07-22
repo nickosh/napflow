@@ -26,6 +26,22 @@ function model(): FlowModel {
   };
 }
 
+function boundaryModel(): FlowModel {
+  return {
+    flow: { name: "boundaries" },
+    nodes: [
+      { id: "start", type: "start", config: { ports: [] } },
+      {
+        id: "end",
+        type: "end",
+        config: { ports: [{ name: "done", required: false }] },
+      },
+    ],
+    edges: [{ from: "start.out", to: "end.done" }],
+    layout: { start: [0, 0], end: [200, 0] },
+  };
+}
+
 function detail(flow: FlowModel): FlowDetail {
   return {
     identity: "flows/history",
@@ -162,5 +178,50 @@ describe("canvas document history", () => {
     store.set({ runView: {} as AppState["runView"] });
     store.get().undo();
     expect(store.get().detail?.flow).toBe(deleted);
+  });
+
+  it("deletes a boundary and its incident edges as one undoable edit", () => {
+    const store = harness();
+    store.set({ detail: detail(boundaryModel()) });
+
+    store.get().deleteNode("end");
+    expect(store.get().detail?.flow.nodes.map((node) => node.id)).toEqual([
+      "start",
+    ]);
+    expect(store.get().detail?.flow.edges).toEqual([]);
+    expect(store.get().detail?.flow.layout).toEqual({ start: [0, 0] });
+    expect(store.get().canUndo).toBe(true);
+
+    store.get().undo();
+    expect(store.get().detail?.flow).toEqual(boundaryModel());
+    expect(store.get().canUndo).toBe(false);
+    expect(store.get().canRedo).toBe(true);
+  });
+
+  it("offers one history step for a missing boundary and rejects duplicates", () => {
+    const store = harness();
+    store.set({ detail: detail(boundaryModel()) });
+
+    const original = store.get().detail!.flow;
+    store.get().addNode("start", [40, 40]);
+    expect(store.get().detail?.flow).toBe(original);
+    expect(store.get().canUndo).toBe(false);
+
+    store.get().deleteNode("end");
+    store.get().addNode("end", [240, 40]);
+    const restored = store.get().detail!.flow;
+    expect(restored.nodes.filter((node) => node.type === "end")).toHaveLength(1);
+
+    store.get().addNode("end", [300, 40]);
+    expect(store.get().detail?.flow).toBe(restored);
+    store.get().undo();
+    expect(store.get().detail?.flow.nodes.some((node) => node.type === "end")).toBe(
+      false,
+    );
+    expect(store.get().canRedo).toBe(true);
+    store.get().redo();
+    expect(
+      store.get().detail?.flow.nodes.filter((node) => node.type === "end"),
+    ).toHaveLength(1);
   });
 });

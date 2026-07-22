@@ -13,6 +13,7 @@ import {
 } from "../graph";
 import { preview, type NodeRunState, type PortTraffic } from "../runview";
 import { useAppStore } from "../store";
+import { isBoundaryNodeType } from "../nodeSemantics";
 import ConfigForm from "./ConfigForm";
 import NodeSafetyForm from "./NodeSafetyForm";
 import { EndPortEditor, StartPortEditor } from "./PortEditor";
@@ -158,7 +159,6 @@ function NodeEditor({ data }: { data: CanvasNode["data"] }) {
   const meta = nodeMeta(data.nodeType);
   const config = (data.config ?? {}) as Record<string, unknown>;
   const target = drillTarget(data);
-  const isBoundary = data.nodeType === "start" || data.nodeType === "end";
 
   return (
     <div className="nf-node-editor nodrag nowheel">
@@ -214,18 +214,16 @@ function NodeEditor({ data }: { data: CanvasNode["data"] }) {
           {JSON.stringify(data.config ?? {}, null, 2)}
         </pre>
       </details>
-      {!isBoundary && (
-        <button
-          data-testid="delete-node"
-          className="nf-btn nf-btn-danger nodrag"
-          onClick={() => deleteNode(data.nodeId)}
-          title="delete node (edges go with it)"
-          style={{ alignSelf: "flex-start" }}
-        >
-          <Trash size={13} />
-          delete
-        </button>
-      )}
+      <button
+        data-testid="delete-node"
+        className="nf-btn nf-btn-danger nodrag"
+        onClick={() => deleteNode(data.nodeId)}
+        title="delete node (edges go with it)"
+        style={{ alignSelf: "flex-start" }}
+      >
+        <Trash size={13} />
+        delete
+      </button>
     </div>
   );
 }
@@ -253,6 +251,15 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
   const quickKeys = meta.quick;
   const metaLine =
     quickKeys.length > 0 && !inRunMode ? null : metaFor(data.nodeType, data.config);
+  const boundaryType = isBoundaryNodeType(data.nodeType)
+    ? data.nodeType
+    : null;
+  const iconColor =
+    boundaryType === "start"
+      ? "var(--boundary-start)"
+      : boundaryType === "end"
+        ? "var(--boundary-end)"
+        : "var(--accent)";
   const lastLog =
     run?.log == null ? undefined : run.log.ring[run.log.ring.length - 1];
   return (
@@ -261,8 +268,13 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
       data-run-status={
         run == null ? undefined : run.active ? "active" : run.outcome
       }
+      data-boundary={boundaryType ?? undefined}
       className={`nf-node${
         selected || storeSelected ? " nf-selected" : ""
+      }${
+        boundaryType === null
+          ? ""
+          : ` nf-boundary nf-boundary-${boundaryType}`
       }${run?.active ? " napf-node-active" : ""}`}
       onBlurCapture={endHistoryGroup}
       style={{
@@ -297,9 +309,18 @@ export default function FlowNode({ data, selected }: NodeProps<CanvasNode>) {
         />
       )}
       <div className="nf-node-head">
-        <NodeIcon size={15} color="var(--accent)" />
+        <NodeIcon size={15} color={iconColor} />
         <span className="nf-node-title">{data.nodeId}</span>
         <span className="nf-node-type">{data.nodeType}</span>
+        {data.autoStart && (
+          <span
+            data-testid="node-auto"
+            className="nf-auto-source"
+            title="Runs automatically once per flow frame"
+          >
+            AUTO
+          </span>
+        )}
         <Badge count={data.errors} color="var(--err)" testId="node-errors" />
         <Badge count={data.warnings} color="var(--warn)" testId="node-warnings" />
         {run != null && run.firings > 1 && (

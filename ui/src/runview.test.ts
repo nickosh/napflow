@@ -132,42 +132,61 @@ describe("applyRecord", () => {
   it("paints port traffic on BOTH ends of an emission (M5.5)", () => {
     const view = emptyRunView();
     applyRecord(view, root("node_fired", "a", { firing_no: 1 }));
-    applyRecord(
-      view,
-      root("message_emitted", "a", {
-        from_port: "a.out",
-        to_node: "b",
-        to_port: "in",
-        msg_id: "m-1",
-        value: { hello: 1 },
-      }),
-    );
+    const firstEmission = root("message_emitted", "a", {
+      from_port: "a.out",
+      to_node: "b",
+      to_port: "in",
+      msg_id: "m-1",
+      value: { hello: 1 },
+    });
+    applyRecord(view, firstEmission);
     expect(view.nodes.a.ports["out:out"]).toMatchObject({
       count: 1,
       lastValue: { hello: 1 },
+      lastSeq: firstEmission.seq,
     });
     expect(view.nodes.b.ports["in:in"]).toMatchObject({
       count: 1,
       lastValue: { hello: 1 },
+      lastSeq: firstEmission.seq,
     });
     // arrival is not a firing: no flash (lastSeq untouched), no outcome
     expect(view.nodes.b.lastSeq).toBe(-1);
     expect(view.nodes.b.outcome).toBe("none");
 
-    applyRecord(
-      view,
-      root("message_emitted", "a", {
-        from_port: "a.out",
-        to_node: "b",
-        to_port: "in",
-        msg_id: "m-2",
-        value: "next",
-      }),
-    );
+    const secondEmission = root("message_emitted", "a", {
+      from_port: "a.out",
+      to_node: "b",
+      to_port: "in",
+      msg_id: "m-2",
+      value: "next",
+    });
+    applyRecord(view, secondEmission);
     expect(view.nodes.a.ports["out:out"]).toMatchObject({
       count: 2,
       lastValue: "next",
+      lastSeq: secondEmission.seq,
     });
+    expect(view.nodes.b.ports["in:in"].lastSeq).toBe(secondEmission.seq);
+  });
+
+  it("never fabricates a lazy port locator for a record without seq", () => {
+    const view = emptyRunView();
+    applyRecord(view, {
+      event: "message_emitted",
+      frame: "f-0",
+      node: "a",
+      from_port: "a.out",
+      to_node: "b",
+      to_port: "in",
+      value: "legacy local value",
+    });
+
+    expect(view.nodes.a.ports["out:out"].lastSeq).toBeNull();
+    expect(view.nodes.b.ports["in:in"].lastSeq).toBeNull();
+    // The synthetic UI pulse key remains separate from the REST locator.
+    expect(view.nodes.a.lastSeq).toBe(1);
+    expect(view.nodes.b.lastSeq).toBe(-1);
   });
 
   it("prefers a complete null value over a legacy preview", () => {

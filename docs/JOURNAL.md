@@ -6,6 +6,20 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-22 — F1 pre-audition review queue implemented
+
+- Done: made Start/End fully undoable authoring objects, added missing-boundary
+  E006/run-gate feedback, distinct boundary styling, AUTO source cues, and
+  execution-source-aware W104 wording while keeping disconnected islands legal.
+- Done: unified both Run entry paths under one schema-aware input owner and made
+  live/replay port modals resolve only their canonical event on explicit open.
+- Reconciled: generic catalog/form presentation is registry-driven; reviewed
+  built-in semantic and protocol adapters remain explicit without deciding F8.
+- Verified: Ruff/import/notices, 764 pytest, 116 Vitest, production build, and
+  the complete 52-test Playwright suite pass locally.
+- Next: complete the owner's real API-testing audition, record only accepted
+  follow-ups, then resume F3 descendant-process cleanup per rolling priority.
+
 ## 2026-07-22 — Cross-platform focus-shortcut gate repaired
 
 - Fixed: the Playwright focus-scope probe now observes the actual Ctrl/Meta+Z

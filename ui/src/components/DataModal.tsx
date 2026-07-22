@@ -1,17 +1,22 @@
 import { useState } from "react";
 import { ArrowsIn, ArrowsOut, X } from "@phosphor-icons/react";
 
+export type DataModalContent =
+  | { status: "loading" }
+  | { status: "value"; json: string }
+  | { status: "error"; message: string };
+
 /** F1 data peek: a port's full last-crossed payload in a modal,
  * expandable to near-fullscreen. Opened from the run inspector's port
  * rows; the console's message rows keep their inline expansion. */
 export default function DataModal({
   title,
-  json,
+  content,
   color,
   onClose,
 }: {
   title: string;
-  json: string;
+  content: DataModalContent;
   color: string;
   onClose: () => void;
 }) {
@@ -19,6 +24,9 @@ export default function DataModal({
   return (
     <div
       data-testid="data-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
       onClick={onClose}
       style={{
         position: "fixed",
@@ -81,22 +89,39 @@ export default function DataModal({
             <X size={14} />
           </button>
         </div>
-        <pre
-          style={{
-            flex: 1,
-            overflow: "auto",
-            margin: 0,
-            padding: "14px 16px",
-            fontFamily: "var(--mono)",
-            fontSize: 11.5,
-            lineHeight: 1.7,
-            userSelect: "text",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
-          {json}
-        </pre>
+        {content.status === "loading" ? (
+          <p
+            data-testid="data-modal-loading"
+            style={{ padding: "14px 16px", color: "var(--muted)" }}
+          >
+            loading full value…
+          </p>
+        ) : content.status === "error" ? (
+          <p
+            data-testid="data-modal-error"
+            style={{ padding: "14px 16px", color: "var(--err-bright)" }}
+          >
+            {content.message}
+          </p>
+        ) : (
+          <pre
+            data-testid="data-modal-value"
+            style={{
+              flex: 1,
+              overflow: "auto",
+              margin: 0,
+              padding: "14px 16px",
+              fontFamily: "var(--mono)",
+              fontSize: 11.5,
+              lineHeight: 1.7,
+              userSelect: "text",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {content.json}
+          </pre>
+        )}
       </div>
     </div>
   );

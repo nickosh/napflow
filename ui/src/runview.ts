@@ -29,12 +29,15 @@ export type NodeOutcome = "none" | "ok" | "failed" | "error" | "skipped";
 
 /** What crossed a port (M5.5): message_emitted names both ends, so
  * every emission paints the source's output AND the target's input.
- * Current records carry the complete `value`; featureless legacy
+ * Canonical `value` may be a lazy blob descriptor; featureless legacy
  * histories fall back to their lossy `value_preview`. */
 export type PortTraffic = {
   count: number;
   lastValue: unknown;
   lastTs: string | null;
+  /** Canonical message_emitted event locator. Null means the latest value
+   * came from a legacy/local record without a durable sequence. */
+  lastSeq: number | null;
 };
 
 /** Read the complete M4 message value without breaking v0.1/featureless
@@ -130,11 +133,17 @@ function withTraffic(
   key: string,
   value: unknown,
   ts: string | null,
+  eventSeq: number | null,
 ): Record<string, PortTraffic> {
   const prev = ports[key];
   return {
     ...ports,
-    [key]: { count: (prev?.count ?? 0) + 1, lastValue: value, lastTs: ts },
+    [key]: {
+      count: (prev?.count ?? 0) + 1,
+      lastValue: value,
+      lastTs: ts,
+      lastSeq: eventSeq,
+    },
   };
 }
 
@@ -160,6 +169,15 @@ export function applyRecord(view: RunView, record: RunRecord): void {
     view.records.splice(0, view.records.length - RUN_RECORD_WINDOW);
   }
   const seq = record.seq ?? view.recordCount;
+  // `seq` above may be a synthetic animation key for featureless/local
+  // records. Only a real, exactly representable canonical sequence may be
+  // used to address GET /events/{seq} for a lazy port-value read.
+  const eventSeq =
+    typeof record.seq === "number" &&
+    Number.isSafeInteger(record.seq) &&
+    record.seq > 0
+      ? record.seq
+      : null;
   const event = record.event;
 
   if (event === "run_started" && view.scopeFrame === ROOT_FRAME) {
@@ -281,6 +299,7 @@ export function applyRecord(view: RunView, record: RunRecord): void {
             `out:${port}`,
             messageValue(record),
             ts,
+            eventSeq,
           ),
         });
       }
@@ -297,6 +316,7 @@ export function applyRecord(view: RunView, record: RunRecord): void {
             `in:${toPort}`,
             messageValue(record),
             ts,
+            eventSeq,
           ),
         };
       }

@@ -178,6 +178,38 @@ nodes:
 edges:
   - {from: "start.out", to: "end.done"}
 `;
+// flows/boundary — editing.spec's isolated boundary-authoring fixture.
+// Start and the untriggered fixture are both frame-start sources initially;
+// the source cue test connects/deletes fixture.trigger to prove it is live
+// authoring state rather than a run-result decoration.
+const BOUNDARY_FLOW = `schema: "napflow/v1"
+flow: {name: "boundary"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "fx", type: "fixture", config: {file: "smoke.json"}}
+  - {id: "end", type: "end", config: {ports: [{name: "done", required: false}]}}
+edges:
+  - {from: "start.out", to: "end.done"}
+layout:
+  start: [40, 80]
+  fx: [360, 80]
+  end: [680, 80]
+`;
+// flows/island — disconnected nodes are legal, with W104 phrased in terms of
+// every execution source rather than Start alone.
+const ISLAND_FLOW = `schema: "napflow/v1"
+flow: {name: "island"}
+nodes:
+  - {id: "start", type: "start", config: {ports: []}}
+  - {id: "stranded", type: "merge", config: {mode: "any"}}
+  - {id: "end", type: "end", config: {ports: [{name: "done", required: false}]}}
+edges:
+  - {from: "start.out", to: "end.done"}
+layout:
+  start: [40, 80]
+  stranded: [360, 260]
+  end: [680, 80]
+`;
 // flows/failcase — the run e2e's workhorse (S4/M5, FR-1005), fully
 // offline: FAILS with the default input (100 < 5 is false), PASSES
 // when the run popover overrides threshold to 3; the log node feeds
@@ -297,6 +329,8 @@ for (const [name, content] of [
   ["unloadable", UNLOADABLE_FLOW],
   ["typed", TYPED_FLOW],
   ["hint", HINT_FLOW],
+  ["boundary", BOUNDARY_FLOW],
+  ["island", ISLAND_FLOW],
   ["failcase", FAILCASE_FLOW],
   ["parent", PARENT_FLOW],
   ["child", CHILD_FLOW],
@@ -321,7 +355,7 @@ writeFileSync(
 // its owned flows (plus smoke's nodes.py) in beforeAll on every worker/retry.
 const editingBaseline = join(workspace, "e2e-baselines", "editing");
 mkdirSync(editingBaseline, { recursive: true });
-for (const name of ["main", "smoke", "hint"]) {
+for (const name of ["main", "smoke", "hint", "boundary"]) {
   cpSync(join(workspace, "flows", name), join(editingBaseline, name), {
     recursive: true,
   });
@@ -345,10 +379,10 @@ writeFileSync(
   "utf-8",
 );
 
-// A complete, strictly consecutive run whose log value is a valid blob
-// descriptor but whose companion blob directory is intentionally absent.
-// Replay pages and frame discovery must remain usable; only explicit row
-// expansion is allowed to surface history_content_missing.
+// A complete, strictly consecutive run whose log and port values are valid
+// blob descriptors but whose companion blob directory is intentionally
+// absent. Replay projections and frame discovery must remain usable; only an
+// explicit row expansion or port-modal open may surface the missing content.
 const MISSING_BLOB_RUN_ID = "19700101-000001-b10b00";
 const missingBlobDir = join(
   workspace,
@@ -402,10 +436,23 @@ const missingBlobRecords = [
     value: missingBlob,
   },
   {
-    event: "run_finished",
+    event: "message_emitted",
     run_id: MISSING_BLOB_RUN_ID,
+    frame: "f-0",
+    node: "child",
     ts: "1970-01-01T00:00:01.003Z",
     seq: 4,
+    from_port: "child.done",
+    to_node: "end",
+    to_port: "done",
+    msg_id: "m-missing-blob",
+    value: missingBlob,
+  },
+  {
+    event: "run_finished",
+    run_id: MISSING_BLOB_RUN_ID,
+    ts: "1970-01-01T00:00:01.004Z",
+    seq: 5,
     state: "passed",
     duration_ms: 3,
     asserts: { passed: 0, failed: 0 },

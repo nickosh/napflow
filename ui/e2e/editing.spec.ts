@@ -44,12 +44,47 @@ async function expectNodeInsideCanvas(page: Page, testId: string) {
 
 const EDITING_BASELINE = "e2e-baselines/editing";
 
+async function restoreEditingFlow(page: Page, name: string) {
+  const baseline = await page.request.get(
+    `/api/flows/${EDITING_BASELINE}/${name}`,
+  );
+  expect(baseline.ok()).toBeTruthy();
+  const { flow } = await baseline.json();
+  const restored = await page.request.put(`/api/flows/flows/${name}`, {
+    data: { flow, force: true },
+  });
+  expect(restored.ok()).toBeTruthy();
+}
+
+async function dragNodeToTrash(page: Page, nodeTestId: string) {
+  const node = page.getByTestId(nodeTestId);
+  const box = (await node.boundingBox())!;
+  const from = { x: box.x + box.width / 2, y: box.y + 16 };
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 8, from.y + 8, { steps: 2 });
+  const trash = page.getByTestId("trash-zone");
+  await expect(trash).toBeVisible();
+  const target = (await trash.boundingBox())!;
+  await page.mouse.move(
+    target.x + target.width / 2,
+    target.y + target.height / 2,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+}
+
 test.beforeAll(async ({ request }) => {
   // serial suites are retried in a fresh worker, but the real web server and
   // workspace survive that retry. Restore immutable, out-of-catalog snapshots
   // before every worker so a failed attempt can never become the next
   // attempt's starting model (the 2026-07-15 Windows retry failure).
-  for (const identity of ["flows/main", "flows/smoke", "flows/hint"]) {
+  for (const identity of [
+    "flows/main",
+    "flows/smoke",
+    "flows/hint",
+    "flows/boundary",
+  ]) {
     const name = identity.slice("flows/".length);
     const baseline = await request.get(
       `/api/flows/${EDITING_BASELINE}/${name}`,
@@ -155,6 +190,194 @@ test("dragging a type from the palette adds it at the drop point", async ({
   await waitSaved(page);
 });
 
+test("boundary cards support every delete path and cardinality-safe add/undo/redo", async ({
+  page,
+}) => {
+  await restoreEditingFlow(page, "boundary");
+  await page.goto("/flow/flows/boundary");
+
+  // With both boundaries present, neither is offered as an ordinary duplicate.
+  await page.getByTestId("add-node").click();
+  await expect(page.getByTestId("palette-start")).toHaveCount(0);
+  await expect(page.getByTestId("palette-end")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // Inline delete removes Start and its incident edge. Search + click exposes
+  // exactly the now-missing type; two undos restore both edits in order.
+  const start = page.getByTestId("node-start");
+  await start.click();
+  await start.getByTestId("delete-node").click();
+  await expect(page.getByTestId("missing-boundary-start")).toBeVisible();
+  await expect(page.getByTestId("undo-canvas")).toBeEnabled();
+  await page.getByTestId("add-node").click();
+  await page.getByTestId("palette-search").fill("start");
+  await expect(page.getByTestId("palette-start")).toBeVisible();
+  await expect(page.getByTestId("palette-end")).toHaveCount(0);
+  await page.getByTestId("palette-start").click();
+  await expect(page.getByTestId("node-start")).toBeVisible();
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.getByTestId("node-start")).toHaveCount(0);
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.getByTestId("node-start")).toBeVisible();
+  await expect(
+    page.locator('.react-flow__edge[data-id="start.out→end.done"]'),
+  ).toHaveCount(1);
+
+  // Keyboard delete + HTML5 drag covers the second picker path. Dispatching
+  // the stale drop twice proves the store-level duplicate defense: it creates
+  // no second boundary and no hidden history step.
+  await page.getByTestId("node-end").click();
+  await page.keyboard.press("Delete");
+  await expect(page.getByTestId("missing-boundary-end")).toBeVisible();
+  await page.getByTestId("add-node").click();
+  await page.getByTestId("palette-search").fill("");
+  await expect(page.getByTestId("palette-end")).toBeVisible();
+  await expect(page.getByTestId("palette-start")).toHaveCount(0);
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await page
+    .getByTestId("palette-end")
+    .dispatchEvent("dragstart", { dataTransfer });
+  const pane = page.locator(".react-flow__pane");
+  const paneBox = (await pane.boundingBox())!;
+  const drop = {
+    clientX: paneBox.x + paneBox.width - 120,
+    clientY: paneBox.y + paneBox.height - 100,
+  };
+  await pane.dispatchEvent("dragover", { dataTransfer, ...drop });
+  await pane.dispatchEvent("drop", { dataTransfer, ...drop });
+  await pane.dispatchEvent("drop", { dataTransfer, ...drop });
+  await expect(page.locator('[data-boundary="end"]')).toHaveCount(1);
+  await page.keyboard.press("Escape");
+
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.locator('[data-boundary="end"]')).toHaveCount(0);
+  await expect(page.getByTestId("redo-canvas")).toBeEnabled();
+  await page.getByTestId("redo-canvas").click();
+  await expect(page.locator('[data-boundary="end"]')).toHaveCount(1);
+  await page.getByTestId("undo-canvas").click();
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.getByTestId("node-end")).toBeVisible();
+  await expect(
+    page.locator('.react-flow__edge[data-id="start.out→end.done"]'),
+  ).toHaveCount(1);
+
+  // The dedicated drag target uses the same complete one-step boundary edit.
+  await dragNodeToTrash(page, "node-start");
+  await expect(page.getByTestId("missing-boundary-start")).toBeVisible();
+  await expect(page.getByTestId("node-start")).toHaveCount(0);
+  await page.getByTestId("undo-canvas").click();
+  await expect(page.getByTestId("node-start")).toBeVisible();
+  await expect(
+    page.locator('.react-flow__edge[data-id="start.out→end.done"]'),
+  ).toHaveCount(1);
+
+  // Zero-boundary state offers both and remains fully undoable.
+  await page.getByTestId("node-start").click();
+  await page.getByTestId("node-start").getByTestId("delete-node").click();
+  await page.getByTestId("node-end").click();
+  await page.keyboard.press("Delete");
+  await expect(page.getByTestId("missing-boundary-start")).toBeVisible();
+  await expect(page.getByTestId("missing-boundary-end")).toBeVisible();
+  await page.getByTestId("add-node").click();
+  await expect(page.getByTestId("palette-start")).toBeVisible();
+  await expect(page.getByTestId("palette-end")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByTestId("undo-canvas").click();
+  await page.getByTestId("undo-canvas").click();
+  await waitSaved(page);
+});
+
+test("missing boundary saves, reopens with E006, and remains run-gated", async ({
+  page,
+}) => {
+  await restoreEditingFlow(page, "boundary");
+  await page.goto("/flow/flows/boundary");
+  const start = page.getByTestId("node-start");
+  await start.click();
+  await start.getByTestId("delete-node").click();
+  await expect(page.getByTestId("missing-boundary-start")).toContainText(
+    "save is allowed",
+  );
+  await expect(page.getByTestId("missing-boundary-start")).toContainText(
+    "E006",
+  );
+  await waitSaved(page);
+
+  let saved = await flowModel(page, "flows/boundary");
+  expect(saved.flow.nodes.some((node: { type: string }) => node.type === "start"))
+    .toBe(false);
+  expect(
+    saved.diagnostics.some((diag: { code: string }) => diag.code === "E006"),
+  ).toBe(true);
+
+  await page.reload();
+  await expect(page.getByTestId("missing-boundary-start")).toBeVisible();
+  await expect(page.getByTestId("node-start")).toHaveCount(0);
+  await page.getByTestId("console-toggle").click();
+  await expect(page.getByTestId("diagnostics")).toContainText("E006");
+  await page.getByTestId("console-toggle").click();
+
+  const runResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/runs") &&
+      response.request().method() === "POST",
+  );
+  await page.getByTestId("run-button").click();
+  expect((await runResponse).status()).toBe(400);
+  await expect(page.getByTestId("run-notice")).toContainText("E006");
+  await expect(page.getByTestId("run-pill-edit")).toHaveCount(0);
+});
+
+test("boundary styling and AUTO source cues react to fixture trigger wiring", async ({
+  page,
+}) => {
+  await restoreEditingFlow(page, "boundary");
+  await page.goto("/flow/flows/boundary");
+
+  const start = page.getByTestId("node-start");
+  const fixture = page.getByTestId("node-fx");
+  const end = page.getByTestId("node-end");
+  await expect(start).toHaveClass(/nf-boundary-start/);
+  await expect(start).toHaveAttribute("data-boundary", "start");
+  await expect(end).toHaveClass(/nf-boundary-end/);
+  await expect(end).toHaveAttribute("data-boundary", "end");
+  await expect(start.getByTestId("node-auto")).toHaveAttribute(
+    "title",
+    /once per flow frame/,
+  );
+  await expect(fixture.getByTestId("node-auto")).toHaveAttribute(
+    "title",
+    /once per flow frame/,
+  );
+
+  const source = start.locator(
+    '.react-flow__handle-right[data-handleid="out"]',
+  );
+  const target = fixture.locator(
+    '.react-flow__handle-left[data-handleid="trigger"]',
+  );
+  await source.hover();
+  await page.mouse.down();
+  await target.hover();
+  await page.mouse.up();
+  await expect(fixture.getByTestId("node-auto")).toHaveCount(0);
+  await expect(start.getByTestId("node-auto")).toBeVisible();
+  await waitSaved(page);
+
+  const triggerEdge = page.locator(
+    '.react-flow__edge[data-id="start.out→fx.trigger"]',
+  );
+  // The short vertical-free SVG edge can have a zero-sized group box in
+  // Chromium even though its path is rendered. Dispatch the real bubbling
+  // click and assert React Flow selected it before exercising keyboard delete.
+  await triggerEdge.dispatchEvent("click");
+  await expect(triggerEdge).toHaveClass(/selected/);
+  await page.keyboard.press("Delete");
+  await expect(fixture.getByTestId("node-auto")).toBeVisible();
+  await expect(start.getByTestId("node-auto")).toBeVisible();
+  await waitSaved(page);
+});
+
 test("config form edits a node's config and autosaves", async ({ page }) => {
   await page.goto("/flow/flows/main");
   await page.getByTestId("node-log").click();
@@ -182,7 +405,26 @@ test("canvas undo/redo is grouped, autosaved, focus-scoped, and run-locked", asy
   await page.getByTestId("node-log").click();
   const label = page.getByTestId("config-label");
   await label.fill("");
-  await label.pressSequentially("grouped history");
+  await label.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(label).toHaveValue("");
+  // Two controlled edits in the same uninterrupted focus session must form
+  // one history group. Use cumulative values and wait for each graph rebuild;
+  // zero-delay synthetic key bursts can outrun a controlled canvas input.
+  for (const value of ["grouped", "grouped history"]) {
+    await label.fill(value);
+    await label.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await expect(label).toHaveValue(value);
+  }
   await label.blur();
   await waitSaved(page);
   await expect(page.getByTestId("undo-canvas")).toBeEnabled();
@@ -473,6 +715,8 @@ test("switch cases edit as structured rows", async ({ page }) => {
   await page.getByTestId("node-switch").click();
 
   await page.getByTestId("config-expr").fill("trigger.value.state");
+  await page.getByTestId("config-expr").blur();
+  await waitSaved(page);
   await page.getByTestId("case-name-0").fill("ready");
   await page.getByTestId("case-equals-0").fill("READY");
   await page.getByTestId("case-equals-0").blur();
@@ -703,13 +947,18 @@ test("external file change while clean live-reloads the canvas", async ({
 async function dragNodeBy(page: Page, testId: string, dx: number, dy: number) {
   const node = page.getByTestId(testId);
   const box = (await node.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // Port rows can grow across a card's center after earlier serial tests add
+  // Start/End ports, and React Flow correctly marks handles as non-draggable.
+  // Begin from the stable title bar so this helper always exercises a node
+  // gesture rather than observing an unrelated post-measurement movement.
+  const header = (await node.locator(".nf-node-head").boundingBox())!;
+  const from = {
+    x: header.x + Math.min(40, header.width / 2),
+    y: header.y + header.height / 2,
+  };
+  await page.mouse.move(from.x, from.y);
   await page.mouse.down();
-  await page.mouse.move(
-    box.x + box.width / 2 + dx,
-    box.y + box.height / 2 + dy,
-    { steps: 3 },
-  );
+  await page.mouse.move(from.x + dx, from.y + dy, { steps: 3 });
   await page.mouse.up();
   // React Flow moves the DOM synchronously with a successful gesture. Prove
   // the edit was accepted before a test attributes a later failure to save

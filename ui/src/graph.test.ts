@@ -193,6 +193,22 @@ describe("toGraph", () => {
     expect(summarize.data.errors).toBe(1);
     expect(nodes.find((n) => n.id === "users")!.data.warnings).toBe(0);
   });
+
+  it("marks Start and only trigger-unconnected fixtures as frame sources", () => {
+    let { nodes } = toGraph(detail());
+    expect(nodes.find((node) => node.id === "start")!.data.autoStart).toBe(true);
+    expect(nodes.find((node) => node.id === "users")!.data.autoStart).toBe(true);
+    expect(nodes.find((node) => node.id === "end")!.data.autoStart).toBe(false);
+
+    const triggered = detail();
+    triggered.flow.edges = [
+      ...triggered.flow.edges,
+      { from: "start.out", to: "users.trigger" },
+    ];
+    ({ nodes } = toGraph(triggered));
+    expect(nodes.find((node) => node.id === "start")!.data.autoStart).toBe(true);
+    expect(nodes.find((node) => node.id === "users")!.data.autoStart).toBe(false);
+  });
 });
 
 describe("reconcileGraphNodes", () => {

@@ -87,13 +87,20 @@ class ReplayViewBuilder:
         return record["value"] if "value" in record else record.get("value_preview")
 
     @staticmethod
-    def _traffic(ports: dict[str, Any], key: str, value: Any, ts: str | None) -> None:
+    def _traffic(
+        ports: dict[str, Any],
+        key: str,
+        value: Any,
+        ts: str | None,
+        seq: int,
+    ) -> None:
         previous = ports.get(key)
         ports[key] = {
             "count": (previous.get("count", 0) if isinstance(previous, dict) else 0)
             + 1,
             "lastValue": value,
             "lastTs": ts,
+            "lastSeq": seq,
         }
 
     def apply(self, record: dict[str, Any]) -> None:
@@ -210,11 +217,11 @@ class ReplayViewBuilder:
                     if state["outcome"] in {"failed", "error"}
                     else "ok"
                 )
-                self._traffic(state["ports"], f"out:{port}", value, ts)
+                self._traffic(state["ports"], f"out:{port}", value, ts, seq)
                 self._touch(node, seq, active=False, outcome=outcome)
             if isinstance(to_node, str) and isinstance(to_port, str):
                 state = self._node(to_node)
-                self._traffic(state["ports"], f"in:{to_port}", value, ts)
+                self._traffic(state["ports"], f"in:{to_port}", value, ts, seq)
         elif event == "assert_result":
             passed = record.get("passed") is True
             self.asserts = {

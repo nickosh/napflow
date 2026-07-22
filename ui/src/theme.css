@@ -14,6 +14,12 @@
   --border: rgba(233, 233, 237, 0.08);
   --accent: #9184d9;
   --accent-t: rgba(145, 132, 217, 0.14);
+  --boundary-start: #69a7dc;
+  --boundary-start-t: rgba(105, 167, 220, 0.13);
+  --boundary-end: #c28ad8;
+  --boundary-end-t: rgba(194, 138, 216, 0.13);
+  --source-auto: #63c5ce;
+  --source-auto-t: rgba(99, 197, 206, 0.13);
   --ok: #5cc4a8;
   --warn: #d9a55c;
   --err: #d97070;
@@ -44,6 +50,12 @@
   --grid-dot: rgba(35, 36, 46, 0.14);
   --accent: #6d5fc7;
   --accent-t: rgba(109, 95, 199, 0.1);
+  --boundary-start: #397eaf;
+  --boundary-start-t: rgba(57, 126, 175, 0.1);
+  --boundary-end: #9253a6;
+  --boundary-end-t: rgba(146, 83, 166, 0.1);
+  --source-auto: #287f87;
+  --source-auto-t: rgba(40, 127, 135, 0.1);
   --shadow: 0 16px 44px rgba(30, 32, 50, 0.16);
   --shadow-sm: 0 4px 14px rgba(30, 32, 50, 0.12);
   --shadow-node: 0 3px 10px rgba(30, 32, 50, 0.1);
@@ -312,6 +324,18 @@ button.nf-chip:hover {
   box-sizing: border-box;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
+.nf-node.nf-boundary-start {
+  border-color: var(--boundary-start);
+}
+.nf-node.nf-boundary-end {
+  border-color: var(--boundary-end);
+}
+.nf-node.nf-boundary-start .nf-node-head {
+  background: var(--boundary-start-t);
+}
+.nf-node.nf-boundary-end .nf-node-head {
+  background: var(--boundary-end-t);
+}
 .nf-node.nf-selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-t), var(--shadow-node);
@@ -335,6 +359,39 @@ button.nf-chip:hover {
 .nf-node-type {
   font-size: 10px;
   color: var(--muted);
+}
+.nf-auto-source {
+  border: 1px solid var(--source-auto);
+  border-radius: 8px;
+  background: var(--source-auto-t);
+  color: var(--source-auto);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+}
+
+.nf-boundary-callouts {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  z-index: 19;
+  pointer-events: none;
+}
+.nf-boundary-callout {
+  padding: 6px 11px;
+  border: 1px solid var(--err);
+  border-radius: var(--rsm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--err);
+  font-size: 11.5px;
 }
 .nf-iconbtn {
   all: unset;

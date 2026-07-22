@@ -7,6 +7,8 @@ import {
 
 import { PICKER_TABS, nodeMeta } from "../catalog";
 import { NODE_TYPES, PALETTE_DRAG_TYPE } from "../forms";
+import { missingBoundaryTypes } from "../nodeSemantics";
+import { useAppStore } from "../store";
 import { useChrome } from "../uiChrome";
 
 /** F1 add-block picker: floating card with search, category tabs and
@@ -20,6 +22,7 @@ export default function NodePalette({
 }) {
   const pickerAt = useChrome((s) => s.pickerAt);
   const closePicker = useChrome((s) => s.closePicker);
+  const flow = useAppStore((s) => s.detail?.flow ?? null);
   const [tab, setTab] = useState<(typeof PICKER_TABS)[number]>("All");
   const [q, setQ] = useState("");
   const [tip, setTip] = useState<{ type: string; y: number } | null>(null);
@@ -27,7 +30,11 @@ export default function NodePalette({
   if (pickerAt === null) return null;
 
   const query = q.toLowerCase();
-  const rows = NODE_TYPES.filter((type) => {
+  const offered = [
+    ...(flow === null ? [] : missingBoundaryTypes(flow)),
+    ...NODE_TYPES,
+  ];
+  const rows = offered.filter((type) => {
     const meta = nodeMeta(type);
     return (
       (tab === "All" || meta.category === tab) &&
@@ -79,6 +86,7 @@ export default function NodePalette({
         >
           <MagnifyingGlass size={13} color="var(--muted)" />
           <input
+            data-testid="palette-search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search nodes…"

@@ -15,6 +15,7 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import "@xyflow/react/dist/style.css";
 import "@fontsource/inter/400.css";
@@ -45,6 +46,7 @@ import {
   type CanvasNode,
 } from "./graph";
 import { identityFromPath } from "./identity";
+import { missingBoundaryTypes } from "./nodeSemantics";
 import { persistenceRegistry } from "./persistence";
 import { ETAG_POLL_MS, useAppStore } from "./store";
 import { documentHistoryShortcut } from "./store/history";
@@ -109,7 +111,15 @@ function Canvas() {
   const minimapOn = useChrome((s) => s.minimapOn);
   const tidyTick = useChrome((s) => s.tidyTick);
   const { setFlowsOpen, closePicker, openPickerAt, setDragging, setOverTrash } =
-    useChrome();
+    useChrome(
+      useShallow((state) => ({
+        setFlowsOpen: state.setFlowsOpen,
+        closePicker: state.closePicker,
+        openPickerAt: state.openPickerAt,
+        setDragging: state.setDragging,
+        setOverTrash: state.setOverTrash,
+      })),
+    );
 
   // xyflow holds interactive state (drag positions, selection); the
   // store's model stays authoritative — graphVersion bumps rebuild
@@ -127,6 +137,8 @@ function Canvas() {
     (node) =>
       node.measured?.width !== undefined && node.measured.height !== undefined,
   );
+  const missingBoundaries =
+    canvasDetail === null ? [] : missingBoundaryTypes(canvasDetail.flow);
   useEffect(() => {
     if (canvasDetail !== null) {
       const graph = toGraph(canvasDetail);
@@ -420,6 +432,20 @@ function Canvas() {
         {minimapOn && <MiniMap pannable zoomable />}
         <ConnectHint />
       </ReactFlow>
+      {!inRunMode && missingBoundaries.length > 0 && (
+        <div className="nf-boundary-callouts" data-testid="missing-boundaries">
+          {missingBoundaries.map((type) => (
+            <div
+              key={type}
+              className="nf-boundary-callout"
+              data-testid={`missing-boundary-${type}`}
+            >
+              Missing {type === "start" ? "Start" : "End"} boundary — save is
+              allowed, but Run is blocked by E006.
+            </div>
+          ))}
+        </div>
+      )}
       {!inRunMode && <NodePalette onAdd={addVisibleNode} />}
     </div>
   );
@@ -435,7 +461,14 @@ export default function App() {
     setCmdkOpen,
     setFlowsOpen,
     closePicker,
-  } = useChrome();
+  } = useChrome(
+    useShallow((state) => ({
+      setCodeOpen: state.setCodeOpen,
+      setCmdkOpen: state.setCmdkOpen,
+      setFlowsOpen: state.setFlowsOpen,
+      closePicker: state.closePicker,
+    })),
+  );
 
   useEffect(() => {
     void load();

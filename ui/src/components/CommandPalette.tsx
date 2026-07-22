@@ -9,9 +9,10 @@ import {
   TerminalWindow,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useAppStore } from "../store";
-import { useChrome } from "../uiChrome";
+import { useChrome, type RunInputPort } from "../uiChrome";
 
 type Row = {
   icon: Icon;
@@ -29,8 +30,17 @@ export default function CommandPalette() {
     toggleTheme,
     setCodeOpen,
     requestTidy,
-    setRunPopoverOpen,
-  } = useChrome();
+    openRunPopover,
+    closeRunPopover,
+  } = useChrome(
+    useShallow((state) => ({
+      toggleTheme: state.toggleTheme,
+      setCodeOpen: state.setCodeOpen,
+      requestTidy: state.requestTidy,
+      openRunPopover: state.openRunPopover,
+      closeRunPopover: state.closeRunPopover,
+    })),
+  );
   const { flows, detail, openFlow, startRun, openRunPanel, closeRunPanel } =
     useAppStore();
   const runPanelTab = useAppStore((s) => s.runPanelTab);
@@ -46,7 +56,7 @@ export default function CommandPalette() {
 
   const startPorts = (
     (detail?.flow.nodes.find((n) => n.type === "start")?.config?.ports as
-      | { name: string }[]
+      | RunInputPort[]
       | undefined) ?? []
   ).filter((p) => p.name !== "");
 
@@ -63,10 +73,14 @@ export default function CommandPalette() {
             icon: Play,
             name: "Run flow",
             kind: "action" as const,
-            run: () =>
-              startPorts.length > 0
-                ? setRunPopoverOpen(true)
-                : void startRun({}),
+            run: () => {
+              if (startPorts.length > 0) {
+                openRunPopover(detail.identity, startPorts);
+              } else {
+                closeRunPopover();
+                void startRun({});
+              }
+            },
           },
           {
             icon: MagicWand,

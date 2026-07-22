@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect } from "react";
 import {
   ArrowClockwise,
   ArrowCounterClockwise,
@@ -8,12 +8,15 @@ import {
   Play,
   Plus,
 } from "@phosphor-icons/react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useAppStore } from "../store";
-import { useChrome } from "../uiChrome";
+import { useChrome, type RunInputPort } from "../uiChrome";
 import { parseDefault } from "./PortEditor";
 
-export type StartPort = { name: string; type?: string; default?: unknown };
+export type StartPort = RunInputPort;
+
+const NO_START_PORTS: StartPort[] = [];
 
 export function collectRunInputs(
   startPorts: StartPort[],
@@ -28,23 +31,13 @@ export function collectRunInputs(
     // Only a truly untouched configured default is omitted, so the engine can
     // evaluate it in BIND context. An edited blank is a real empty-string
     // override for string/any ports, not a request to silently reuse default.
-    if (
-      port.default !== undefined &&
-      text === showValue(port.default)
-    ) {
-      continue;
-    }
+    if (port.default !== undefined && !wasEdited) continue;
     if (!wasEdited && text === "" && port.default === undefined) continue;
     const parsed = parseDefault(text, port.type ?? "any", false);
     if (parsed.ok) inputs[port.name] = parsed.value;
     else invalid.add(port.name);
   }
   return { inputs, invalid };
-}
-
-function showValue(value: unknown): string {
-  if (value === undefined) return "";
-  return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 const roundBtn: React.CSSProperties = {
@@ -84,38 +77,61 @@ export default function RunControls() {
     closePicker,
     requestTidy,
     runPopoverOpen,
-    setRunPopoverOpen,
-  } = useChrome();
-  const [cells, setCells] = useState<Record<string, string>>({});
-  const [bad, setBad] = useState<Set<string>>(new Set());
-  const [edited, setEdited] = useState<Set<string>>(new Set());
+    runPopoverFlow,
+    runInputPorts,
+    runInputCells,
+    runInputEdited,
+    runInputInvalid,
+    openRunPopover,
+    closeRunPopover,
+    editRunInput,
+    setRunInputInvalid,
+    syncRunPopoverFlow,
+  } = useChrome(
+    useShallow((state) => ({
+      pickerAt: state.pickerAt,
+      openPickerAt: state.openPickerAt,
+      closePicker: state.closePicker,
+      requestTidy: state.requestTidy,
+      runPopoverOpen: state.runPopoverOpen,
+      runPopoverFlow: state.runPopoverFlow,
+      runInputPorts: state.runInputPorts,
+      runInputCells: state.runInputCells,
+      runInputEdited: state.runInputEdited,
+      runInputInvalid: state.runInputInvalid,
+      openRunPopover: state.openRunPopover,
+      closeRunPopover: state.closeRunPopover,
+      editRunInput: state.editRunInput,
+      setRunInputInvalid: state.setRunInputInvalid,
+      syncRunPopoverFlow: state.syncRunPopoverFlow,
+    })),
+  );
+
+  const flowIdentity = detail?.identity ?? null;
+  const declaredStartPorts =
+    (detail?.flow.nodes.find((node) => node.type === "start")?.config
+      ?.ports as StartPort[] | undefined) ?? NO_START_PORTS;
+  const startPorts = declaredStartPorts.filter((port) => port.name !== "");
+  useEffect(() => {
+    syncRunPopoverFlow(flowIdentity, declaredStartPorts);
+  }, [declaredStartPorts, flowIdentity, syncRunPopoverFlow]);
 
   if (detail === null) return null;
-  const startPorts = (
-    (detail.flow.nodes.find((n) => n.type === "start")?.config?.ports as
-      | StartPort[]
-      | undefined) ?? []
-  ).filter((p) => p.name !== "");
   const notice = runNotice ?? workspaceNotice;
   const noticeIsWarning = notice?.startsWith("warning:") ?? false;
 
   const launch = (inputs: Record<string, unknown>) => {
-    setRunPopoverOpen(false);
+    closeRunPopover();
     void startRun(inputs);
   };
 
-  const openPopover = () => {
-    const prefill: Record<string, string> = {};
-    for (const port of startPorts) prefill[port.name] = showValue(port.default);
-    setCells(prefill);
-    setBad(new Set());
-    setEdited(new Set());
-    setRunPopoverOpen(true);
-  };
-
   const launchWithInputs = () => {
-    const { inputs, invalid } = collectRunInputs(startPorts, cells, edited);
-    setBad(invalid);
+    const { inputs, invalid } = collectRunInputs(
+      runInputPorts,
+      runInputCells,
+      runInputEdited,
+    );
+    setRunInputInvalid(invalid);
     if (invalid.size === 0) launch(inputs);
   };
 
@@ -234,7 +250,11 @@ export default function RunControls() {
             data-testid="run-button"
             className="nf-btn nf-btn-accent"
             disabled={runLive}
-            onClick={() => (startPorts.length > 0 ? openPopover() : launch({}))}
+            onClick={() =>
+              startPorts.length > 0
+                ? openRunPopover(detail.identity, startPorts)
+                : launch({})
+            }
             style={{
               height: 40,
               padding: "0 18px",
@@ -281,7 +301,7 @@ export default function RunControls() {
           Edit
         </button>
       )}
-      {runPopoverOpen && (
+      {runPopoverOpen && runPopoverFlow === detail.identity && (
         <div
           data-testid="run-popover"
           className="nf-card"
@@ -297,9 +317,9 @@ export default function RunControls() {
           }}
         >
           <div style={{ marginBottom: 6, color: "var(--muted)" }}>
-            flow inputs (blank = must have a default)
+            flow inputs (untouched defaults resolve at run time)
           </div>
-          {startPorts.map((port) => (
+          {runInputPorts.map((port) => (
             <label
               key={port.name}
               style={{
@@ -317,18 +337,15 @@ export default function RunControls() {
               </span>
               <input
                 data-testid={`run-input-${port.name}`}
-                className={`nf-input${bad.has(port.name) ? " nf-bad" : ""}`}
-                value={cells[port.name] ?? ""}
-                onChange={(e) => {
-                  setCells({ ...cells, [port.name]: e.target.value });
-                  setEdited((current) => new Set(current).add(port.name));
-                }}
+                className={`nf-input${runInputInvalid.has(port.name) ? " nf-bad" : ""}`}
+                value={runInputCells[port.name] ?? ""}
+                onChange={(e) => editRunInput(port.name, e.target.value)}
                 style={{ flex: 1 }}
               />
             </label>
           ))}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-            <button className="nf-btn" onClick={() => setRunPopoverOpen(false)}>
+            <button className="nf-btn" onClick={closeRunPopover}>
               cancel
             </button>
             <button

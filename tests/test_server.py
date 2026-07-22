@@ -1123,6 +1123,52 @@ def test_put_flow_with_check_warnings_saves_and_reports_them(tmp_path):
     with_client(ws, scenario)
 
 
+def test_missing_boundary_saves_reopens_with_e006_and_run_is_gated(tmp_path):
+    """Boundary deletion is an authoring state, not a malformed write.
+
+    The source is durable and inspectable, while the canonical checker remains
+    the single run gate.
+    """
+    ws = make_scaffold_ws(tmp_path)
+
+    async def scenario(client):
+        detail = await _flow_detail(client, "flows/main")
+        detail["flow"]["nodes"] = [
+            node for node in detail["flow"]["nodes"] if node["type"] != "start"
+        ]
+        detail["flow"]["edges"] = [
+            edge
+            for edge in detail["flow"]["edges"]
+            if not edge["from"].startswith("start.")
+            and not edge["to"].startswith("start.")
+        ]
+        detail["flow"].get("layout", {}).pop("start", None)
+
+        saved = await _put_flow(
+            client,
+            "flows/main",
+            flow=detail["flow"],
+            base_etag=detail["etag"],
+        )
+        assert saved.status == 200, await saved.text()
+        saved_payload = await saved.json()
+        assert any(d["code"] == "E006" for d in saved_payload["diagnostics"])
+
+        reopened = await _flow_detail(client, "flows/main")
+        assert not any(node["type"] == "start" for node in reopened["flow"]["nodes"])
+        assert any(d["code"] == "E006" for d in reopened["diagnostics"])
+
+        run = await client.post(
+            "/api/runs", content=JSONContent({"flow": "flows/main"})
+        )
+        assert run.status == 400
+        run_payload = await run.json()
+        assert run_payload["error"] == "check"
+        assert any(d["code"] == "E006" for d in run_payload["diagnostics"])
+
+    with_client(ws, scenario)
+
+
 def test_flow_detail_with_check_errors_still_returns_the_model(tmp_path):
     """M4 pin: the editor keeps working on an E-code flow — GET returns
     the model + error diagnostics instead of 400 (only runs are gated)."""

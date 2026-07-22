@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { openFlowsMenu, pickFlow } from "./helpers";
 
 // S4/M3: read-only canvas (FR-1002 render half + FR-1006 check half).
-// The workspace is a real `napf init` plus flows/warn (W104) and
+// The workspace is a real `napf init` plus flows/warn (W103) and
 // flows/broken (E004) written by serve.mjs.
 
 test("the manifest's main flow opens by default", async ({ page }) => {
@@ -109,6 +109,20 @@ test("check warnings surface on the canvas (W103 badge + console)", async ({
   await expect(page.getByTestId("console-toggle")).toContainText("1");
   await page.getByTestId("console-toggle").click();
   await expect(page.getByTestId("diagnostics")).toContainText("W103");
+});
+
+test("disconnected islands stay editable and W104 names every execution source", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/island");
+  const island = page.getByTestId("node-stranded");
+  await expect(island).toBeVisible();
+  await expect(island.getByTestId("node-warnings")).toHaveText("1");
+  await page.getByTestId("console-toggle").click();
+  await expect(page.getByTestId("diagnostics")).toContainText("W104");
+  await expect(page.getByTestId("diagnostics")).toContainText(
+    "unreachable from any execution source",
+  );
 });
 
 test("a flow with check errors stays editable: canvas + E-codes (M4 pin)", async ({

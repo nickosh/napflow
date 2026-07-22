@@ -9,6 +9,7 @@ import {
   Sun,
 } from "@phosphor-icons/react";
 import { useReactFlow, useViewport } from "@xyflow/react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useAppStore } from "../store";
 import { useChrome } from "../uiChrome";
@@ -69,7 +70,16 @@ export default function TopRightBar() {
     toggleTheme,
     setCmdkOpen,
     setCodeOpen,
-  } = useChrome();
+  } = useChrome(
+    useShallow((state) => ({
+      minimapOn: state.minimapOn,
+      toggleMinimap: state.toggleMinimap,
+      theme: state.theme,
+      toggleTheme: state.toggleTheme,
+      setCmdkOpen: state.setCmdkOpen,
+      setCodeOpen: state.setCodeOpen,
+    })),
+  );
 
   return (
     <div

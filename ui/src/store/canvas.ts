@@ -1,6 +1,7 @@
 import type { FlowModel, FlowModelNode } from "../api";
 import { defaultConfig } from "../forms";
 import { freshNodeId } from "../graph";
+import { canAddNodeType } from "../nodeSemantics";
 import type { DocumentHistory } from "./history";
 import type {
   CanvasSlice,
@@ -133,6 +134,7 @@ export function createCanvasSlice(
     addNode: (type, position) => {
       edit(
         (flow) => {
+          if (!canAddNodeType(flow, type)) return flow;
           const id = freshNodeId(flow, type);
           const node: FlowModelNode = { id, type, config: defaultConfig(type) };
           let at = position;

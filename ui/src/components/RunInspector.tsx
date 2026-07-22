@@ -1,8 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { preview, type PortTraffic, type RunView } from "../runview";
+import { fetchRunEventDetail } from "../api";
+import {
+  messageValue,
+  preview,
+  type PortTraffic,
+  type RunView,
+} from "../runview";
 import { useAppStore } from "../store";
-import DataModal from "./DataModal";
+import DataModal, { type DataModalContent } from "./DataModal";
 
 // S4/M5.5: the run inspector returns during run mode — the selected
 // node's RUN data (firing count, request summary, per-port last
@@ -17,7 +23,7 @@ const OUTCOME_COLOR: Record<string, string> = {
   skipped: "var(--muted)",
 };
 
-type Peek = { title: string; json: string } | null;
+type Peek = ({ title: string } & DataModalContent) | null;
 
 function showFull(value: unknown): string {
   if (value === undefined) return "(no value recorded)";
@@ -37,7 +43,7 @@ function PortRows({
   label: string;
   entries: [string, PortTraffic][];
   nodeId: string;
-  onPeek: (peek: Peek) => void;
+  onPeek: (title: string, traffic: PortTraffic) => void;
 }) {
   if (entries.length === 0) return null;
   return (
@@ -52,14 +58,10 @@ function PortRows({
             <li key={key}>
               <button
                 data-testid="run-inspector-port"
+                data-port-key={key}
                 className="nf-row"
                 title="click for the full payload"
-                onClick={() =>
-                  onPeek({
-                    title: `${nodeId} · ${portName}`,
-                    json: showFull(traffic.lastValue),
-                  })
-                }
+                onClick={() => onPeek(`${nodeId} · ${portName}`, traffic)}
                 style={{ padding: "3px 6px", gap: 6 }}
               >
                 <code style={{ fontSize: 11 }}>{portName}</code>
@@ -124,8 +126,11 @@ export default function RunInspector() {
     runFramePath,
     runFrameDetail,
     runFrameView,
+    runId,
+    selectedFlow,
   } = useAppStore();
   const [peek, setPeek] = useState<Peek>(null);
+  const requestGeneration = useRef(0);
   const inFrameDetail = runFramePath.length > 0;
   const activeDetail = inFrameDetail ? runFrameDetail : detail;
   const runView = inFrameDetail ? runFrameView : rootRunView;
@@ -136,6 +141,76 @@ export default function RunInspector() {
       s.runFramePath.length > 0 ? s.runFrameView : s.runView;
     return activeView?.nodes[s.selectedNode] ?? null;
   });
+
+  // Changing run, frame, or selected node retires any in-flight read and
+  // releases a previously resolved large value. Closing the inspector on
+  // unmount invalidates it as well.
+  useEffect(() => {
+    requestGeneration.current += 1;
+    setPeek(null);
+    return () => {
+      requestGeneration.current += 1;
+    };
+  }, [runId, selectedFlow, runView?.scopeFrame, selectedNode]);
+
+  const closePeek = () => {
+    requestGeneration.current += 1;
+    setPeek(null);
+  };
+
+  const openPeek = (title: string, traffic: PortTraffic) => {
+    const generation = ++requestGeneration.current;
+    const seq =
+      typeof traffic.lastSeq === "number" &&
+      Number.isSafeInteger(traffic.lastSeq) &&
+      traffic.lastSeq > 0
+        ? traffic.lastSeq
+        : null;
+    if (seq === null) {
+      // Featureless/local records have no canonical address. Their already
+      // folded value is the only available fallback.
+      setPeek({ title, status: "value", json: showFull(traffic.lastValue) });
+      return;
+    }
+    if (runId === null || selectedFlow === null) {
+      setPeek({
+        title,
+        status: "error",
+        message: "full value unavailable: run context is missing",
+      });
+      return;
+    }
+
+    setPeek({ title, status: "loading" });
+    void fetchRunEventDetail(runId, selectedFlow, seq)
+      .then((payload) => {
+        if (
+          payload.event.event !== "message_emitted" ||
+          payload.event.seq !== seq
+        ) {
+          throw new Error("event locator did not resolve to its message");
+        }
+        if (generation === requestGeneration.current) {
+          setPeek({
+            title,
+            status: "value",
+            json: showFull(messageValue(payload.event)),
+          });
+        }
+      })
+      .catch((caught: unknown) => {
+        if (generation === requestGeneration.current) {
+          setPeek({
+            title,
+            status: "error",
+            message: `full value unavailable: ${
+              caught instanceof Error ? caught.message : String(caught)
+            }`,
+          });
+        }
+      });
+  };
+
   if (runView === null) return null; // App only mounts this in run mode
   const node =
     activeDetail?.flow.nodes.find((n) => n.id === selectedNode) ?? null;
@@ -230,13 +305,13 @@ export default function RunInspector() {
                 label="inputs"
                 entries={ports.filter(([k]) => k.startsWith("in:"))}
                 nodeId={node.id}
-                onPeek={setPeek}
+                onPeek={openPeek}
               />
               <PortRows
                 label="outputs"
                 entries={ports.filter(([k]) => k.startsWith("out:"))}
                 nodeId={node.id}
-                onPeek={setPeek}
+                onPeek={openPeek}
               />
               {run.log && (
                 <>
@@ -270,9 +345,9 @@ export default function RunInspector() {
       {peek !== null && (
         <DataModal
           title={peek.title}
-          json={peek.json}
+          content={peek}
           color="var(--accent)"
-          onClose={() => setPeek(null)}
+          onClose={closePeek}
         />
       )}
     </aside>

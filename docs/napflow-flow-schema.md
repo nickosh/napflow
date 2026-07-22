@@ -284,6 +284,22 @@ Vitest, so a new field must gain a visual path or an explicit classification.
   collision-free below-graph placement and refits after the new node is
   measured, so the node is immediately reachable in the current canvas;
   drag-from-palette retains exact drop-point placement.
+- Start and End are ordinary authoring objects with boundary-specific styling,
+  not permanent canvas furniture. Inline delete, keyboard delete, and the
+  canvas trash target remove a boundary and all incident edges as one history
+  step; undo/redo restores or reapplies that complete edit. A missing boundary
+  is a saveable work in progress: the canvas reports it immediately and the
+  saved flow reopens with canonical E006 diagnostics, while run preparation
+  remains blocked. The picker offers only the missing boundary type(s), through
+  the same search, click, and drag paths as other nodes; the canvas store also
+  rejects stale or repeated attempts to add a second Start or End.
+- The canvas marks frame-start execution sources independently of live-run
+  status: Start is always automatic, and a fixture is automatic exactly while
+  its `trigger` input is unconnected. The cue updates when that edge is
+  connected or deleted and explains that the source runs once per flow frame.
+  Disconnected islands remain legal authoring states; W104 describes them as
+  unreachable from any execution source (Start or an untriggered fixture)
+  rather than implying that every legal source is downstream of Start.
 - Canvas undo/redo retains at most 100 immutable, structurally shared
   `FlowModel` roots for the currently open canvas only. It covers nodes, edges,
   config (including Start/End ports), and layout; drag commits on release,
@@ -513,7 +529,11 @@ In a message-driven engine a node with no inputs would never fire, so:
   type-coerced against Start ports; fail-fast on unknown/missing.
 - CLI out: End ports → stdout as one JSON object; logs → stderr
   (pipeable: `napf run flows/login | jq .token`).
-- UI: Start ports render as an editable key-value list on the node.
+- UI: Start ports render as an editable key-value list on the node. The bottom
+  Run control and command palette share one run-input owner: both prefill the
+  same typed ports, keep an untouched configured default absent so BIND can
+  evaluate it, preserve intentional empty string/`any` overrides, and clear
+  drafts on close, flow navigation, or a Start-port schema change.
 
 ### Flow node (subflow) semantics
 Reference, never embedding (`flow: flows/login`); copy-paste duplicates

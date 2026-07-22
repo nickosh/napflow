@@ -4,6 +4,7 @@
 import type { Edge, Node } from "@xyflow/react";
 
 import type { Diagnostic, FlowDetail, FlowModel } from "./api";
+import { isFrameStartSource } from "./nodeSemantics";
 
 export type PortHandle = {
   name: string;
@@ -19,6 +20,7 @@ export type CanvasNodeData = {
   outputs: PortHandle[];
   errors: number;
   warnings: number;
+  autoStart: boolean;
   // ghost-wire anchors (M6): rendered ONLY when a ghost edge needs
   // them — a stray invisible handle would double up xyflow's
   // .react-flow__handle-* classes on every node
@@ -234,6 +236,7 @@ export function toGraph(detail: FlowDetail): {
         outputs,
         errors: diags.filter((d) => d.severity === "error").length,
         warnings: diags.filter((d) => d.severity === "warning").length,
+        autoStart: isFrameStartSource(detail.flow, node),
         ghostSource: ghostPairs.some((g) => g.source === node.id),
         ghostTarget: ghostPairs.some((g) => g.target === node.id),
       },

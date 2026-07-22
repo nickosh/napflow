@@ -154,7 +154,7 @@ export const NODE_META: Record<string, NodeMeta> = {
     quick: [],
     width: 260,
   },
-  // not in the palette (every flow has them) but they render as cards
+  // boundary cards: offered by the picker only while that type is missing
   start: {
     icon: Play,
     category: "Flow",
