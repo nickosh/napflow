@@ -4,7 +4,7 @@
 import type { Edge, Node } from "@xyflow/react";
 
 import type { Diagnostic, FlowDetail, FlowModel } from "./api";
-import { portColor } from "./colors";
+import { isFrameStartSource } from "./nodeSemantics";
 
 export type PortHandle = {
   name: string;
@@ -20,6 +20,7 @@ export type CanvasNodeData = {
   outputs: PortHandle[];
   errors: number;
   warnings: number;
+  autoStart: boolean;
   // ghost-wire anchors (M6): rendered ONLY when a ghost edge needs
   // them — a stray invisible handle would double up xyflow's
   // .react-flow__handle-* classes on every node
@@ -61,8 +62,9 @@ export function reconcileGraphNodes(
   });
 }
 
-const COLUMN_X = 240;
-const ROW_Y = 130;
+// F1 card sizes: 240px cards (320 for wide types) need real column air
+const COLUMN_X = 380;
+const ROW_Y = 170;
 const MARGIN = 40;
 
 function splitRef(ref: string): [string, string] {
@@ -234,18 +236,12 @@ export function toGraph(detail: FlowDetail): {
         outputs,
         errors: diags.filter((d) => d.severity === "error").length,
         warnings: diags.filter((d) => d.severity === "warning").length,
+        autoStart: isFrameStartSource(detail.flow, node),
         ghostSource: ghostPairs.some((g) => g.source === node.id),
         ghostTarget: ghostPairs.some((g) => g.target === node.id),
       },
     };
   });
-
-  const outputType = new Map<string, string>();
-  for (const node of nodes) {
-    for (const port of node.data.outputs) {
-      outputType.set(`${node.id}.${port.name}`, port.type);
-    }
-  }
 
   const edges: Edge[] = detail.flow.edges.map((edge) => {
     const [source, sourceHandle] = splitRef(edge.from);
@@ -254,13 +250,13 @@ export function toGraph(detail: FlowDetail): {
       // the model refs ARE the identity (edges match by (from,to) in
       // the merge) — deletion maps back through this id
       id: `${edge.from}→${edge.to}`,
-      type: "napflow", // RunEdge: plain wire that animates in run mode
+      type: "napflow", // RunEdge: wire color + run animation live there
       source,
       sourceHandle,
       target,
       targetHandle,
       data: { from: edge.from, to: edge.to },
-      style: { stroke: portColor(outputType.get(edge.from)), strokeWidth: 1.5 },
+      style: { strokeWidth: 2 },
     };
   });
 

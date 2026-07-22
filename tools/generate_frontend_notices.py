@@ -23,7 +23,10 @@ OUTPUT_PATH = ROOT / "THIRD_PARTY_NOTICES"
 
 # A new license requires an explicit review instead of silently entering the
 # release artifact.  These are all permissive and compatible with Apache-2.0.
-REVIEWED_LICENSES = {"Apache-2.0", "BSD-3-Clause", "ISC", "MIT"}
+# OFL-1.1 (reviewed 2026-07-17, F1): SIL Open Font License covering the
+# bundled @fontsource woff2 files — redistribution in a larger work is
+# permitted; attribution + license text ship in this notices file.
+REVIEWED_LICENSES = {"Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "OFL-1.1"}
 LICENSE_FILENAMES = (
     "LICENSE",
     "LICENSE.md",

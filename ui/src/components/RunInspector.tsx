@@ -1,58 +1,93 @@
-import { preview, type PortTraffic, type RunView } from "../runview";
-import { useAppStore } from "../store";
+import { useEffect, useRef, useState } from "react";
 
-// S4/M5.5: the right panel returns during run mode — the selected
+import { fetchRunEventDetail } from "../api";
+import {
+  messageValue,
+  preview,
+  type PortTraffic,
+  type RunView,
+} from "../runview";
+import { useAppStore } from "../store";
+import DataModal, { type DataModalContent } from "./DataModal";
+
+// S4/M5.5: the run inspector returns during run mode — the selected
 // node's RUN data (firing count, request summary, per-port last
 // values, log history) instead of the edit forms run mode locks away.
+// F1: a floating card on the right; port rows open the data-peek
+// modal with the full last value that crossed.
 
 const OUTCOME_COLOR: Record<string, string> = {
-  ok: "#2e7d32",
-  failed: "#c62828",
-  error: "#b71c1c",
-  skipped: "#888",
+  ok: "var(--ok)",
+  failed: "var(--err)",
+  error: "var(--err-bright)",
+  skipped: "var(--muted)",
 };
+
+type Peek = ({ title: string } & DataModalContent) | null;
+
+function showFull(value: unknown): string {
+  if (value === undefined) return "(no value recorded)";
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
 
 function PortRows({
   label,
   entries,
+  nodeId,
+  onPeek,
 }: {
   label: string;
   entries: [string, PortTraffic][];
+  nodeId: string;
+  onPeek: (title: string, traffic: PortTraffic) => void;
 }) {
   if (entries.length === 0) return null;
   return (
     <>
-      <h4 style={{ margin: "0.75rem 0 0.25rem", fontSize: 11, color: "#888" }}>
+      <h4 className="nf-kicker" style={{ padding: "8px 0 2px" }}>
         {label}
       </h4>
       <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-        {entries.map(([key, traffic]) => (
-          <li
-            key={key}
-            data-testid="run-inspector-port"
-            style={{ display: "flex", gap: 6, alignItems: "baseline" }}
-          >
-            <code style={{ fontSize: 11 }}>{key.slice(key.indexOf(":") + 1)}</code>
-            {traffic.count > 1 && (
-              <span style={{ color: "#1565c0", fontSize: 10 }}>
-                ×{traffic.count}
-              </span>
-            )}
-            <span
-              title={preview(traffic.lastValue, 500)}
-              style={{
-                fontFamily: "ui-monospace, monospace",
-                fontSize: 11,
-                color: "#333",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {preview(traffic.lastValue, 60)}
-            </span>
-          </li>
-        ))}
+        {entries.map(([key, traffic]) => {
+          const portName = key.slice(key.indexOf(":") + 1);
+          return (
+            <li key={key}>
+              <button
+                data-testid="run-inspector-port"
+                data-port-key={key}
+                className="nf-row"
+                title="click for the full payload"
+                onClick={() => onPeek(`${nodeId} · ${portName}`, traffic)}
+                style={{ padding: "3px 6px", gap: 6 }}
+              >
+                <code style={{ fontSize: 11 }}>{portName}</code>
+                {traffic.count > 1 && (
+                  <span style={{ color: "var(--accent)", fontSize: 10 }}>
+                    ×{traffic.count}
+                  </span>
+                )}
+                <span
+                  style={{
+                    flex: 1,
+                    fontFamily: "var(--mono)",
+                    fontSize: 11,
+                    color: "var(--muted)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    textAlign: "right",
+                  }}
+                >
+                  {preview(traffic.lastValue, 60)}
+                </span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </>
   );
@@ -67,15 +102,15 @@ function RunSummary({
 }) {
   return (
     <>
-      <h3 style={{ margin: "0 0 0.5rem", fontSize: 14 }}>
+      <h3 style={{ margin: "0 0 0.5rem", fontSize: 14, fontWeight: 500 }}>
         {flowName ?? "—"} — run
       </h3>
-      <p style={{ color: "#666", margin: "0 0 0.5rem" }}>
+      <p style={{ color: "var(--muted)", margin: "0 0 0.5rem" }}>
         {view.state}
         {view.durationMs !== null && ` in ${Math.round(view.durationMs)}ms`} ·
         asserts {view.asserts.passed}✓ {view.asserts.failed}✗
       </p>
-      <p style={{ color: "#888" }}>
+      <p style={{ color: "var(--muted)" }}>
         Click a node for its run data; click a wire or port for the
         messages that crossed it.
       </p>
@@ -91,7 +126,11 @@ export default function RunInspector() {
     runFramePath,
     runFrameDetail,
     runFrameView,
+    runId,
+    selectedFlow,
   } = useAppStore();
+  const [peek, setPeek] = useState<Peek>(null);
+  const requestGeneration = useRef(0);
   const inFrameDetail = runFramePath.length > 0;
   const activeDetail = inFrameDetail ? runFrameDetail : detail;
   const runView = inFrameDetail ? runFrameView : rootRunView;
@@ -102,6 +141,76 @@ export default function RunInspector() {
       s.runFramePath.length > 0 ? s.runFrameView : s.runView;
     return activeView?.nodes[s.selectedNode] ?? null;
   });
+
+  // Changing run, frame, or selected node retires any in-flight read and
+  // releases a previously resolved large value. Closing the inspector on
+  // unmount invalidates it as well.
+  useEffect(() => {
+    requestGeneration.current += 1;
+    setPeek(null);
+    return () => {
+      requestGeneration.current += 1;
+    };
+  }, [runId, selectedFlow, runView?.scopeFrame, selectedNode]);
+
+  const closePeek = () => {
+    requestGeneration.current += 1;
+    setPeek(null);
+  };
+
+  const openPeek = (title: string, traffic: PortTraffic) => {
+    const generation = ++requestGeneration.current;
+    const seq =
+      typeof traffic.lastSeq === "number" &&
+      Number.isSafeInteger(traffic.lastSeq) &&
+      traffic.lastSeq > 0
+        ? traffic.lastSeq
+        : null;
+    if (seq === null) {
+      // Featureless/local records have no canonical address. Their already
+      // folded value is the only available fallback.
+      setPeek({ title, status: "value", json: showFull(traffic.lastValue) });
+      return;
+    }
+    if (runId === null || selectedFlow === null) {
+      setPeek({
+        title,
+        status: "error",
+        message: "full value unavailable: run context is missing",
+      });
+      return;
+    }
+
+    setPeek({ title, status: "loading" });
+    void fetchRunEventDetail(runId, selectedFlow, seq)
+      .then((payload) => {
+        if (
+          payload.event.event !== "message_emitted" ||
+          payload.event.seq !== seq
+        ) {
+          throw new Error("event locator did not resolve to its message");
+        }
+        if (generation === requestGeneration.current) {
+          setPeek({
+            title,
+            status: "value",
+            json: showFull(messageValue(payload.event)),
+          });
+        }
+      })
+      .catch((caught: unknown) => {
+        if (generation === requestGeneration.current) {
+          setPeek({
+            title,
+            status: "error",
+            message: `full value unavailable: ${
+              caught instanceof Error ? caught.message : String(caught)
+            }`,
+          });
+        }
+      });
+  };
+
   if (runView === null) return null; // App only mounts this in run mode
   const node =
     activeDetail?.flow.nodes.find((n) => n.id === selectedNode) ?? null;
@@ -110,13 +219,18 @@ export default function RunInspector() {
   return (
     <aside
       data-testid="run-inspector"
+      className="nf-card"
       style={{
+        position: "absolute",
+        right: 14,
+        top: 60,
         width: 300,
-        borderLeft: "1px solid #ddd",
+        maxHeight: "calc(100% - 130px)",
         padding: "0.75rem 1rem",
         overflowY: "auto",
         fontSize: 13,
-        flexShrink: 0,
+        zIndex: 20,
+        boxSizing: "border-box",
       }}
     >
       {node === null ? (
@@ -127,11 +241,18 @@ export default function RunInspector() {
       ) : (
         <>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <h3 style={{ margin: "0 0 0.25rem", fontSize: 14 }}>{node.id}</h3>
-            <span style={{ color: "#888", fontSize: 11 }}>{node.type}</span>
+            <h3 style={{ margin: "0 0 0.25rem", fontSize: 14, fontWeight: 500 }}>
+              {node.id}
+            </h3>
+            <span style={{ color: "var(--muted)", fontSize: 11 }}>
+              {node.type}
+            </span>
           </div>
           {run === null ? (
-            <p data-testid="run-inspector-untouched" style={{ color: "#888" }}>
+            <p
+              data-testid="run-inspector-untouched"
+              style={{ color: "var(--muted)" }}
+            >
               no events for this node in this run
             </p>
           ) : (
@@ -141,8 +262,8 @@ export default function RunInspector() {
                 <span
                   style={{
                     color: run.active
-                      ? "#1565c0"
-                      : (OUTCOME_COLOR[run.outcome] ?? "#666"),
+                      ? "var(--accent)"
+                      : (OUTCOME_COLOR[run.outcome] ?? "var(--muted)"),
                     fontWeight: 600,
                   }}
                 >
@@ -154,10 +275,11 @@ export default function RunInspector() {
                 <div
                   data-testid="run-inspector-request"
                   style={{
-                    background: "#f6f6f6",
-                    borderRadius: 4,
+                    background: "var(--surface2)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--rsm)",
                     padding: "0.4rem 0.6rem",
-                    fontFamily: "ui-monospace, monospace",
+                    fontFamily: "var(--mono)",
                     fontSize: 11,
                     wordBreak: "break-all",
                   }}
@@ -166,14 +288,14 @@ export default function RunInspector() {
                     {run.request.method} {run.request.url}
                   </div>
                   {run.request.status !== null && (
-                    <div style={{ color: "#555" }}>
+                    <div style={{ color: "var(--muted)" }}>
                       HTTP {run.request.status} · {run.request.sizeBytes}B
                       {run.request.totalMs !== null &&
                         ` · ${Math.round(run.request.totalMs)}ms`}
                     </div>
                   )}
                   {run.request.error !== null && (
-                    <div style={{ color: "#b71c1c" }}>
+                    <div style={{ color: "var(--err-bright)" }}>
                       {run.request.error} (attempt {run.request.attempt})
                     </div>
                   )}
@@ -182,20 +304,18 @@ export default function RunInspector() {
               <PortRows
                 label="inputs"
                 entries={ports.filter(([k]) => k.startsWith("in:"))}
+                nodeId={node.id}
+                onPeek={openPeek}
               />
               <PortRows
                 label="outputs"
                 entries={ports.filter(([k]) => k.startsWith("out:"))}
+                nodeId={node.id}
+                onPeek={openPeek}
               />
               {run.log && (
                 <>
-                  <h4
-                    style={{
-                      margin: "0.75rem 0 0.25rem",
-                      fontSize: 11,
-                      color: "#888",
-                    }}
-                  >
+                  <h4 className="nf-kicker" style={{ padding: "8px 0 2px" }}>
                     log · {run.log.count}{" "}
                     {run.log.count > run.log.ring.length &&
                       `(last ${run.log.ring.length} kept)`}
@@ -205,7 +325,7 @@ export default function RunInspector() {
                     style={{
                       margin: 0,
                       paddingLeft: "1.4rem",
-                      fontFamily: "ui-monospace, monospace",
+                      fontFamily: "var(--mono)",
                       fontSize: 11,
                     }}
                   >
@@ -221,6 +341,14 @@ export default function RunInspector() {
             </>
           )}
         </>
+      )}
+      {peek !== null && (
+        <DataModal
+          title={peek.title}
+          content={peek}
+          color="var(--accent)"
+          onClose={closePeek}
+        />
       )}
     </aside>
   );

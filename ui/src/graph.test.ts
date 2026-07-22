@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import type { FlowDetail } from "./api";
-import { PORT_TYPE_COLORS } from "./colors";
 import {
   GHOST_SOURCE_HANDLE,
   GHOST_TARGET_HANDLE,
@@ -83,7 +82,7 @@ describe("toGraph", () => {
     ]);
   });
 
-  it("maps edges to source/target handles with type-colored strokes", () => {
+  it("maps edges to source/target handles", () => {
     const { edges } = toGraph(detail());
     expect(edges[0]).toMatchObject({
       source: "users",
@@ -91,8 +90,9 @@ describe("toGraph", () => {
       target: "summarize",
       targetHandle: "users",
     });
-    // users.value is a list output → list color on the wire (D11)
-    expect(edges[0].style?.stroke).toBe(PORT_TYPE_COLORS.list);
+    // wire color lives in RunEdge now (F1: data vs error-routing wires);
+    // the graph mapping carries no per-type stroke anymore
+    expect(edges[0].style?.stroke).toBeUndefined();
   });
 
   it("grows undeclared-but-wired handles (merge inputs, null surfaces)", () => {
@@ -192,6 +192,22 @@ describe("toGraph", () => {
     expect(summarize.data.warnings).toBe(1);
     expect(summarize.data.errors).toBe(1);
     expect(nodes.find((n) => n.id === "users")!.data.warnings).toBe(0);
+  });
+
+  it("marks Start and only trigger-unconnected fixtures as frame sources", () => {
+    let { nodes } = toGraph(detail());
+    expect(nodes.find((node) => node.id === "start")!.data.autoStart).toBe(true);
+    expect(nodes.find((node) => node.id === "users")!.data.autoStart).toBe(true);
+    expect(nodes.find((node) => node.id === "end")!.data.autoStart).toBe(false);
+
+    const triggered = detail();
+    triggered.flow.edges = [
+      ...triggered.flow.edges,
+      { from: "start.out", to: "users.trigger" },
+    ];
+    ({ nodes } = toGraph(triggered));
+    expect(nodes.find((node) => node.id === "start")!.data.autoStart).toBe(true);
+    expect(nodes.find((node) => node.id === "users")!.data.autoStart).toBe(false);
   });
 });
 

@@ -40,19 +40,20 @@ export default function ConnectHint() {
   if (!typeMismatch(source.type, target.type)) return null;
 
   return (
-    <Panel position="bottom-center">
+    <Panel position="bottom-center" style={{ marginBottom: 70 }}>
       <div
         data-testid="connect-hint"
         style={{
-          background: "#fff8e1",
-          border: "1px solid #ef6c00",
-          borderRadius: 4,
-          padding: "4px 10px",
+          background: "var(--surface)",
+          border: "1px solid var(--warn)",
+          borderRadius: "var(--rsm)",
+          padding: "5px 11px",
           fontSize: 12,
-          boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
+          boxShadow: "var(--shadow-sm)",
+          color: "var(--text)",
         }}
       >
-        <strong style={{ color: "#ef6c00" }}>W102</strong> port type mismatch:{" "}
+        <strong style={{ color: "var(--warn)" }}>W102</strong> port type mismatch:{" "}
         <code style={{ color: portColor(source.type) }}>
           {outNode?.id}.{source.name}
         </code>{" "}

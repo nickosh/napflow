@@ -103,16 +103,14 @@ export default function CodeEditor({
   return (
     <div
       data-testid="code-editor"
+      className="nf-card"
       style={{
         position: "fixed",
         inset: "6vh 8vw",
-        background: "#fff",
-        border: "1px solid #999",
-        borderRadius: 6,
-        boxShadow: "0 8px 30px rgba(0,0,0,0.3)",
         display: "flex",
         flexDirection: "column",
-        zIndex: 20,
+        zIndex: 40,
+        overflow: "hidden",
       }}
     >
       <div
@@ -121,45 +119,47 @@ export default function CodeEditor({
           alignItems: "baseline",
           gap: 10,
           padding: "0.5rem 1rem",
-          borderBottom: "1px solid #ddd",
+          borderBottom: "1px solid var(--border)",
         }}
       >
         <strong style={{ fontSize: 13 }}>{identity}/nodes.py</strong>
         {state === "conflict" ? (
           <span data-testid="code-conflict" style={{ fontSize: 12 }}>
-            <span style={{ color: "#c62828", marginRight: 8 }}>
+            <span style={{ color: "var(--err)", marginRight: 8 }}>
               file changed on disk
             </span>
             <button
               data-testid="code-conflict-reload"
               onClick={() => void reload()}
-              style={{ marginRight: 4, cursor: "pointer", fontFamily: "inherit" }}
+              className="nf-btn"
+              style={{ marginRight: 4, padding: "1px 8px" }}
             >
               reload
             </button>
             <button
               data-testid="code-conflict-overwrite"
               onClick={() => void coordinator.overwrite()}
-              style={{ cursor: "pointer", fontFamily: "inherit" }}
+              className="nf-btn"
+              style={{ padding: "1px 8px" }}
             >
               overwrite
             </button>
           </span>
         ) : state === "error" ? (
-          <span data-testid="code-save-error" style={{ fontSize: 12, color: "#c62828" }}>
+          <span data-testid="code-save-error" style={{ fontSize: 12, color: "var(--err)" }}>
             save failed: {saveError ?? "unknown error"}
           </span>
         ) : (
           <span
             data-testid="code-save-status"
             data-state={state}
-            style={{ fontSize: 12, color: "#888" }}
+            style={{ fontSize: 12, color: "var(--muted)" }}
           >
             {state === "clean" ? "saved" : state === "saving" ? "saving…" : "…"}
           </span>
         )}
         {syntaxError && (
-          <span data-testid="code-syntax-error" style={{ fontSize: 12, color: "#c62828" }}>
+          <span data-testid="code-syntax-error" style={{ fontSize: 12, color: "var(--err)" }}>
             line {syntaxError.line}: {syntaxError.message}
           </span>
         )}
@@ -167,18 +167,18 @@ export default function CodeEditor({
         <button
           data-testid="code-close"
           onClick={() => void close()}
-          style={{ cursor: "pointer", fontFamily: "inherit" }}
+          className="nf-btn"
         >
           close
         </button>
       </div>
       {code === null ? (
-        <p style={{ padding: "1rem", color: "#888", fontSize: 13 }}>loading…</p>
+        <p style={{ padding: "1rem", color: "var(--muted)", fontSize: 13 }}>loading…</p>
       ) : (
-        <div data-testid="code-text" style={{ flex: 1, minHeight: 0 }}>
+        <div data-testid="code-text" style={{ flex: 1, minHeight: 0, background: "#fff", color: "#23242e" }}>
           <Suspense
             fallback={
-              <p style={{ padding: "1rem", color: "#888", fontSize: 13 }}>
+              <p style={{ padding: "1rem", color: "var(--muted)", fontSize: 13 }}>
                 loading…
               </p>
             }

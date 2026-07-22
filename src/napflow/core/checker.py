@@ -768,8 +768,8 @@ class _FlowCheck:
                 continue
             self.add(
                 "W104",
-                f"node {node.id!r} is unreachable from start",
-                "wire it into the graph or remove it",
+                f"node {node.id!r} is unreachable from any execution source",
+                "wire it to Start or an auto-start fixture, or remove it",
                 node=node.id,
             )
 

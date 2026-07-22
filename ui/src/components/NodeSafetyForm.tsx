@@ -2,16 +2,6 @@ import { useEffect, useState } from "react";
 
 import { useAppStore } from "../store";
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  fontSize: 12,
-  fontFamily: "ui-monospace, monospace",
-  padding: "3px 6px",
-  border: "1px solid #ccc",
-  borderRadius: 3,
-};
-
 /** NodeBase policy shared by every node type. It deliberately sits outside
  * `config`: the YAML key is a sibling of id/type/config (D24). */
 export default function NodeSafetyForm({ nodeId }: { nodeId: string }) {
@@ -34,13 +24,13 @@ export default function NodeSafetyForm({ nodeId }: { nodeId: string }) {
   }, [shown, nodeId]);
 
   return (
-    <label
-      style={{ display: "block", fontSize: 11, color: "#666", margin: "8px 0 2px" }}
-    >
-      max_seconds <em>(optional per-firing ceiling)</em>
+    <label className="nf-label">
+      <span>
+        max_seconds <em style={{ textTransform: "none" }}>(optional per-firing ceiling)</em>
+      </span>
       <input
         data-testid="node-max-seconds"
-        style={{ ...inputStyle, borderColor: bad ? "#c62828" : "#ccc" }}
+        className={`nf-input nodrag${bad ? " nf-bad" : ""}`}
         type="number"
         min="0"
         step="any"

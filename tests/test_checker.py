@@ -573,10 +573,30 @@ def test_w104_unreachable_node(tmp_path: Path) -> None:
     # stranded (log, wired nowhere) — but NOT the note, NOT the
     # trigger-less fixture (it self-seeds), NOT end (fed by fixture)
     assert [d.node_id for d in w104] == ["stranded"]
+    assert w104[0].message == (
+        "node 'stranded' is unreachable from any execution source"
+    )
+    assert "Start or an auto-start fixture" in w104[0].hint
     # E005: stranded.in is required and unwired — also expected
     assert any(
         d.code == "E005" and d.node_id == "stranded" for d in check_workspace(ws)
     )
+
+
+def test_w104_disconnected_island_is_legal_but_warned(tmp_path: Path) -> None:
+    flow = _flow(
+        "  - {id: start, type: start}\n"
+        "  - {id: island, type: merge, config: {mode: any}}\n"
+        "  - {id: end, type: end, config: {ports: [{name: done, required: false}]}}\n",
+        "  - {from: start.out, to: end.done}\n",
+    )
+    ws = make_ws(tmp_path, {"flows/t/flow.yaml": flow})
+
+    diagnostics = check_workspace(ws)
+    assert not any(d.severity == "error" for d in diagnostics)
+    assert [(d.node_id, d.message) for d in diagnostics if d.code == "W104"] == [
+        ("island", "node 'island' is unreachable from any execution source")
+    ]
 
 
 def test_w105_env_key_in_no_profile(tmp_path: Path) -> None:

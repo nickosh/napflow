@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 
+import { openFlowsMenu, pickFlow } from "./helpers";
+
 // S4/M3: read-only canvas (FR-1002 render half + FR-1006 check half).
-// The workspace is a real `napf init` plus flows/warn (W104) and
+// The workspace is a real `napf init` plus flows/warn (W103) and
 // flows/broken (E004) written by serve.mjs.
 
 test("the manifest's main flow opens by default", async ({ page }) => {
@@ -13,7 +15,7 @@ test("the manifest's main flow opens by default", async ({ page }) => {
 
 test("smoke flow renders its nodes, edges, and layout", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "flows/smoke" }).click();
+  await pickFlow(page, "flows/smoke");
   await expect(page).toHaveURL(/\/flow\/flows\/smoke$/);
   for (const id of ["start", "users", "summarize", "verify", "end"]) {
     await expect(page.getByTestId(`node-${id}`)).toBeVisible();
@@ -32,6 +34,7 @@ test("reserved-character flow identities round-trip through deep links", async (
   const encodedIdentity = "flows/encoded%20name%20%23100%25";
   await page.goto(`/flow/${encodedIdentity}`);
   await expect(page.getByTestId("workspace-name")).toHaveText(/^napf-e2e-/);
+  await openFlowsMenu(page);
   await expect(
     page.getByRole("button", { name: "flows/encoded name #100%" }),
   ).toBeVisible();
@@ -84,25 +87,42 @@ test("back-forward keeps an accepted missing target as the current route", async
   await expect(page.getByTestId("detail-error")).toBeVisible();
 });
 
-test("inspector shows a node's config read-only on click", async ({
-  page,
-}) => {
+test("selecting a node opens its in-card editor (F1)", async ({ page }) => {
   await page.goto("/flow/flows/smoke");
-  await page.getByTestId("node-summarize").click();
-  const inspector = page.getByTestId("inspector");
-  await expect(inspector).toContainText("summarize");
-  await expect(inspector).toContainText("python");
+  const node = page.getByTestId("node-summarize");
+  await node.click();
+  // the card header carries id + type; selection expands the editor
+  await expect(node).toContainText("summarize");
+  await expect(node).toContainText("python");
+  await node.getByText("raw config").click();
   await expect(page.getByTestId("node-config")).toContainText("summarize");
 });
 
-test("check warnings surface on the canvas (W103 badge + panel)", async ({
+test("check warnings surface on the canvas (W103 badge + console)", async ({
   page,
 }) => {
   await page.goto("/flow/flows/warn");
   const req = page.getByTestId("node-req");
   await expect(req).toBeVisible();
   await expect(req.getByTestId("node-warnings")).toHaveText("1");
+  // F1: diagnostics live in the console — its button carries the count
+  await expect(page.getByTestId("console-toggle")).toContainText("1");
+  await page.getByTestId("console-toggle").click();
   await expect(page.getByTestId("diagnostics")).toContainText("W103");
+});
+
+test("disconnected islands stay editable and W104 names every execution source", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/island");
+  const island = page.getByTestId("node-stranded");
+  await expect(island).toBeVisible();
+  await expect(island.getByTestId("node-warnings")).toHaveText("1");
+  await page.getByTestId("console-toggle").click();
+  await expect(page.getByTestId("diagnostics")).toContainText("W104");
+  await expect(page.getByTestId("diagnostics")).toContainText(
+    "unreachable from any execution source",
+  );
 });
 
 test("a flow with check errors stays editable: canvas + E-codes (M4 pin)", async ({
@@ -111,6 +131,7 @@ test("a flow with check errors stays editable: canvas + E-codes (M4 pin)", async
   await page.goto("/flow/flows/broken");
   // the canvas still renders — mid-edit invalid flows must stay editable
   await expect(page.getByTestId("node-start")).toBeVisible();
+  await page.getByTestId("console-toggle").click();
   await expect(page.getByTestId("diagnostics")).toContainText("E004");
 });
 

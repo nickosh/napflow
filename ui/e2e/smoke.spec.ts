@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { openFlowsMenu } from "./helpers";
+
 // S4/M2 smoke: the wheel-shipped path end to end — static bundle at /,
 // data from the REST API, xyflow canvas rendering. The suite grows
 // per milestone from here (owner call, PLAN S4).
@@ -9,11 +11,12 @@ test("served bundle renders the app with real workspace data", async ({
 }) => {
   await page.goto("/");
   await expect(page).toHaveTitle(/napflow/);
-  // header shows the workspace name fetched from /api/workspace
+  // the breadcrumb shows the workspace name fetched from /api/workspace
   await expect(page.getByTestId("workspace-name")).toContainText("napf-e2e");
   // the canvas is a real xyflow instance…
   await expect(page.locator(".react-flow")).toBeVisible();
-  // …and the sidebar lists every flow discovered by the real `napf init`
+  // …and the flows menu lists every flow discovered by the real `napf init`
+  await openFlowsMenu(page);
   for (const identity of ["flows/main", "flows/example", "flows/smoke"]) {
     await expect(page.getByRole("button", { name: identity })).toBeVisible();
   }

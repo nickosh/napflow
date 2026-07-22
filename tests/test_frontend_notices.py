@@ -7,7 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_LINE = re.compile(r"^- (.+) ([^ ]+) \(([^)]+)\)$")
-REVIEWED_LICENSES = {"Apache-2.0", "BSD-3-Clause", "ISC", "MIT"}
+# OFL-1.1: the bundled @fontsource fonts (reviewed 2026-07-17, F1)
+REVIEWED_LICENSES = {"Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "OFL-1.1"}
 
 
 def test_frontend_notice_inventory_matches_production_lock() -> None:

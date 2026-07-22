@@ -6,6 +6,110 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-22 — Local branch build and install path documented
+
+- Done: expanded the README development workflow with prerequisites, the
+  UI-first package build, version-independent checkout install, and manual-test
+  handoff.
+- Verified: locked frontend install, production UI build, wheel/sdist build,
+  local tool install, and installed `init --example` → `check` → `run` smoke.
+- Next: begin the owner's real API-testing audition with the installed build
+  and record only accepted follow-ups before resuming F3.
+
+## 2026-07-22 — F1 pre-audition review queue implemented
+
+- Done: made Start/End fully undoable authoring objects, added missing-boundary
+  E006/run-gate feedback, distinct boundary styling, AUTO source cues, and
+  execution-source-aware W104 wording while keeping disconnected islands legal.
+- Done: unified both Run entry paths under one schema-aware input owner and made
+  live/replay port modals resolve only their canonical event on explicit open.
+- Reconciled: generic catalog/form presentation is registry-driven; reviewed
+  built-in semantic and protocol adapters remain explicit without deciding F8.
+- Verified: Ruff/import/notices, 764 pytest, 116 Vitest, production build, and
+  the complete 52-test Playwright suite pass locally.
+- Next: complete the owner's real API-testing audition, record only accepted
+  follow-ups, then resume F3 descendant-process cleanup per rolling priority.
+
+## 2026-07-22 — Cross-platform focus-shortcut gate repaired
+
+- Fixed: the Playwright focus-scope probe now observes the actual Ctrl/Meta+Z
+  keydown instead of React Flow's preceding multi-selection modifier event;
+  canvas and native text undo behavior are unchanged.
+- Verified: 96 Vitest, production typecheck/build, 21 editing Playwright, and
+  the full 45-test Playwright suite pass locally on macOS.
+- Next: confirm the Linux/Windows gate, then use the pre-audition review queue
+  during manual audition and scope accepted F1 slices.
+
+## 2026-07-22 — F1 pre-audition review queue reconciled
+
+- Planned: unify every run-input entry path and make run-inspector port peeks
+  resolve full blob-backed values lazily with localized failures.
+- Decided: exactly-one Start/End boundaries may be deleted, including through
+  the drag-to-delete area; E006 blocks runs and the picker restores only the
+  missing type. Distinct boundary styling and auto-start cues remain planned.
+- Decided: disconnected islands stay legal without disabled/inert semantics;
+  normal validation still applies, and reachability accounts for auto-fixtures.
+- Reconciled: F8 now permits reviewed built-in semantic adapters while generic
+  presentation stays declarative; the plugin contract itself remains unscheduled.
+- Next: handle the cross-platform focus-shortcut gate separately, then use this
+  queue during the real-work manual audition and scope accepted F1 slices.
+
+## 2026-07-19 — F1 Slice 2 canvas undo/redo complete
+
+- Done: added a bounded, per-open-flow document history with structural sharing,
+  semantic drag/config/tidy/delete steps, toolbar actions, and scoped shortcuts.
+- Reconciled: undo/redo reuses autosave, survives self-save and code-metadata
+  refreshes, clears on navigation/external flow revision, and stays locked in
+  run mode.
+- Verified: Ruff/import/notices, 762 pytest, 96 Vitest, production build,
+  45 Playwright, and isolated wheel/sdist artifact smoke pass.
+- Next: return to F3 descendant-process cleanup, then F4 render guards;
+  F1 Slices 3+ remain audit-driven.
+
+## 2026-07-19 — F1 Slice 1 frontend store split complete
+
+- Done: replaced the 1,346-line `ui/src/store.ts` with a 24-line stable facade
+  over canvas/document, persistence/session, and run-replay slice factories;
+  the optional `RunPanel.tsx` split was unnecessary.
+- Reconciled: one `useAppStore` and its public exports remain unchanged;
+  `detail.flow` has a canvas-owned boundary for future history, persistence
+  owns its autosave bridge, and parity review found no state/action/lifecycle
+  drift.
+- Verified: Ruff/import contracts, 762 pytest plus isolated requests+botocore
+  compatibility, notices, 84 Vitest, production build, 43 Playwright, and
+  release-artifact smoke all pass.
+- Next: implement F3 descendant-process cleanup, then interleave F4 ahead of
+  F1 Slice 2 undo/redo per rolling priority.
+
+## 2026-07-18 — F2 server adapter split complete
+
+- Done: pure-moved replay reads/views, live WebSocket streaming, and the D37
+  request/write boundary into `server/replay.py`, `server/ws.py`, and
+  `server/boundary.py`; `app.py` now owns routes and small response helpers.
+- Reconciled: `app.py` is 958 lines; its retained route block was already 735,
+  so the stale "~700" estimate was incompatible with the approved no-route-move
+  scope. Token-normalized comparisons prove the extracted bodies are exact.
+- Verified: Ruff/import contracts, 762 pytest, isolated requests+botocore
+  761-pass compatibility, notices, 84 Vitest, production build, 43 Playwright,
+  and release-artifact smoke all pass.
+- Next: F1 Slice 1, the `ui/src/store.ts` pure-move split; interleave F3/F4
+  per rolling priority.
+
+## 2026-07-17 — F1 UI redesign slice: Nocturne design + in-card editing
+
+- Done: applied the owner's Claude Design handoff (Nocturne, Soft, dark+light,
+  bundled fonts/icons — no CDN): full-bleed canvas with floating chrome (flows
+  menu, breadcrumb, ⌘K palette, zoom/minimap, bottom add/tidy/run bar,
+  drag-to-trash), per-type node cards with quick fields, unified console
+  (events/history/diagnostics), tidy auto-layout, restyled run visuals.
+- Decided (owner): the right Inspector is dropped — full config editing lives
+  in-card (selected cards grow); one Soft aesthetic + theme toggle only;
+  per-type card sizes; replay scrubber stays deferred under D39.
+- Verified: Vitest 80, Playwright e2e 43, pytest 762, Ruff — all green;
+  scaffold layouts widened for card sizes; OFL-1.1 reviewed into notices gate.
+- Next: F2 `server/app.py` pure-move split, then F1 Slice 1 (store.ts split)
+  ahead of Slice 2 undo/redo.
+
 ## 2026-07-16 — Project-memory scope clarified
 
 - Decided: memory records product behavior, engineering decisions, verified

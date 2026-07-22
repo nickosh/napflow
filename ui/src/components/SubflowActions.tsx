@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { ArrowSquareOut, CopySimple } from "@phosphor-icons/react";
 
 import { ApiError, cloneFlow } from "../api";
 import { useAppStore } from "../store";
 
-/** Inspector block for flow/loop nodes (S4/M6, FR-1007): open the
+/** Card-editor block for flow/loop nodes (S4/M6, FR-1007): open the
  * referenced flow (drill-in is pure navigation, D09) and "Clone to new
  * flow…" — fork the target's folder and repoint THIS node at the clone
  * (the D09 escape hatch from shared-reference semantics; the other
@@ -42,42 +43,37 @@ export default function SubflowActions({
   }
 
   return (
-    <div style={{ margin: "0.5rem 0 0.75rem", fontSize: 12 }}>
-      <button
-        data-testid="drill-in"
-        onClick={() => void openFlow(target)}
-        title="open the referenced flow (double-clicking the node works too)"
-        style={{
-          cursor: "pointer",
-          fontFamily: "inherit",
-          fontSize: 12,
-          padding: "2px 8px",
-        }}
-      >
-        open {target} →
-      </button>
-      {dest === null ? (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <button
-          data-testid="clone-flow"
-          onClick={() => {
-            setError(null);
-            setDest(`${target}_copy`);
-          }}
-          title="fork the referenced flow's folder and point this node at the copy"
-          style={{
-            cursor: "pointer",
-            fontFamily: "inherit",
-            fontSize: 12,
-            padding: "2px 8px",
-            marginLeft: 6,
-          }}
+          data-testid="drill-in"
+          className="nf-btn nf-btn-accent nodrag"
+          onClick={() => void openFlow(target)}
+          title="open the referenced flow (double-clicking the node works too)"
         >
-          Clone to new flow…
+          <ArrowSquareOut size={13} />
+          open {target}
         </button>
-      ) : (
-        <div style={{ marginTop: 6, display: "flex", gap: 4 }}>
+        {dest === null && (
+          <button
+            data-testid="clone-flow"
+            className="nf-btn nodrag"
+            onClick={() => {
+              setError(null);
+              setDest(`${target}_copy`);
+            }}
+            title="fork the referenced flow's folder and point this node at the copy"
+          >
+            <CopySimple size={13} />
+            Clone to new flow…
+          </button>
+        )}
+      </div>
+      {dest !== null && (
+        <div style={{ display: "flex", gap: 4 }}>
           <input
             data-testid="clone-dest"
+            className="nf-input nodrag"
             value={dest}
             onChange={(e) => setDest(e.target.value)}
             onKeyDown={(e) => {
@@ -85,26 +81,26 @@ export default function SubflowActions({
               if (e.key === "Escape") setDest(null);
             }}
             autoFocus
-            style={{ flex: 1, fontSize: 12, fontFamily: "inherit" }}
+            style={{ flex: 1 }}
           />
           <button
             data-testid="clone-confirm"
+            className="nf-btn nf-btn-accent nodrag"
             onClick={() => void clone()}
             disabled={busy}
-            style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}
           >
             clone
           </button>
-          <button
-            onClick={() => setDest(null)}
-            style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}
-          >
+          <button className="nf-btn nodrag" onClick={() => setDest(null)}>
             ×
           </button>
         </div>
       )}
       {error !== null && (
-        <p data-testid="clone-error" style={{ color: "#c62828", margin: "4px 0 0" }}>
+        <p
+          data-testid="clone-error"
+          style={{ color: "var(--err)", margin: 0, fontSize: 12 }}
+        >
           {error}
         </p>
       )}

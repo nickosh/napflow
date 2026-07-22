@@ -17,9 +17,10 @@ production streams activate `content-blobs/1`, full messages and prepared-wire
 HTTP records replace previews, destructive capture valves are removed, and
 core/report/server/UI consumers preserve lazy descriptor boundaries. Amended
 2026-07-13 for v0.2/M5: versioned REST pages bound event/frame responses,
-browser rows resolve one record's blobs only when expanded, and direct-child
-summary pages reconstruct completed frame trees. Exports, advanced replay,
-and the 100k-event performance target remain deferred. Amended 2026-07-15 for
+browser event rows and run-inspector port reads resolve one record's blobs only
+when explicitly opened, and direct-child summary pages reconstruct completed
+frame trees. Exports, advanced replay, and the 100k-event performance target
+remain deferred. Amended 2026-07-15 for
 F6/D43: W109 adds advisory, root-only Git-metadata coverage to the full
 workspace check without changing run preparation.
 Amended 2026-07-15 for F7/D44: environment profiles are literal filenames
@@ -885,8 +886,10 @@ Rules:
 - Feature-aware consumers call the schema-gated resolver only when they need a
   content field. Reports skip unrelated events (and therefore unrelated
   missing blobs); paged REST and finished WebSocket replay pass canonical
-  descriptors unchanged. A historical browser row resolves only its selected
-  canonical record on expansion, surfacing missing/corrupt/omitted content.
+  descriptors unchanged. A historical browser row or live/replay run-inspector
+  port modal resolves only its selected canonical record on explicit open.
+  Missing, corrupt, or omitted content remains localized to that row/modal and
+  does not damage the surrounding run projection or console.
 - Timing fields included where niquests exposes them, else omitted.
 - On abort, an in-flight request leaves a `request_started` with no
   matching `request_finished`; replay tolerates a dangling start (EC20).
@@ -1113,8 +1116,11 @@ fixed per-node Log ring. It contains no canonical record array or run outputs,
 so the canvas stays accurate without transferring the other event pages.
 Direct-child frame pages, requested recursively by `parent_frame`, project
 `frame_finished` into navigation/scalar fields, error counts, and End-port
-names. Full errors and End values remain exclusively in the canonical event
-behind its sequence-detail request. No offset index is required: rescanning is
+names. Every latest-port projection retains the canonical `message_emitted`
+sequence locator but leaves its value unresolved; opening that port's modal
+uses the same one-record sequence-detail request as an expanded event row.
+Full errors and End values remain exclusively in the canonical event behind
+that request. No offset index is required: rescanning is
 an accepted v0.2 prototype tradeoff, while disposable indexes remain available
 for a later measured need.
 
@@ -1221,8 +1227,9 @@ E012 reserved port name `error` declared (End ports, python outputs)
 W101 edge-cycle without counter/timeout guard
 W102 port type mismatch on edge
 W103 unconnected error/failed output (failures mark run failed)
-W104 unreachable node (no path from start; the exact portless, edge-free
-     Start+End onboarding canvas is exempt)
+W104 unreachable node (no path from any execution source: Start or an
+     untriggered fixture; the exact portless, edge-free Start+End onboarding
+     canvas is exempt)
 W105 env.required key missing from ALL discovered profiles
 W106 guard exhaustion/timeout port unconnected (loop exit produces no output)
 W107 unquoted scalar in a string-typed field matching YAML's

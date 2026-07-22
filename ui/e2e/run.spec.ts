@@ -17,7 +17,7 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
   await expect(page.getByTestId("node-verify")).toBeVisible();
   // editing surfaces are up before the run
   await expect(page.getByTestId("add-node")).toBeVisible();
-  await expect(page.getByTestId("inspector")).toBeVisible();
+  await expect(page.getByTestId("run-button")).toBeVisible();
 
   // smoke declares no Start ports → the hybrid popover skips itself
   await page.getByTestId("run-button").click();
@@ -36,11 +36,11 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
   }
   await expect(page.getByTestId("run-asserts")).toContainText("2✓");
 
-  // run mode locks editing: the palette goes away and the edit
-  // inspector gives way to the RUN inspector (M5.5)
-  await expect(page.getByTestId("open-code")).toBeVisible(); // header intact
+  // run mode locks editing: the add/tidy/run cluster goes away and
+  // the in-card editors give way to the RUN inspector (M5.5)
+  await expect(page.getByTestId("open-code")).toBeVisible(); // chrome intact
   await expect(page.getByTestId("add-node")).toHaveCount(0);
-  await expect(page.getByTestId("inspector")).toHaveCount(0);
+  await expect(page.getByTestId("run-button")).toHaveCount(0);
   await expect(page.getByTestId("run-inspector")).toBeVisible();
 
   // full wire detail: expand the assert_result event row
@@ -66,7 +66,7 @@ test("live run: passed overlay, wire detail, run mode locks editing", async ({
   // leaving run mode restores the editing surfaces
   await page.getByTestId("exit-run").click();
   await expect(page.getByTestId("run-panel")).toHaveCount(0);
-  await expect(page.getByTestId("inspector")).toBeVisible();
+  await expect(page.getByTestId("add-node")).toBeVisible();
 });
 
 test("failing run: red assert, live log value, travelled wires", async ({
@@ -141,6 +141,76 @@ test("run inputs override the Start-port default (napf run -i parity)", async ({
   await page.getByTestId("exit-run").click();
 });
 
+test("bottom Run and command palette share fresh run-input state", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/failcase");
+
+  // The bottom entry path owns the same configured-default initialization as
+  // the command palette. First leave validation state behind deliberately.
+  await page.getByTestId("run-button").click();
+  const threshold = page.getByTestId("run-input-threshold");
+  await expect(threshold).toHaveValue("100");
+  await threshold.fill("not-a-number");
+  await page.getByTestId("run-popover-start").click();
+  await expect(threshold).toHaveClass(/nf-bad/);
+  await page.getByRole("button", { name: "cancel" }).click();
+
+  // Reopening through ⌘K/Ctrl+K must reset cells, edit tracking, and errors.
+  await page.keyboard.press("Control+K");
+  await page.getByRole("button", { name: "Run flow action" }).click();
+  await expect(threshold).toHaveValue("100");
+  await expect(threshold).not.toHaveClass(/nf-bad/);
+
+  // Navigate while the popover is still open. The next flow must get only its
+  // own port model, never the edited cells from failcase.
+  await threshold.fill("3");
+  await page.getByTestId("flows-toggle").click();
+  await page
+    .getByTestId("flow-list")
+    .getByTestId("flow-item")
+    .filter({ hasText: "flows/typed" })
+    .click();
+  await expect(page).toHaveURL(/\/flow\/flows\/typed$/);
+  await expect(page.getByTestId("run-popover")).toHaveCount(0);
+
+  await page.keyboard.press("Control+K");
+  await page.getByRole("button", { name: "Run flow action" }).click();
+  const count = page.getByTestId("run-input-count");
+  await expect(count).toHaveValue("1");
+  await expect(page.getByTestId("run-input-threshold")).toHaveCount(0);
+
+  // Escape is a full model reset, not merely a visibility toggle. Leave both
+  // edited and invalid state behind, close via the global key handler, then
+  // reopen through the other entry path and observe a fresh configured value.
+  await count.fill("not-a-number");
+  await page.getByTestId("run-popover-start").click();
+  await expect(count).toHaveClass(/nf-bad/);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("run-popover")).toHaveCount(0);
+  await page.getByTestId("run-button").click();
+  await expect(count).toHaveValue("1");
+  await expect(count).not.toHaveClass(/nf-bad/);
+  await page.getByRole("button", { name: "cancel" }).click();
+});
+
+test("command palette runs a no-input flow without opening a popover", async ({
+  page,
+}) => {
+  await page.goto("/flow/flows/passcase");
+  await expect(page.getByTestId("node-verify")).toBeVisible();
+
+  await page.keyboard.press("Control+K");
+  await page.getByRole("button", { name: "Run flow action" }).click();
+
+  await expect(page.getByTestId("run-popover")).toHaveCount(0);
+  await expect(page.getByTestId("run-state")).toHaveAttribute(
+    "data-state",
+    "passed",
+  );
+  await page.getByTestId("exit-run").click();
+});
+
 test("a live run pulses and can be aborted", async ({ page }) => {
   await page.goto("/flow/flows/slow");
   await page.getByTestId("run-button").click();
@@ -176,7 +246,7 @@ test("a live run pulses and can be aborted", async ({ page }) => {
   await page.getByTestId("exit-run").click();
 });
 
-test("history frame drilldown resolves a blob only after row expansion", async ({
+test("live and replay port peeks resolve blobs only on explicit open", async ({
   page,
 }) => {
   const runStarts: string[] = [];
@@ -215,10 +285,35 @@ test("history frame drilldown resolves a blob only after row expansion", async (
     "passed",
   );
   expect(runStarts).toHaveLength(1);
+
+  // Live WebSocket folding keeps only the blob descriptor. The canonical
+  // event is resolved when the root subflow's output port modal opens.
+  expect(detailRequests).toHaveLength(0);
+  await page.getByTestId("node-child").click();
+  const livePort = page.locator(
+    '[data-testid="run-inspector-port"][data-port-key="out:done"]',
+  );
+  await expect(livePort).toBeVisible();
+  await expect(livePort).toContainText("$napflow");
+  const livePortDetail = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      new RegExp(`/api/runs/${runId}/events/\\d+$`).test(url.pathname)
+    );
+  });
+  await livePort.click();
+  expect((await livePortDetail).status()).toBe(200);
+  await expect(page.getByTestId("data-modal-value")).toContainText(
+    "M5-LAZY-BLOB:",
+  );
+  await expect(page.getByTestId("data-modal-value")).toContainText(":END");
+  expect(detailRequests).toHaveLength(1);
+  await page.getByTestId("data-modal-close").click();
   await page.getByTestId("exit-run").click();
 
   // Reopen that exact run from durable history. Root events and direct-child
-  // summaries use their paged endpoints; event detail must remain untouched.
+  // summaries use their paged endpoints without another detail read.
   await page.getByTestId("open-history").click();
   const historyRow = page
     .getByTestId("history-run")
@@ -257,7 +352,7 @@ test("history frame drilldown resolves a blob only after row expansion", async (
   expect(
     framePages.filter((url) => url.pathname.includes(`/runs/${runId}/`)),
   ).toHaveLength(1);
-  expect(detailRequests).toHaveLength(0);
+  expect(detailRequests).toHaveLength(1);
 
   // Drill into the completed child from frame_finished history. This issues
   // one bounded child-event page and one child-summary page, never a new run
@@ -300,7 +395,34 @@ test("history frame drilldown resolves a blob only after row expansion", async (
     2,
   );
   expect(runStarts).toHaveLength(1);
-  expect(detailRequests).toHaveLength(0);
+  expect(detailRequests).toHaveLength(1);
+
+  // The replay projection carries the same canonical locator for the child
+  // output. Opening the port reads just that event; loading the frame did not.
+  await page.getByTestId("node-produce").click();
+  const replayPort = page.locator(
+    '[data-testid="run-inspector-port"][data-port-key="out:large"]',
+  );
+  await expect(replayPort).toBeVisible();
+  await expect(replayPort).toContainText("$napflow");
+  const replayPortDetail = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      new RegExp(`/api/runs/${runId}/events/\\d+$`).test(url.pathname)
+    );
+  });
+  await replayPort.click();
+  expect((await replayPortDetail).status()).toBe(200);
+  await expect(page.getByTestId("data-modal-value")).toContainText(
+    "M5-LAZY-BLOB:",
+  );
+  await expect(page.getByTestId("data-modal-value")).toContainText(":END");
+  expect(detailRequests).toHaveLength(2);
+  await page.getByTestId("data-modal-close").click();
+
+  // Keep the pre-existing event-row lazy reader covered independently.
+  await page.getByTestId("node-observe").click();
 
   const childEventsPayload = (await (await childEventsResponse).json()) as {
     features: string[];
@@ -336,11 +458,11 @@ test("history frame drilldown resolves a blob only after row expansion", async (
     "M5-LAZY-BLOB:",
   );
   await expect(blobRow.getByTestId("run-event-detail")).toContainText(":END");
-  expect(detailRequests).toHaveLength(1);
+  expect(detailRequests).toHaveLength(3);
   expect(runStarts).toHaveLength(1);
 });
 
-test("a missing history blob fails only its explicitly expanded row", async ({
+test("a missing history blob fails only its explicit row or port read", async ({
   page,
 }) => {
   const runId = "19700101-000001-b10b00";
@@ -376,6 +498,7 @@ test("a missing history blob fails only its explicitly expanded row", async ({
   await expect(page.getByTestId("run-frame-error")).toHaveCount(0);
   expect(framePages).toHaveLength(1);
   expect(detailRequests).toHaveLength(0);
+  await expect(page.getByTestId("run-event")).toHaveCount(5);
 
   const missingRow = page
     .locator('[data-testid="run-event"][data-event="log"]')
@@ -399,6 +522,30 @@ test("a missing history blob fails only its explicitly expanded row", async ({
   );
   expect(detailRequests).toHaveLength(1);
 
+  // The same missing descriptor is projected onto a real root port. Its
+  // modal owns the error; the replay and frame state remain healthy.
+  await page.getByTestId("node-child").click();
+  const missingPort = page.locator(
+    '[data-testid="run-inspector-port"][data-port-key="out:done"]',
+  );
+  await expect(missingPort).toBeVisible();
+  const portDetailResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === `/api/runs/${runId}/events/4`
+    );
+  });
+  await missingPort.click();
+  expect((await portDetailResponse).status()).toBe(404);
+  await expect(page.getByTestId("data-modal-error")).toContainText(
+    "full value unavailable",
+  );
+  await expect(page.getByTestId("data-modal-error")).toContainText(
+    "run-history blob is missing",
+  );
+  expect(detailRequests).toHaveLength(2);
+
   // The localized detail failure does not poison the replay/frame surfaces.
   await expect(page.getByTestId("run-state")).toHaveAttribute(
     "data-state",
@@ -406,7 +553,6 @@ test("a missing history blob fails only its explicitly expanded row", async ({
   );
   await expect(page.getByTestId("run-replay-error")).toHaveCount(0);
   await expect(page.getByTestId("run-frame-error")).toHaveCount(0);
-  await expect(page.getByTestId("run-event")).toHaveCount(4);
 });
 
 test("history browser lists and replays runs; EC20 dangling start", async ({

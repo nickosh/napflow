@@ -1,0 +1,554 @@
+/* Nocturne design system (F1 handoff, 2026-07-16) — Soft aesthetic,
+ * dark + light themes. Tokens come from the Claude Design handoff
+ * bundle; fonts and icons are bundled (local-first, no CDN). Every
+ * surface reads these variables — never hard-code a color. */
+
+:root,
+.nf-root {
+  /* dark (default) */
+  --bg: #161826;
+  --surface: #1d2030;
+  --surface2: #232739;
+  --text: #e9e9ed;
+  --muted: #8a8fa3;
+  --border: rgba(233, 233, 237, 0.08);
+  --accent: #9184d9;
+  --accent-t: rgba(145, 132, 217, 0.14);
+  --boundary-start: #69a7dc;
+  --boundary-start-t: rgba(105, 167, 220, 0.13);
+  --boundary-end: #c28ad8;
+  --boundary-end-t: rgba(194, 138, 216, 0.13);
+  --source-auto: #63c5ce;
+  --source-auto-t: rgba(99, 197, 206, 0.13);
+  --ok: #5cc4a8;
+  --warn: #d9a55c;
+  --err: #d97070;
+  --err-bright: #ff6b6b;
+  --radius: 16px;
+  --rsm: 10px;
+  --pad: 14px;
+  --font: "Inter", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --grid-dot: rgba(233, 233, 237, 0.08);
+  --shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-node: 0 3px 12px rgba(0, 0, 0, 0.22);
+  --wire: #5f8fd9;
+  --wire-err: #d97070;
+  --wire-bright: #59c2ff;
+  --wire-err-bright: #ff6b6b;
+  --scrim: rgba(10, 11, 20, 0.45);
+}
+
+.nf-root[data-th="light"] {
+  --bg: #eef0f5;
+  --surface: #ffffff;
+  --surface2: #e7eaf1;
+  --text: #23242e;
+  --muted: #6b7080;
+  --border: rgba(35, 36, 46, 0.09);
+  --grid-dot: rgba(35, 36, 46, 0.14);
+  --accent: #6d5fc7;
+  --accent-t: rgba(109, 95, 199, 0.1);
+  --boundary-start: #397eaf;
+  --boundary-start-t: rgba(57, 126, 175, 0.1);
+  --boundary-end: #9253a6;
+  --boundary-end-t: rgba(146, 83, 166, 0.1);
+  --source-auto: #287f87;
+  --source-auto-t: rgba(40, 127, 135, 0.1);
+  --shadow: 0 16px 44px rgba(30, 32, 50, 0.16);
+  --shadow-sm: 0 4px 14px rgba(30, 32, 50, 0.12);
+  --shadow-node: 0 3px 10px rgba(30, 32, 50, 0.1);
+  --scrim: rgba(30, 32, 50, 0.3);
+}
+
+html,
+body {
+  margin: 0;
+  background: #161826; /* pre-hydration ground; the root repaints per theme */
+}
+
+.nf-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.nf-root ::selection {
+  background: var(--accent-t);
+}
+.nf-root *:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.nf-root ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.nf-root ::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+/* ---- primitives ------------------------------------------------- */
+
+.nf-input,
+.nf-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--rsm);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--mono);
+  padding: 5px 8px;
+  box-sizing: border-box;
+  min-width: 0;
+}
+.nf-input::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+.nf-input.nf-bad {
+  border-color: var(--err);
+}
+.nf-input:disabled,
+.nf-select:disabled {
+  opacity: 0.45;
+}
+
+.nf-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* floating chrome chip/button */
+.nf-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--text);
+  box-sizing: border-box;
+}
+button.nf-chip {
+  cursor: pointer;
+  color: var(--muted);
+}
+button.nf-chip:hover {
+  color: var(--text);
+}
+.nf-chip-icon {
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+}
+
+.nf-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--rsm);
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: transparent;
+  box-sizing: border-box;
+}
+.nf-btn:hover {
+  background: var(--accent-t);
+}
+.nf-btn-accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.nf-btn-danger {
+  border-color: var(--err);
+  color: var(--err);
+}
+.nf-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* floating card (dropdowns, popovers, panels) */
+.nf-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.nf-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: var(--rsm);
+  cursor: pointer;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+}
+.nf-row:hover,
+.nf-row.nf-active {
+  background: var(--accent-t);
+}
+
+.nf-kicker {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 8px;
+}
+
+.nf-tab {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-family: var(--font);
+  padding: 5px 11px;
+  border-radius: var(--rsm);
+  color: var(--muted);
+}
+.nf-tab:hover {
+  color: var(--text);
+}
+.nf-tab.nf-active {
+  color: var(--accent);
+  background: var(--accent-t);
+}
+.nf-tab:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.nf-badge {
+  font-size: 9.5px;
+  background: var(--accent-t);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 1px 6px;
+}
+
+/* run state chip colors */
+.nf-state {
+  color: #fff;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+}
+
+/* ---- canvas ------------------------------------------------------ */
+
+.nf-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.nf-root .react-flow {
+  background: var(--bg);
+}
+.nf-root .react-flow__pane {
+  cursor: default;
+}
+.nf-root .react-flow__attribution {
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.5;
+}
+.nf-root .react-flow__edge-path {
+  transition: stroke 0.3s, opacity 0.3s;
+}
+.nf-root .react-flow__minimap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.nf-root .react-flow__minimap-mask {
+  fill: var(--accent-t);
+}
+.nf-root .react-flow__minimap-node {
+  fill: var(--muted);
+}
+
+/* tidy-layout animation: transiently let node moves ease */
+.nf-tidying .react-flow__node {
+  transition: transform 0.4s ease;
+}
+
+/* ---- node cards --------------------------------------------------- */
+
+.nf-node {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-node);
+  font-family: var(--font);
+  font-size: 13px;
+  box-sizing: border-box;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.nf-node.nf-boundary-start {
+  border-color: var(--boundary-start);
+}
+.nf-node.nf-boundary-end {
+  border-color: var(--boundary-end);
+}
+.nf-node.nf-boundary-start .nf-node-head {
+  background: var(--boundary-start-t);
+}
+.nf-node.nf-boundary-end .nf-node-head {
+  background: var(--boundary-end-t);
+}
+.nf-node.nf-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-t), var(--shadow-node);
+}
+
+.nf-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px var(--pad);
+  border-bottom: 1px solid var(--border);
+}
+.nf-node-title {
+  font-weight: 500;
+  font-size: 12.5px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nf-node-type {
+  font-size: 10px;
+  color: var(--muted);
+}
+.nf-auto-source {
+  border: 1px solid var(--source-auto);
+  border-radius: 8px;
+  background: var(--source-auto-t);
+  color: var(--source-auto);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+}
+
+.nf-boundary-callouts {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  z-index: 19;
+  pointer-events: none;
+}
+.nf-boundary-callout {
+  padding: 6px 11px;
+  border: 1px solid var(--err);
+  border-radius: var(--rsm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--err);
+  font-size: 11.5px;
+}
+.nf-iconbtn {
+  all: unset;
+  cursor: pointer;
+  color: var(--muted);
+  display: flex;
+  padding: 2px;
+}
+.nf-iconbtn:hover {
+  color: var(--text);
+}
+
+.nf-count-badge {
+  color: #fff;
+  border-radius: 8px;
+  font-size: 10px;
+  padding: 0 6px;
+}
+
+.nf-port-row {
+  position: relative;
+  display: flex;
+  padding: 2px 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 15px;
+}
+.nf-port-row.nf-out {
+  justify-content: flex-end;
+}
+
+.nf-root .react-flow__handle.nf-handle {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  border-width: 1.5px;
+  border-style: solid;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.nf-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px var(--pad) 10px;
+}
+.nf-quick .nf-input {
+  font-size: 11px;
+  padding: 5px 8px;
+}
+
+.nf-node-meta {
+  padding: 0 var(--pad) 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.nf-node-editor {
+  border-top: 1px solid var(--border);
+  padding: 10px var(--pad) 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 420px;
+  overflow-y: auto;
+  cursor: default;
+  font-size: 12px;
+}
+.nf-node-editor .nf-input,
+.nf-node-editor .nf-select,
+.nf-node-editor textarea.nf-input {
+  width: 100%;
+}
+
+/* ---- run-mode animations (restyled from run.css) ------------------ */
+
+.napf-node-active {
+  animation: napf-breathe 1.1s ease-in-out infinite;
+}
+@keyframes napf-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--accent-t), var(--shadow-node);
+  }
+  50% {
+    box-shadow: 0 0 12px 4px var(--accent-t), 0 0 0 2px var(--accent),
+      var(--shadow-node);
+  }
+}
+
+.napf-node-flash {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  pointer-events: none;
+  animation: napf-flash 0.6s ease-out 1 forwards;
+}
+@keyframes napf-flash {
+  0% {
+    background: var(--accent-t);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+.napf-edge-dot {
+  fill: var(--wire-bright);
+  animation: napf-edge-travel 0.5s linear 1 forwards;
+}
+@keyframes napf-edge-travel {
+  0% {
+    offset-distance: 0%;
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/* a wire that carried traffic: animated dashes flow along it */
+.napf-edge-lit {
+  animation: nfflow 1s linear infinite;
+}
+@keyframes nfflow {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+.napf-edge-count {
+  font-size: 10px;
+  fill: var(--accent);
+  font-family: var(--mono);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+}
+
+.napf-port-carried {
+  box-shadow: 0 0 8px 2px var(--accent-t), 0 0 6px 1px currentColor;
+}
+
+.napf-node-log {
+  margin: 2px var(--pad) 12px;
+  padding: 7px 9px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--rsm);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ok);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

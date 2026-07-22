@@ -2,28 +2,31 @@ import { useAppStore } from "../store";
 
 // Debounced-autosave surface (owner fork): a passive indicator, plus
 // the ONE prompt the model allows — etag conflict, last-write-wins or
-// reload (FR-1004 ceiling).
+// reload (FR-1004 ceiling). F1: rendered inside the breadcrumb chip.
 export default function SaveStatus() {
   const { saveState, saveError, saveDiagnostics, resolveConflict } =
     useAppStore();
 
   if (saveState === "conflict") {
     return (
-      <span data-testid="save-conflict" style={{ fontSize: 12 }}>
-        <span style={{ color: "#c62828", marginRight: 8 }}>
-          file changed on disk
-        </span>
+      <span
+        data-testid="save-conflict"
+        style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}
+      >
+        <span style={{ color: "var(--err)" }}>file changed on disk</span>
         <button
           data-testid="conflict-reload"
+          className="nf-btn"
+          style={{ padding: "1px 8px" }}
           onClick={() => void resolveConflict("reload")}
-          style={{ marginRight: 4, cursor: "pointer", fontFamily: "inherit" }}
         >
           reload
         </button>
         <button
           data-testid="conflict-overwrite"
+          className="nf-btn"
+          style={{ padding: "1px 8px" }}
           onClick={() => void resolveConflict("overwrite")}
-          style={{ cursor: "pointer", fontFamily: "inherit" }}
         >
           overwrite
         </button>
@@ -36,7 +39,14 @@ export default function SaveStatus() {
       <span
         data-testid="save-error"
         title={detail}
-        style={{ fontSize: 12, color: "#c62828" }}
+        style={{
+          fontSize: 12,
+          color: "var(--err)",
+          maxWidth: 260,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
       >
         save failed: {detail}
       </span>
@@ -48,7 +58,7 @@ export default function SaveStatus() {
     <span
       data-testid="save-status"
       data-state={saveState}
-      style={{ fontSize: 12, color: "#888" }}
+      style={{ fontSize: 11, color: "var(--muted)" }}
     >
       {label}
     </span>

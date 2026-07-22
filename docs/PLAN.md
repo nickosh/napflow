@@ -890,10 +890,11 @@ Demos, screenshots, and README media wait until F1 ships (owner call
 2026-07-15).
 
 F6 was selected by the owner as the first rollout implementation and completed
-on 2026-07-15. Current order resumes with **F2** (small enabler, days), then the
-**F1 track** as headline work, with **F3** and **F4** interleaved between F1
-slices as small core/CLI changes. Owner direction then pulled **F7** forward;
-it is implemented. **F5** remains unscheduled/low.
+on 2026-07-15. Owner direction then pulled **F7** forward; it is implemented.
+**F2** completed on 2026-07-18 and **F1 Slice 1** on 2026-07-19. Owner
+direction then pulled **F1 Slice 2** ahead of the queued trust work; it
+completed on 2026-07-19. The current order returns to **F3**, then **F4**.
+**F5** remains unscheduled/low.
 
 ### F1 — UI rework for real use + visual styling (headline track)
 
@@ -909,21 +910,23 @@ slices named here are the expected shape, not commitments.
       color, dark/light) and component conventions; produce the concrete
       slice list for owner sign-off. Output is a short doc + tokens,
       minimal behavior change.
-- [ ] Slice 1 — split `ui/src/store.ts` (1,302 lines, one Zustand store)
+- [x] Slice 1 — split `ui/src/store.ts` (1,346 lines at split time, one Zustand store)
       into slices (canvas / persistence / run-replay) as a pure-move
       enabler, mirroring F2 on the frontend, before feature slices pile
-      onto it. `RunPanel.tsx` (778 lines) may split along the same seams.
-- [ ] Slice 2 — canvas undo/redo (owner request 2026-07-15). In-memory,
+      onto it. `RunPanel.tsx` (834 lines at review time) may split along
+      the same seams.
+- [x] Slice 2 — canvas undo/redo (owner request 2026-07-15). In-memory,
       per-open-canvas bounded snapshot stack over the *document* slice
       only (nodes/edges/config/layout/Start/End ports) — depends on
       Slice 1's document/session state boundary; zundo-or-equivalent
       temporal middleware. Bounds: stack cap (~100 steps) + coalescing
       (drag commits on release; config typing groups; multi-delete is
       one step); memory is per-step deltas via immutable structural
-      sharing — no serialization, no server round-trips. Guards: hidden/
-      disabled in run mode (D29); external-change reload clears the
-      stack; autosave needs no special handling (an undo is an ordinary
-      state change through the save coordinator). Shortcuts scoped by
+      sharing — no serialization or history-specific server round-trips.
+      Guards: hidden/disabled in run mode (D29); an external flow-document
+      reload clears the stack, while code-only metadata refresh does not;
+      autosave needs no special handling (an undo is an ordinary state
+      change through the save coordinator). Shortcuts scoped by
       focus — CodeMirror keeps its own native text undo for `nodes.py`
       and config editors. **Owner call 2026-07-15: undo history is
       never a workspace file** (git-friendliness + conflict semantics;
@@ -937,6 +940,125 @@ slices named here are the expected shape, not commitments.
 - [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
       updates are deliberate and named in the change); production build and the
       frontend notices audit stay in the gate.
+- [ ] Every slice keeps generalizable presentation metadata registry-driven:
+      icon, category, description, quick fields, and card width come from
+      `NODE_META` (`ui/src/catalog.ts`), and ordinary field editors from
+      `CONFIG_FORMS` (`ui/src/forms.ts`). Bounded built-in semantic adapters
+      may remain explicit — currently Start/End port editors, flow/loop actions,
+      and type-aware summaries — but this does not permit plugin-supplied JS or
+      arbitrary component registration. Registry tests prove catalog/descriptor
+      completeness; consumer tests must separately prove that picker/cards use
+      the registries. F8 must revisit the exact boundary before promotion.
+
+Progress 2026-07-17: the owner supplied a complete visual design as a
+Claude Design handoff (Nocturne design system; owner picked the Soft
+aesthetic, dark+light, reduced card shadows) — it supersedes Slice 0's
+token-selection half. Landed as one slice: bundled Inter/JetBrains
+Mono/Phosphor icons (local-first, no CDN; OFL-1.1 reviewed into the
+notices gate), full-bleed canvas with floating chrome (flows menu +
+breadcrumb, ⌘K palette, zoom cluster, minimap, bottom add/tidy/run bar,
+drag-to-trash), per-type node cards (sizes, icons, always-editable quick
+fields) with the FULL config editor in-card — owner call: the right
+Inspector is dropped; a selected card grows to host its editors — plus a
+unified console (events/history/diagnostics tabs), tidy auto-layout, and
+restyled run visuals. Replay scrubber explicitly kept deferred (D39).
+Scaffold layouts widened for the new card sizes. Remaining F1 slices
+(undo/redo and audit-driven ergonomics) unchanged.
+
+Slice 1 completed 2026-07-19: `store.ts` is a 24-line stable facade over
+canvas/document, persistence/session, and run-replay slice factories. One
+Zustand store and all existing public imports remain unchanged; `detail` has
+one canvas-owned initialization, document mutations cross one injected
+autosave bridge, and flow navigation applies the run reset in its original
+single state update. Independent parity review found defaults, generation
+ordering, socket lifecycle, reset patches, and action bodies unchanged.
+`RunPanel.tsx` stayed intact because the store boundary did not require its
+optional split. The full Python/frontend/package gate is green.
+
+Slice 2 completed 2026-07-19: a store-local controller retains at most 100
+immutable `FlowModel` roots and relies on path-copying actions for structural
+sharing. One edit bridge records document changes only; drag release, keyed
+config focus bursts, tidy, and mixed deletion form semantic steps. Toolbar and
+macOS/Windows/Linux shortcuts restore through the existing autosave coordinator,
+leave focused config/CodeMirror undo alone, hide and guard in run/replay mode,
+and reset on flow navigation, conflict reload, or an external flow revision.
+Post-save and code-only detail refreshes preserve both history and accepted root
+identity. Focused temporal/canvas/persistence tests plus the full
+Python/frontend/package gate are green.
+
+Pre-audition review queue recorded 2026-07-22 (implementation complete;
+owner audition pending):
+
+- [x] **Boundary authoring, execution-source cues, and disconnected islands.**
+      Preserve E006's exactly-one Start/End structural contract, but allow both
+      boundary cards to be deleted through the ordinary canvas deletion paths.
+      In particular, dragging Start or End must reveal and activate the existing
+      dedicated drop-to-delete area just as it does for an ordinary node;
+      dropping there removes the boundary and its incident edges without a
+      confirmation dialog because the whole action is immediately undoable.
+      A missing boundary remains a saveable work-in-progress state: show an
+      immediate canvas-level missing-Start/missing-End callout, surface the
+      canonical E006 returned by save/check, and keep Run check-gated. The picker
+      offers Start or End only while that type is absent (including search,
+      click, and drag paths); the add action itself must also reject a duplicate.
+      Adding or deleting a boundary, together with its incident edges, forms one
+      undo step, and undo/redo updates picker availability.
+
+      Give Start and End visually distinct boundary treatment without borrowing
+      pass/fail run colors: Start is the flow-entry boundary and End the
+      flow-output boundary. Mark every frame-start execution source explicitly:
+      Start always shows an `AUTO`/auto-start cue, and a fixture shows the same
+      cue exactly when its optional `trigger` has no incoming edge. The cue's
+      help text must say "once per flow frame"; a triggered fixture loses it.
+      This is an authoring-time execution hint, distinct from live fired/running
+      state.
+
+      Disconnected islands stay legal authoring structures, with no disabled or
+      inert-node mode. Do not add a blanket Start-to-End path requirement:
+      trigger-less fixtures are valid run seeds and zero-port End nodes cannot
+      participate in such a path. Normal validation still applies everywhere,
+      so incomplete config, missing required inputs (E005), broken references,
+      and required End-port guarantees continue to block a run as they do now;
+      a valid unreachable island simply does not execute. Keep W104 as the
+      visible inactive-island warning, with wording aligned to all execution
+      seeds rather than only Start. A future "remove unused" action remains
+      optional and must share the checker's reachability definition, preserve
+      Start/End and notes, preview its scope, and form one undo step.
+      Acceptance tests cover all four picker cardinality states, inline,
+      keyboard, and dedicated drop-area boundary deletion, add/delete undo/redo,
+      save-and-reopen of missing-boundary flows, the E006 run gate,
+      duplicate-add defense, Start's permanent source cue, and a fixture cue
+      toggling as its trigger edge is connected or removed.
+- [x] **One run-input opening contract.** The bottom Run control and command
+      palette must call the same owner for popover initialization, configured
+      defaults, edited-blank semantics, validation, close/reset, and flow
+      navigation. Acceptance covers both entry paths, every Start-port type,
+      untouched template defaults, intentional empty overrides, and stale-state
+      prevention.
+- [x] **Lazy full-value port peek.** A run-inspector port row must retain an
+      event sequence/content locator and resolve that canonical event only when
+      its modal opens, for both live and replay views. Preserve zero eager blob
+      reads; show verified full values, and localize missing/corrupt-content
+      errors to the requested modal without damaging the run view or console.
+- [x] **Registry boundary follow-up.** Treat bounded built-in semantic branches
+      as the current working direction, not a completed F8 decision. Inventory
+      each exception, keep generic presentation declarative, add consumer-level
+      registry tests, and narrow `catalog.test.ts` comments/assertions so key
+      completeness is not presented as proof that no component bypass exists.
+      The cross-platform focus-shortcut failure is owned by the next dedicated
+      session; selected-card collapse remains part of manual audition rather
+      than this queue.
+
+Implementation closeout (2026-07-22): all four review items are covered by
+unit, server, and browser tests. The registry audit keeps generic picker/card
+icon, category, description, quick-field, width, and form presentation in
+`NODE_META` / `CONFIG_FORMS`. Its explicit built-in exceptions are bounded to
+model-valid default construction; Start/End cardinality, editors, callouts,
+styling, and frame-source semantics; Start-port run binding; flow/loop static
+drill targets and reference keys; assert/note/boundary collapsed summaries;
+and descriptor-field, structured-row, port-type, and runtime-event protocol
+switches. This inventory is current implementation evidence, not an F8 plugin
+contract or scheduling decision.
 
 Exit: the owner completes a real API-testing task in the UI without
 dropping to hand-editing YAML for routine operations; only then do README
@@ -944,29 +1066,29 @@ demos/screenshots land (deferred owner call above).
 
 ### F2 — `server/app.py` split by pure moves (approved 2026-07-15)
 
-`server/app.py` is 1,810 lines mixing four separable concerns. Split by
-pure moves — no behavior, route, contract, or logic changes — so later
-work (F1 server touches, D30 controls) lands in small files.
+The pre-split `server/app.py` was 1,821 lines mixing four separable concerns.
+It was split by pure moves — no behavior, route, contract, or logic changes —
+so later work (F1 server touches, D30 controls) lands in small files.
 
-- [ ] `server/replay.py` — the replay read/view layer:
-      `_ReplayQueryError`, `_ReplayMetadata`, `_ReplaySnapshot`,
-      `_ReplayViewBuilder`; replay record iteration and paging
-      (`_iter_replay_records`, `_parse_replay_integer`,
-      `_parse_replay_page_query`, `_parse_frame_query`,
-      `_metadata_from_header`, `_read_replay_page`, `_read_replay_event`,
-      `_replay_envelope`, `_replay_run_summary`, `_replay_frame_summary`,
-      `_capture_replay_snapshot`, `_replay_history_state`,
-      `_has_external_active_marker`).
-- [ ] `server/ws.py` — live websocket streaming: `_ws_close_reason`,
-      `_SlowSubscriber`, `_send_ws_record`, `_send_history_range`,
-      `_close_ws`, `_stream_run_websocket`, plus the `WS_*` constants
+- [x] `server/replay.py` — the replay read/view layer:
+      `ReplayQueryError`, `ReplayMetadata`, `ReplaySnapshot`,
+      `ReplayViewBuilder`; replay record iteration and paging
+      (`iter_records`, `read_records`, `iter_replay_records`,
+      `parse_replay_integer`, `parse_replay_page_query`, `parse_frame_query`,
+      `metadata_from_header`, `read_replay_page`, `read_replay_event`,
+      `replay_envelope`, `replay_run_summary`, `replay_frame_summary`,
+      `capture_replay_snapshot`, `replay_history_state`,
+      `has_external_active_marker`).
+- [x] `server/ws.py` — live websocket streaming: `ws_close_reason`,
+      `SlowSubscriber`, `send_ws_record`, `send_history_range`,
+      `close_ws`, `stream_run_websocket`, plus the `WS_*` constants
       they own.
-- [ ] `server/boundary.py` — the local-request trust boundary (D37) and
-      write serialization: `_Authority`, `_request_scheme`,
-      `_parse_authority`, `_is_loopback_host`, `_request_authority`,
-      `_origin_matches`, `_LocalRequestBoundary`,
-      `_SourceWriteCoordinator`.
-- [ ] `app.py` keeps `build_app`, route handlers, and small response
+- [x] `server/boundary.py` — the local-request trust boundary (D37) and
+      write serialization: `Authority`, `request_scheme`,
+      `parse_authority`, `is_loopback_host`, `request_authority`,
+      `origin_matches`, `LocalRequestBoundary`,
+      `SourceWriteCoordinator`.
+- [x] `app.py` keeps `build_app`, route handlers, and small response
       helpers (`_diag_payload`, `_prep_error`, `_etag`, `_bad_request`,
       `_json_object`, …).
 
@@ -977,15 +1099,18 @@ Rules and definition of done:
   renames, no signature or logic changes.
 - Import direction unchanged: new server modules import `core` and each
   other downward only; import-linter contracts stay green.
-- `tests/test_server.py` imports `_read_records`, `_send_ws_record`,
-  `_send_history_range`, `_SourceWriteCoordinator`, `WS_HISTORY_FORMAT`,
-  and `WS_REQUEST_ORIGIN` from `napflow.server.app`, and
-  `tests/test_perf_baselines.py` imports `_read_records`; those imports
-  are updated mechanically — no test logic changes.
-- DoD: `app.py` well under ~700 lines; the diff reads as moves; the full
-  gate is green with no behavior diff.
+- `tests/test_server.py` imports the moved helpers/constants from their owning
+  modules, and `tests/test_perf_baselines.py` imports `read_records` from
+  `server.replay`; those updates are mechanical — no test logic changes.
+- DoD completed 2026-07-18: `app.py` is route-focused at 958 physical lines.
+  Its retained `build_app`/route block alone was already 735 lines, so the
+  planned "~700" estimate was incompatible with the approved pure-move
+  boundary; no extra route split was invented to chase it. Token-normalized
+  comparisons confirm the three extracted bodies are exact moves after the
+  approved public renames, and the full local gate is green with no behavior
+  diff.
 - Optional follow-up change (not part of this slice): split
-  `tests/test_server.py` (2,151 lines) along the same seams.
+  `tests/test_server.py` (2,160 lines) along the same seams.
 
 ### F3 — EC22 descendant-process cleanup
 
@@ -1150,10 +1275,75 @@ xyflow rebuilds preserve stable-node measurements, the E2E assertion checks
 real post-Fit-View geometry, and every retry worker restores immutable editing
 seeds before the serial suite.
 
+### F8 — custom block (plugin) system (unscheduled; investigation recorded 2026-07-17)
+
+Owner intent (2026-07-17, during the F1 redesign): let users add their
+own blocks — Python behavior plus custom card presentation — within
+napflow's functionality, eventually shareable between workspaces. The
+`python` node already covers the *behavior* half; the gap is a reusable,
+declared block: named ports + config schema + picker/card presentation,
+referenced from flows as a first-class citizen. Recorded now because the
+F1 redesign deliberately shaped the UI seams for it; **not scheduled** —
+promote via the priority criteria with an owner decision.
+
+Expected shape (hypothesis, not commitment):
+
+- A block is a folder, git-friendly like flows: `blocks/<name>/` holding
+  `block.yaml` + `impl.py`. `block.yaml` declares display name,
+  description, picker category, icon (a NAME into the bundled Phosphor
+  set — assets stay in the wheel, nothing remote), declared input/output
+  ports with soft types (D11), config field descriptors (the same
+  vocabulary as `ui/src/forms.ts` `CONFIG_FORMS`: kind/label/options/
+  placeholder/templatability), quick-field keys, and card width.
+  `impl.py` is an ordinary python-node-style function run under the
+  EXISTING worker-subprocess contract (JSON-serializable I/O, declared
+  inputs only, `max_seconds`, error port routing) — blocks add zero new
+  execution semantics.
+- Flow reference: additive, like `flow:` — e.g. `type: block` +
+  `config.block: blocks/retry_probe` (or a namespaced `type:`; needs an
+  owner decision + flow-schema spec update). Additive keys avoid a
+  schema-marker change; cheapest inside the v0.x compat window (D33).
+- UI: presentation stays DATA-driven. The server ships the block
+  catalog (name, category, icon name, description, field descriptors,
+  quick keys, width) with the workspace payload; the UI's per-type
+  registries — `ui/src/catalog.ts` `NODE_META` and `CONFIG_FORMS` —
+  fall back to server-provided metadata for unknown types. **Boundary:
+  "custom design logic" means declarative presentation (icon, category,
+  quick fields, width, field editors), never plugin-supplied JS in the
+  browser** — that would break the built-wheel integrity and the D37
+  local trust boundary.
+
+Prerequisites, in order, before an implementation slice makes sense:
+
+1. **F2** server split — complete 2026-07-18 (a catalog endpoint now has a
+   small-module seam rather than adding to the former monolith).
+2. **F1 Slice 1** `ui/src/store.ts` split — complete 2026-07-19 (the UI-side
+   registry fallback now has separate store/detail seams to thread through).
+3. Preserve the narrower F1 registry boundary: reusable presentation metadata
+   and ordinary form fields flow through `NODE_META` + `CONFIG_FORMS`, while a
+   reviewed finite set of built-in semantic adapters may stay explicit. Before
+   F8 promotion, decide which of those adapters must become declarative for
+   custom blocks, prove the generic unknown/custom-type consumer path, and keep
+   plugin-supplied browser JS prohibited. Registry completeness alone does not
+   prove that consumers did not bypass it.
+4. Core loader work: block discovery under a configurable root with D42
+   containment; checker coverage (new E/W codes: missing/invalid block
+   manifest, port-name collisions incl. the reserved `error` name,
+   E011-style id rules); port surface derivation from the manifest with
+   the python-node AST fallback.
+5. Owner decisions to take at promotion time: reference syntax
+   (additive key vs namespaced type), whether block config schemas can
+   declare NEW field kinds or only compose existing ones, and
+   sharing/distribution story (copy-the-folder first; anything richer
+   is a separate feature).
+6. Design constraint to preserve now: future codegen (core promise 6)
+   must be able to emit a block's `impl.py` as a plain function — keep
+   block behavior expressible as ordinary Python with declared I/O.
+
 ### Unscheduled backlog
 
 The "Explicitly after v0.2" list above is the unscheduled backlog. Items
-promote into F-numbered entries here (F8+) when prioritized by the
+promote into F-numbered entries here (F9+) when prioritized by the
 criteria; nothing is dropped by not being scheduled.
 
 ## Working agreements

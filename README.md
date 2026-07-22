@@ -157,8 +157,37 @@ no false greens.
 
 ## Development
 
+To build and install napflow from a local branch, use Python 3.12+, `uv`,
+Git, and Node.js 22.12+ with npm. From the repository root:
+
 ```sh
-uv sync
+git switch BRANCH_NAME
+uv sync --locked
+
+cd ui
+npm ci
+npm run build
+cd ..
+
+uv tool install --force .
+napf --version
+```
+
+`npm run build` must run before installation: the generated UI bundle is
+gitignored but is included when `uv tool install` builds the current checkout.
+`--force` replaces any existing napflow tool installation, including another
+build with the same version. You can then start manual testing in a napflow
+workspace with `napf ui`.
+
+To also create distributable wheel and source archives under `dist/`:
+
+```sh
+uv build --clear
+```
+
+For contributor checks:
+
+```sh
 uv run pytest          # test suite
 uv run ruff check      # lint
 uv run lint-imports    # architecture contract: core imports nothing from cli/server
@@ -174,10 +203,9 @@ npm run dev            # Vite dev server, proxies /api + /ws to a running `napf 
 npm run e2e            # Playwright against the built bundle (needs npm run build)
 ```
 
-Contributor builds from a checkout must build the UI before packaging. This
-is a development workflow, not a supported installation path; published
-release sdists already contain the generated bundle and build wheels without
-Node.
+Building and installing from a checkout is a development workflow, not a
+supported end-user installation path. Published release sdists already contain
+the generated bundle and build wheels without Node.
 
 Conventional commits (`type(scope): subject`) — they feed the
 [git-cliff](https://git-cliff.org) changelog.

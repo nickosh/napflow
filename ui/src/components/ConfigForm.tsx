@@ -9,23 +9,6 @@ import {
 import { useAppStore } from "../store";
 import { CasesEditor, ChecksEditor } from "./StructuredRows";
 
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  fontSize: 12,
-  fontFamily: "ui-monospace, monospace",
-  padding: "3px 6px",
-  border: "1px solid #ccc",
-  borderRadius: 3,
-};
-
-const labelStyle: React.CSSProperties = {
-  display: "block",
-  fontSize: 11,
-  color: "#666",
-  margin: "8px 0 2px",
-};
-
 /** One JSON-edited field: local text state so half-typed JSON doesn't
  * thrash the model; committed on blur only when it parses. */
 function JsonField({
@@ -51,10 +34,10 @@ function JsonField({
   return (
     <textarea
       data-testid={testId}
+      className={`nf-input nodrag${bad ? " nf-bad" : ""}`}
       value={text}
       placeholder={placeholder}
       rows={Math.min(6, Math.max(1, text.split("\n").length))}
-      style={{ ...inputStyle, borderColor: bad ? "#c62828" : "#ccc" }}
       onChange={(e) => setText(e.target.value)}
       onBlur={() => {
         if (text.trim() === "") {
@@ -78,43 +61,68 @@ function Field({
   value,
   functions,
   onChange,
+  quick,
 }: {
   field: FieldDescriptor;
   value: unknown;
   functions: string[] | null;
-  onChange: (value: unknown) => void;
+  onChange: (value: unknown, historyGroup?: string) => void;
+  quick?: boolean;
 }) {
   const testId = `config-${field.key}`;
+  // quick variant: compact unlabeled card inputs (the label rides the
+  // title/placeholder); narrow keys stay narrow, the rest stretch
+  const narrow = field.key === "method" || field.key === "level";
+  const quickStyle: React.CSSProperties | undefined = quick
+    ? narrow
+      ? { width: 64, flex: "0 0 auto" }
+      : { flex: "1 1 60px", width: "auto" }
+    : undefined;
+  const cls = "nf-input nodrag";
   switch (field.kind) {
     case "string":
       return (
         <input
           data-testid={testId}
-          style={inputStyle}
+          className={cls}
+          style={quickStyle}
           value={(value as string) ?? ""}
-          placeholder={field.placeholder}
-          onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
+          placeholder={quick ? field.label : field.placeholder}
+          title={quick ? field.label : undefined}
+          onChange={(e) =>
+            onChange(
+              e.target.value === "" ? undefined : e.target.value,
+              "typing",
+            )
+          }
         />
       );
     case "text":
       return (
         <textarea
           data-testid={testId}
-          style={inputStyle}
+          className={cls}
+          style={quickStyle}
           rows={4}
           value={(value as string) ?? ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(e.target.value, "typing")}
         />
       );
     case "number":
       return (
         <input
           data-testid={testId}
-          style={inputStyle}
+          className={cls}
+          style={quickStyle}
           type="number"
+          placeholder={quick ? field.label : undefined}
+          title={quick ? field.label : undefined}
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(e) =>
-            onChange(e.target.value === "" ? undefined : Number(e.target.value))
+            onChange(
+              e.target.value === "" ? undefined : Number(e.target.value),
+              "typing",
+            )
           }
         />
       );
@@ -122,7 +130,8 @@ function Field({
       return (
         <select
           data-testid={testId}
-          style={inputStyle}
+          className="nf-select nodrag"
+          style={quickStyle}
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(e) =>
             onChange(e.target.value === "" ? undefined : e.target.value === "true")
@@ -137,12 +146,15 @@ function Field({
       return (
         <input
           data-testid={testId}
-          style={inputStyle}
+          className={cls}
+          style={quickStyle}
           inputMode="decimal"
           value={value === undefined || value === null ? "" : String(value)}
-          placeholder={field.placeholder}
+          placeholder={quick ? field.label : field.placeholder}
           title="number or Jinja template"
-          onChange={(e) => onChange(parseTemplatableNumber(e.target.value))}
+          onChange={(e) =>
+            onChange(parseTemplatableNumber(e.target.value), "typing")
+          }
         />
       );
     case "templatable-boolean":
@@ -150,12 +162,15 @@ function Field({
         <>
           <input
             data-testid={testId}
-            style={inputStyle}
+            className={cls}
+            style={quickStyle}
             list={`${testId}-values`}
             value={value === undefined || value === null ? "" : String(value)}
-            placeholder={field.placeholder}
+            placeholder={quick ? field.label : field.placeholder}
             title="true, false, or Jinja template"
-            onChange={(e) => onChange(parseTemplatableBoolean(e.target.value))}
+            onChange={(e) =>
+              onChange(parseTemplatableBoolean(e.target.value), "typing")
+            }
           />
           <datalist id={`${testId}-values`}>
             <option value="true" />
@@ -167,7 +182,9 @@ function Field({
       return (
         <select
           data-testid={testId}
-          style={inputStyle}
+          className="nf-select nodrag"
+          style={quickStyle}
+          title={quick ? field.label : undefined}
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
         >
@@ -188,10 +205,13 @@ function Field({
         <>
           <input
             data-testid={testId}
-            style={inputStyle}
+            className={cls}
+            style={quickStyle}
             list="nodes-py-functions"
+            placeholder={quick ? field.label : undefined}
+            title={quick ? field.label : undefined}
             value={(value as string) ?? ""}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => onChange(e.target.value, "typing")}
           />
           <datalist id="nodes-py-functions">
             {(functions ?? []).map((fn) => (
@@ -216,56 +236,103 @@ function Field({
   }
 }
 
+/** Per-type config editor. F1 splits it across the node card: `only`
+ * renders the always-visible quick inputs, `exclude` the expanded rest
+ * — the same descriptors and testids either way. */
 export default function ConfigForm({
   nodeId,
   nodeType,
   config,
+  only,
+  exclude,
+  quick = false,
 }: {
   nodeId: string;
   nodeType: string;
   config: Record<string, unknown>;
+  only?: readonly string[];
+  exclude?: readonly string[];
+  quick?: boolean;
 }) {
   const updateNodeConfig = useAppStore((s) => s.updateNodeConfig);
   const functions = useAppStore((s) => s.detail?.functions ?? null);
-  const fields = CONFIG_FORMS[nodeType];
+  let fields = CONFIG_FORMS[nodeType];
   if (!fields) return null;
+  if (only !== undefined) fields = fields.filter((f) => only.includes(f.key));
+  if (exclude !== undefined) {
+    fields = fields.filter((f) => !exclude.includes(f.key));
+  }
+  if (fields.length === 0) return null;
 
-  const setField = (key: string, value: unknown) => {
+  const setField = (
+    key: string,
+    value: unknown,
+    historyGroup?: string,
+  ) => {
     const next = { ...config };
     if (value === undefined) {
       delete next[key]; // absent key = model default (exclude_unset)
     } else {
       next[key] = value;
     }
-    updateNodeConfig(nodeId, next);
+    updateNodeConfig(
+      nodeId,
+      next,
+      historyGroup === undefined ? undefined : `${key}:${historyGroup}`,
+    );
   };
 
+  if (quick) {
+    return (
+      <>
+        {fields.map((field) => (
+          <Field
+            key={field.key}
+            field={field}
+            value={config[field.key]}
+            functions={functions}
+            onChange={(value, historyGroup) =>
+              setField(field.key, value, historyGroup)
+            }
+            quick
+          />
+        ))}
+      </>
+    );
+  }
+
   return (
-    <div data-testid="config-form">
+    <div data-testid="config-form" style={{ display: "flex", flexDirection: "column", gap: 9 }}>
       {fields.map((field) => {
         const body = (
           <Field
             field={field}
             value={config[field.key]}
             functions={functions}
-            onChange={(value) => setField(field.key, value)}
+            onChange={(value, historyGroup) =>
+              setField(field.key, value, historyGroup)
+            }
           />
         );
         const caption = (
-          <>
+          <span>
             {field.label}
-            {field.help && <em style={{ marginLeft: 6 }}>({field.help})</em>}
-          </>
+            {field.help && (
+              <em style={{ marginLeft: 6, textTransform: "none" }}>
+                ({field.help})
+              </em>
+            )}
+          </span>
         );
         // row editors hold many controls — a <label> would misdirect
         // clicks to whichever control happens to come first
         return field.kind === "checks" || field.kind === "cases" ? (
-          <div key={field.key}>
-            <span style={labelStyle}>{caption}</span>
+          <div key={field.key} className="nf-label">
+            {caption}
             {body}
           </div>
         ) : (
-          <label key={field.key} style={labelStyle}>
+          <label key={field.key} className="nf-label">
             {caption}
             {body}
           </label>

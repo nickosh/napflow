@@ -9,20 +9,10 @@ semantics (gate, env, masking) via core/runprep.py.
 """
 
 import ast
-import asyncio
 import hashlib
-import ipaddress
-import json
-import os
 import shutil
-import stat
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 from blacksheep import Application, Request, Response, WebSocket
 from blacksheep.server.responses import html
@@ -43,13 +33,9 @@ from napflow.core.checker import (
 from napflow.core.events import (
     HistoryFormatError,
     begin_history_reader,
-    encode_record,
     last_jsonl_record,
     resolve_record_content,
     run_history_sort_key,
-)
-from napflow.core.events import (
-    validate_history_envelope as _validate_history_envelope,
 )
 from napflow.core.files import atomic_write_text
 from napflow.core.history_content import (
@@ -70,12 +56,12 @@ from napflow.core.loader import (
 from napflow.core.models import EndNode, StartNode
 from napflow.core.runprep import RunPrepError, prepare_run
 from napflow.core.workspace import Workspace, WorkspaceBoundaryError
-from napflow.server.runs import (
-    SUBSCRIBER_END,
-    SUBSCRIBER_RESYNC,
-    RunManager,
-    SubscriberLimitError,
+from napflow.server import replay, ws
+from napflow.server.boundary import (
+    LocalRequestBoundary,
+    SourceWriteCoordinator,
 )
+from napflow.server.runs import RunManager
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -87,395 +73,8 @@ napflow from PyPI or a GitHub release artifact; direct VCS and raw-source
 installs are unsupported. The API is live under <code>/api</code>.</p>
 </body></html>"""
 
-# WebSocket close codes (4xxx = application-defined)
+# WebSocket close code owned by the route boundary (4xxx = application-defined)
 WS_WORKSPACE_BOUNDARY = 4400
-WS_REQUEST_ORIGIN = 4403
-WS_UNKNOWN_RUN = 4404
-WS_HISTORY_FORMAT = 4409
-WS_RESYNC_REQUIRED = 4410
-WS_SUBSCRIBER_LIMIT = 4411
-WS_SEND_TIMEOUT_S = 5.0
-WS_CLOSE_TIMEOUT_S = 1.0
-
-REPLAY_API_FORMAT = "napflow-replay/1"
-REPLAY_DEFAULT_LIMIT = 200
-REPLAY_MAX_LIMIT = 500
-REPLAY_ROOT_FRAME = "f-0"
-REPLAY_LOG_RING = 50
-_MAX_REPLAY_SEQUENCE = (1 << 63) - 1
-_RUN_ENVELOPE_EVENTS = frozenset({"run_started", "run_finished"})
-
-_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-
-
-class _ReplayQueryError(ValueError):
-    """A replay query cannot be interpreted without ambiguity."""
-
-
-@dataclass(frozen=True)
-class _ReplayMetadata:
-    run_format: str | None
-    features: list[str]
-    root_frame: str
-
-
-@dataclass(frozen=True)
-class _ReplaySnapshot:
-    history_state: str
-    run_summary: dict[str, Any] | None
-    through_seq: int
-    allow_empty: bool
-
-
-class _ReplayViewBuilder:
-    """Fold a complete selected frame into bounded browser overlay state.
-
-    This is a disposable projection over canonical JSONL, not a second source
-    of truth.  It is bounded by the flow's nodes/edges/ports plus a fixed log
-    ring per node, while event rows remain independently page-sized.
-    """
-
-    def __init__(self, scope_frame: str) -> None:
-        self.scope_frame = scope_frame
-        self.record_count = 0
-        self.nodes: dict[str, dict[str, Any]] = {}
-        self.edges: dict[str, dict[str, int]] = {}
-        self.asserts = {"passed": 0, "failed": 0}
-        self.started_ts: str | None = None
-
-    @staticmethod
-    def _fresh_node() -> dict[str, Any]:
-        return {
-            "firings": 0,
-            "active": False,
-            "outcome": "none",
-            "guard": None,
-            "lastSeq": -1,
-            "log": None,
-            "ports": {},
-            "request": None,
-        }
-
-    def _node(self, node: str) -> dict[str, Any]:
-        return self.nodes.setdefault(node, self._fresh_node())
-
-    def _touch(self, node: str, seq: int, **patch: Any) -> None:
-        state = self._node(node)
-        state.update(patch)
-        state["lastSeq"] = seq
-
-    @staticmethod
-    def _message_value(record: dict[str, Any]) -> Any:
-        return record["value"] if "value" in record else record.get("value_preview")
-
-    @staticmethod
-    def _traffic(ports: dict[str, Any], key: str, value: Any, ts: str | None) -> None:
-        previous = ports.get(key)
-        ports[key] = {
-            "count": (previous.get("count", 0) if isinstance(previous, dict) else 0)
-            + 1,
-            "lastValue": value,
-            "lastTs": ts,
-        }
-
-    def apply(self, record: dict[str, Any]) -> None:
-        self.record_count += 1
-        seq = record["seq"]
-        event = record.get("event")
-
-        if event == "run_started":
-            self.started_ts = record.get("ts")
-            return
-        if event == "run_finished":
-            assertions = record.get("asserts")
-            if isinstance(assertions, dict):
-                self.asserts = {
-                    "passed": assertions.get("passed", self.asserts["passed"]),
-                    "failed": assertions.get("failed", self.asserts["failed"]),
-                }
-            never_fired = record.get("nodes_never_fired")
-            if isinstance(never_fired, list):
-                for node in never_fired:
-                    if isinstance(node, str):
-                        self._touch(node, seq, outcome="skipped")
-            for state in self.nodes.values():
-                if state["active"]:
-                    state["active"] = False
-            return
-
-        if record.get("frame") != self.scope_frame:
-            return
-
-        node = record.get("node")
-        if event == "node_fired" and isinstance(node, str):
-            state = self._node(node)
-            self._touch(
-                node,
-                seq,
-                firings=state["firings"] + 1,
-                active=True,
-            )
-        elif event == "request_started" and isinstance(node, str):
-            self._touch(
-                node,
-                seq,
-                active=True,
-                request={
-                    "method": record.get("method"),
-                    "url": record.get("url"),
-                    "status": None,
-                    "sizeBytes": None,
-                    "totalMs": None,
-                    "attempt": record.get("attempt", 1),
-                    "error": None,
-                },
-            )
-        elif event == "request_finished" and isinstance(node, str):
-            previous = self._node(node).get("request")
-            previous = previous if isinstance(previous, dict) else {}
-            timing = record.get("timing")
-            timing = timing if isinstance(timing, dict) else {}
-            self._touch(
-                node,
-                seq,
-                outcome="ok",
-                request={
-                    "method": previous.get("method"),
-                    "url": previous.get("url"),
-                    "status": record.get("status"),
-                    "sizeBytes": record.get("size_bytes"),
-                    "totalMs": timing.get("total_ms"),
-                    "attempt": record.get("attempt", previous.get("attempt", 1)),
-                    "error": None,
-                },
-            )
-        elif event == "request_failed" and isinstance(node, str):
-            previous = self._node(node).get("request")
-            previous = previous if isinstance(previous, dict) else {}
-            request = {
-                "method": previous.get("method"),
-                "url": previous.get("url"),
-                "status": None,
-                "sizeBytes": None,
-                "totalMs": None,
-                "attempt": record.get("attempt", previous.get("attempt", 1)),
-                "error": f"{record.get('error_kind')}: {record.get('message')}",
-            }
-            patch: dict[str, Any] = {"request": request}
-            if record.get("will_retry") is not True:
-                patch["outcome"] = "error"
-            self._touch(node, seq, **patch)
-        elif event == "message_emitted":
-            from_port = str(record.get("from_port", ""))
-            to_node = record.get("to_node")
-            to_port = record.get("to_port")
-            edge = f"{from_port}→{to_node}.{to_port}"
-            previous_edge = self.edges.get(edge)
-            self.edges[edge] = {
-                "count": (
-                    previous_edge.get("count", 0)
-                    if isinstance(previous_edge, dict)
-                    else 0
-                )
-                + 1,
-                "lastSeq": seq,
-            }
-            value = self._message_value(record)
-            ts = record.get("ts")
-            if isinstance(node, str):
-                state = self._node(node)
-                port = from_port.partition(".")[2]
-                outcome = (
-                    "error"
-                    if port == "error"
-                    else state["outcome"]
-                    if state["outcome"] in {"failed", "error"}
-                    else "ok"
-                )
-                self._traffic(state["ports"], f"out:{port}", value, ts)
-                self._touch(node, seq, active=False, outcome=outcome)
-            if isinstance(to_node, str) and isinstance(to_port, str):
-                state = self._node(to_node)
-                self._traffic(state["ports"], f"in:{to_port}", value, ts)
-        elif event == "assert_result":
-            passed = record.get("passed") is True
-            self.asserts = {
-                "passed": self.asserts["passed"] + int(passed),
-                "failed": self.asserts["failed"] + int(not passed),
-            }
-            if isinstance(node, str):
-                previous = self._node(node)["outcome"]
-                self._touch(
-                    node,
-                    seq,
-                    outcome=("failed" if not passed or previous == "failed" else "ok"),
-                )
-        elif event == "python_error" and isinstance(node, str):
-            self._touch(node, seq, outcome="error", active=False)
-        elif event == "log" and isinstance(node, str):
-            state = self._node(node)
-            previous = state.get("log")
-            previous = previous if isinstance(previous, dict) else {}
-            ring = list(previous.get("ring", []))
-            ring.append(record.get("value"))
-            self._touch(
-                node,
-                seq,
-                log={
-                    "ring": ring[-REPLAY_LOG_RING:],
-                    "count": previous.get("count", 0) + 1,
-                },
-            )
-        elif event == "guard_tripped" and isinstance(node, str):
-            self._touch(node, seq, guard=record.get("port"))
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            "scope_frame": self.scope_frame,
-            "record_count": self.record_count,
-            "nodes": self.nodes,
-            "edges": self.edges,
-            "asserts": self.asserts,
-            "started_ts": self.started_ts,
-        }
-
-
-@dataclass(frozen=True)
-class _Authority:
-    scheme: str
-    host: str
-    port: int
-
-
-def _request_scheme(request: Request) -> str:
-    scheme = request.scheme.lower()
-    if scheme == "ws":
-        return "http"
-    if scheme == "wss":
-        return "https"
-    return scheme
-
-
-def _parse_authority(value: str, scheme: str) -> _Authority | None:
-    """Parse a Host authority without accepting URL-shaped surprises."""
-    try:
-        parsed = urlsplit(f"//{value}")
-        port = parsed.port
-    except ValueError:
-        return None
-    if (
-        not value
-        or value.endswith(":")
-        or any(char.isspace() for char in value)
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path
-        or parsed.query
-        or parsed.fragment
-        or parsed.hostname is None
-    ):
-        return None
-    host = parsed.hostname.lower().removesuffix(".")
-    if port is None:
-        port = 443 if scheme == "https" else 80
-    if not 1 <= port <= 65535:
-        return None
-    return _Authority(scheme=scheme, host=host, port=port)
-
-
-def _is_loopback_host(host: str) -> bool:
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def _request_authority(request: Request) -> _Authority | None:
-    hosts = request.get_headers(b"host")
-    if len(hosts) != 1:
-        return None
-    try:
-        raw_host = hosts[0].decode("ascii")
-    except UnicodeDecodeError:
-        return None
-    authority = _parse_authority(raw_host, _request_scheme(request))
-    if authority is None or not _is_loopback_host(authority.host):
-        return None
-    return authority
-
-
-def _origin_matches(request: Request, authority: _Authority) -> bool:
-    origins = request.get_headers(b"origin")
-    if not origins:
-        # Origin is a browser boundary. Programmatic localhost clients such
-        # as niquests and websockets remain supported without fabricating it.
-        return True
-    if len(origins) != 1:
-        return False
-    try:
-        value = origins[0].decode("ascii")
-        parsed = urlsplit(value)
-        port = parsed.port
-    except (UnicodeDecodeError, ValueError):
-        return False
-    if (
-        parsed.scheme not in {"http", "https"}
-        or parsed.netloc == ""
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path
-        or parsed.query
-        or parsed.fragment
-        or parsed.hostname is None
-    ):
-        return False
-    host = parsed.hostname.lower().removesuffix(".")
-    if port is None:
-        port = 443 if parsed.scheme == "https" else 80
-    return _Authority(parsed.scheme, host, port) == authority
-
-
-class _LocalRequestBoundary:
-    """Loopback Host + browser same-origin boundary (D37/FR-1108)."""
-
-    async def __call__(
-        self,
-        request: Request,
-        next_handler: Callable[[Request], Awaitable[Response | None]],
-    ) -> Response | None:
-        authority = _request_authority(request)
-        is_websocket = isinstance(request, WebSocket)
-        origin_required = is_websocket or request.method.upper() in _UNSAFE_METHODS
-        if authority is None or (
-            origin_required and not _origin_matches(request, authority)
-        ):
-            if is_websocket:
-                await request.close(WS_REQUEST_ORIGIN, "request origin rejected")
-                return None
-            return json_response(
-                {
-                    "error": "request_origin",
-                    "message": "request rejected by local server boundary",
-                },
-                status=403,
-            )
-        return await next_handler(request)
-
-
-class _SourceWriteCoordinator:
-    """Per-canonical-file serialization for ETag check + replacement."""
-
-    def __init__(self) -> None:
-        self._locks: dict[str, asyncio.Lock] = {}
-
-    @asynccontextmanager
-    async def lock(self, path: Path) -> AsyncIterator[None]:
-        key = os.path.normcase(str(path))
-        lock = self._locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            yield
 
 
 def _diag_payload(diag: CheckDiagnostic, root: Path) -> dict[str, Any]:
@@ -607,342 +206,6 @@ def _flow_summary(ref: Any) -> dict[str, Any]:
     }
 
 
-def _iter_records(
-    path: Path,
-    *,
-    validate_history: bool = True,
-    allow_empty: bool = False,
-    through_seq: int | None = None,
-) -> Iterator[dict[str, Any]]:
-    """Stream a JSONL prefix; a trailing partial line is tolerated (EC20).
-
-    The envelope is validated by default before later records are interpreted.
-    `allow_empty` is only for the brief live-run prefix before run_started has
-    flushed; an empty completed/imported history is invalid. ``through_seq``
-    freezes live replay at the atomically captured subscription boundary.
-    """
-    seen = False
-    try:
-        with path.open(encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except ValueError as e:
-                    if validate_history and not seen:
-                        raise HistoryFormatError(
-                            "run history does not begin with a valid JSON envelope"
-                        ) from e
-                    if any(later.strip() for later in f):
-                        raise HistoryFormatError(
-                            "run history contains malformed JSON before a later record"
-                        ) from e
-                    break  # one malformed/partial final line is an EC20 prefix
-                if (
-                    through_seq is not None
-                    and type(record.get("seq")) is int
-                    and record["seq"] > through_seq
-                ):
-                    break
-                if validate_history and not seen:
-                    _validate_history_envelope(record)
-                seen = True
-                yield record
-    except UnicodeError as e:
-        raise HistoryFormatError("run history must contain valid UTF-8") from e
-    if validate_history and not seen and not allow_empty:
-        raise HistoryFormatError("run history is empty; no run_started envelope")
-
-
-def _read_records(
-    path: Path, *, validate_history: bool = True, allow_empty: bool = False
-) -> list[dict[str, Any]]:
-    """Compatibility helper retained for focused stream/WS tests."""
-    return list(
-        _iter_records(
-            path,
-            validate_history=validate_history,
-            allow_empty=allow_empty,
-        )
-    )
-
-
-def _iter_replay_records(
-    path: Path, *, allow_empty: bool, through_seq: int
-) -> Iterator[dict[str, Any]]:
-    """Validate the sequence contract needed by cursor-based REST replay."""
-    expected_seq = 1
-    for record in _iter_records(path, allow_empty=allow_empty, through_seq=through_seq):
-        seq = record.get("seq")
-        if type(seq) is not int or seq != expected_seq:
-            raise HistoryFormatError(
-                "run history sequence must contain consecutive positive integers; "
-                f"expected {expected_seq}, found {seq!r}"
-            )
-        expected_seq += 1
-        yield record
-
-
-def _query_value(request: Request, name: str) -> str | None:
-    """Return one query value, rejecting duplicate/empty ambiguity upstream."""
-    raw_query = request.url.query
-    try:
-        query = parse_qs(
-            raw_query.decode("utf-8") if isinstance(raw_query, bytes) else raw_query,
-            keep_blank_values=True,
-            errors="strict",
-        )
-    except (UnicodeDecodeError, UnicodeEncodeError, ValueError) as error:
-        raise _ReplayQueryError("query string must be valid UTF-8") from error
-    values = query.get(name)
-    if values is None:
-        return None
-    if len(values) != 1 or not isinstance(values[0], str):
-        raise _ReplayQueryError(f"{name} must be provided at most once")
-    return values[0]
-
-
-def _parse_replay_integer(
-    value: str | None,
-    *,
-    name: str,
-    default: int | None,
-    minimum: int,
-    maximum: int,
-) -> int:
-    if value is None:
-        if default is None:  # pragma: no cover - every current caller defaults
-            raise _ReplayQueryError(f"{name} is required")
-        return default
-    if (
-        not value
-        or len(value) > 19
-        or any(character < "0" or character > "9" for character in value)
-    ):
-        raise _ReplayQueryError(f"{name} must be an integer")
-    parsed = int(value)
-    if not minimum <= parsed <= maximum:
-        raise _ReplayQueryError(f"{name} must be between {minimum} and {maximum}")
-    return parsed
-
-
-def _parse_replay_page_query(request: Request) -> tuple[int, int]:
-    after_seq = _parse_replay_integer(
-        _query_value(request, "after_seq"),
-        name="after_seq",
-        default=0,
-        minimum=0,
-        maximum=_MAX_REPLAY_SEQUENCE,
-    )
-    limit = _parse_replay_integer(
-        _query_value(request, "limit"),
-        name="limit",
-        default=REPLAY_DEFAULT_LIMIT,
-        minimum=1,
-        maximum=REPLAY_MAX_LIMIT,
-    )
-    return after_seq, limit
-
-
-def _parse_frame_query(request: Request, name: str) -> str | None:
-    value = _query_value(request, name)
-    if value is None:
-        return None
-    if (
-        not value
-        or len(value) > 4096
-        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
-    ):
-        raise _ReplayQueryError(f"{name} must be a non-empty frame id")
-    return value
-
-
-def _metadata_from_header(header: dict[str, Any] | None) -> _ReplayMetadata:
-    if header is None:
-        return _ReplayMetadata(None, [], REPLAY_ROOT_FRAME)
-    declared_root = header.get("frame")
-    root_frame = (
-        declared_root
-        if isinstance(declared_root, str) and declared_root
-        else REPLAY_ROOT_FRAME
-    )
-    return _ReplayMetadata(
-        run_format=header.get("format"),
-        features=list(header.get("features", [])),
-        root_frame=root_frame,
-    )
-
-
-def _read_replay_page(
-    path: Path,
-    *,
-    after_seq: int,
-    limit: int,
-    allow_empty: bool,
-    through_seq: int,
-    matches: Callable[[dict[str, Any], _ReplayMetadata], bool],
-    on_record: Callable[[dict[str, Any], _ReplayMetadata], None] | None = None,
-) -> tuple[_ReplayMetadata, list[dict[str, Any]], bool]:
-    """Read at most one bounded page plus one matching lookahead record."""
-    iterator = _iter_replay_records(
-        path, allow_empty=allow_empty, through_seq=through_seq
-    )
-    try:
-        try:
-            header = next(iterator)
-        except StopIteration:
-            return _metadata_from_header(None), [], False
-
-        metadata = _metadata_from_header(header)
-        selected: list[dict[str, Any]] = []
-        has_more = False
-        for record in chain((header,), iterator):
-            if on_record is not None:
-                on_record(record, metadata)
-            seq = record.get("seq")
-            if (
-                type(seq) is not int
-                or seq <= after_seq
-                or not matches(record, metadata)
-            ):
-                continue
-            if len(selected) == limit:
-                has_more = True
-            else:
-                selected.append(record)
-        return metadata, selected, has_more
-    finally:
-        iterator.close()
-
-
-def _read_replay_event(
-    path: Path,
-    *,
-    seq: int,
-    allow_empty: bool,
-    through_seq: int,
-) -> tuple[_ReplayMetadata, dict[str, Any] | None]:
-    """Read one canonical record by sequence without retaining its prefix."""
-    iterator = _iter_replay_records(
-        path, allow_empty=allow_empty, through_seq=through_seq
-    )
-    try:
-        try:
-            header = next(iterator)
-        except StopIteration:
-            return _metadata_from_header(None), None
-        metadata = _metadata_from_header(header)
-        selected: dict[str, Any] | None = None
-        for record in chain((header,), iterator):
-            if type(record.get("seq")) is int and record["seq"] == seq:
-                selected = record
-        return metadata, selected
-    finally:
-        iterator.close()
-
-
-def _replay_envelope(
-    run_id: str,
-    metadata: _ReplayMetadata,
-    history_state: str,
-    run_summary: dict[str, Any] | None,
-) -> dict[str, Any]:
-    return {
-        "api_format": REPLAY_API_FORMAT,
-        "run_id": run_id,
-        "run_format": metadata.run_format,
-        "features": metadata.features,
-        "root_frame": metadata.root_frame,
-        "history_state": history_state,
-        "run_summary": run_summary,
-    }
-
-
-def _replay_run_summary(record: dict[str, Any]) -> dict[str, Any]:
-    """Project the durable final fact into a bounded browser summary.
-
-    End outputs and error bodies stay exclusively in the canonical event (and
-    its lazy content store).  The replay envelope needs only enough scalar
-    state to settle a first page that deliberately does not fetch the tail.
-    """
-    errors = record.get("unhandled_errors")
-    never_fired = record.get("nodes_never_fired")
-    summary: dict[str, Any] = {
-        "state": record.get("state", "error"),
-        "duration_ms": record.get("duration_ms"),
-        "asserts": record.get("asserts", {"passed": 0, "failed": 0}),
-        "unhandled_error_count": len(errors) if isinstance(errors, list) else 0,
-        "nodes_never_fired_count": (
-            len(never_fired) if isinstance(never_fired, list) else 0
-        ),
-    }
-    if record.get("error_reason") is not None:
-        summary["error_reason"] = record["error_reason"]
-    return summary
-
-
-def _replay_frame_summary(record: dict[str, Any]) -> dict[str, Any]:
-    """Project one canonical frame completion into bounded navigation data."""
-    errors = record.get("unhandled_errors")
-    outputs = record.get("end_outputs")
-    return {
-        key: record.get(key)
-        for key in (
-            "event",
-            "run_id",
-            "ts",
-            "seq",
-            "frame",
-            "parent_frame",
-            "parent_node",
-            "flow",
-            "kind",
-            "loop_index",
-            "duration_ms",
-            "state",
-            "asserts",
-        )
-    } | {
-        "unhandled_error_count": len(errors) if isinstance(errors, list) else 0,
-        "end_output_names": sorted(outputs) if isinstance(outputs, dict) else [],
-    }
-
-
-def _capture_replay_snapshot(run: Any | None, log_path: Path) -> _ReplaySnapshot:
-    """Capture one sequence/lifecycle boundary before a replay scan.
-
-    Writers do not take reader leases.  Freezing at the last valid sequence
-    prevents a concurrent append from producing an older page/projection with
-    a newer completion classification.
-    """
-    tail = last_jsonl_record(log_path)
-    seq = tail.get("seq") if tail is not None else None
-    through_seq = seq if type(seq) is int and seq > 0 else 0
-    if run is not None and not run.finished:
-        return _ReplaySnapshot("running", None, through_seq, True)
-    if tail and tail.get("event") == "run_finished":
-        return _ReplaySnapshot(
-            "complete", _replay_run_summary(tail), through_seq, False
-        )
-    external_active = _has_external_active_marker(log_path)
-    state = "indeterminate" if external_active else "incomplete"
-    return _ReplaySnapshot(state, None, through_seq, external_active)
-
-
-def _replay_history_state(run: Any | None, log_path: Path) -> str:
-    """Compatibility/listing projection of the richer replay snapshot."""
-    return _capture_replay_snapshot(run, log_path).history_state
-
-
-def _has_external_active_marker(log_path: Path) -> bool:
-    marker = log_path.with_name(f"{log_path.stem}.active")
-    try:
-        return stat.S_ISREG(marker.lstat().st_mode)
-    except OSError:
-        return False
-
-
 def _history_format_response(error: HistoryFormatError) -> Response:
     message = str(error).encode("utf-8", errors="backslashreplace").decode("utf-8")
     return json_response({"error": "history_format", "message": message}, status=422)
@@ -958,132 +221,6 @@ def _history_content_response(
     return json_response({"error": code, "message": message}, status=status)
 
 
-def _ws_close_reason(message: str, limit: int = 120) -> str:
-    """Application close reasons must fit the WebSocket control frame."""
-    safe = message.encode("utf-8", errors="backslashreplace").decode("utf-8")
-    encoded = safe.encode("utf-8")
-    if len(encoded) <= limit:
-        return safe
-    return encoded[: limit - 3].decode("utf-8", errors="ignore") + "..."
-
-
-class _SlowSubscriber(TimeoutError):
-    pass
-
-
-async def _send_ws_record(websocket: WebSocket, record: dict[str, Any]) -> None:
-    try:
-        await asyncio.wait_for(
-            websocket.send_text(encode_record(record)),
-            timeout=WS_SEND_TIMEOUT_S,
-        )
-    except TimeoutError as error:
-        raise _SlowSubscriber from error
-
-
-async def _send_history_range(
-    websocket: WebSocket,
-    path: Path,
-    *,
-    after_seq: int = 0,
-    through_seq: int | None = None,
-    allow_empty: bool = False,
-) -> int:
-    """Send one exact durable range and return its last sequence."""
-    last_sent = after_seq
-    for record in _iter_records(
-        path,
-        allow_empty=allow_empty,
-        through_seq=through_seq,
-    ):
-        seq = record.get("seq")
-        if type(seq) is int and seq <= after_seq:
-            continue
-        await _send_ws_record(websocket, record)
-        if type(seq) is int:
-            last_sent = seq
-    return last_sent
-
-
-async def _close_ws(websocket: WebSocket, code: int, reason: str = "") -> None:
-    with suppress(Exception):
-        await asyncio.wait_for(
-            websocket.close(code, reason), timeout=WS_CLOSE_TIMEOUT_S
-        )
-
-
-async def _stream_run_websocket(
-    websocket: WebSocket, run: Any, manager: RunManager
-) -> None:
-    """Serve one filesystem-leased run without retaining its event prefix."""
-    try:
-        lease = begin_history_reader(run.log_path)
-    except (OSError, ValueError):
-        await _close_ws(websocket, WS_UNKNOWN_RUN, "run history unavailable")
-        return
-
-    defer_release = False
-    subscriber = None
-    replay_pinned = False
-    try:
-        if run.finished:
-            manager.pin_replay(run)
-            replay_pinned = True
-            await _send_history_range(websocket, run.log_path)
-        else:
-            through_seq, subscriber = manager.subscribe(run)
-            last_sent = await _send_history_range(
-                websocket,
-                run.log_path,
-                allow_empty=True,
-                through_seq=through_seq,
-            )
-            while True:
-                item = await subscriber.queue.get()
-                if item is SUBSCRIBER_END:
-                    break
-                if item is SUBSCRIBER_RESYNC:
-                    through_seq, subscriber = manager.resubscribe(run, subscriber)
-                    last_sent = await _send_history_range(
-                        websocket,
-                        run.log_path,
-                        after_seq=last_sent,
-                        through_seq=through_seq,
-                        allow_empty=True,
-                    )
-                    continue
-                seq = item.get("seq")
-                if type(seq) is int and seq <= last_sent:
-                    continue
-                await _send_ws_record(websocket, item)
-                if type(seq) is int:
-                    last_sent = seq
-    except SubscriberLimitError:
-        await _close_ws(websocket, WS_SUBSCRIBER_LIMIT, "subscriber_limit")
-        return
-    except HistoryFormatError as error:
-        await _close_ws(websocket, WS_HISTORY_FORMAT, _ws_close_reason(str(error)))
-        return
-    except _SlowSubscriber:
-        manager.reserve_resync(run)
-        manager.defer_history_reader_release(
-            run.log_path,
-            lease,
-            run.history_limit,
-        )
-        defer_release = True
-        await _close_ws(websocket, WS_RESYNC_REQUIRED, "resync_required")
-        return
-    finally:
-        if replay_pinned:
-            manager.unpin_replay(run)
-        if subscriber is not None:
-            manager.unsubscribe(run, subscriber)
-        if not defer_release:
-            manager.release_history_reader(run.log_path, lease, run.history_limit)
-    await _close_ws(websocket, 1000)
-
-
 def build_app(workspace: Workspace) -> Application:
     """One server per workspace. A fresh Router per app — the module
     singleton router would leak routes across instances (tests build
@@ -1091,9 +228,9 @@ def build_app(workspace: Workspace) -> Application:
     router = Router()
     app = Application(router=router)
     manager = RunManager()
-    writes = _SourceWriteCoordinator()
+    writes = SourceWriteCoordinator()
     resolver = workspace.resolver
-    app.middlewares.append(_LocalRequestBoundary())
+    app.middlewares.append(LocalRequestBoundary())
     app.services.register(RunManager, instance=manager)  # test access
     manifest = workspace.manifest.model
     root = workspace.root
@@ -1104,7 +241,7 @@ def build_app(workspace: Workspace) -> Application:
         run_id: str, request: Request
     ) -> tuple[Any | None, Path] | Response:
         """Resolve one live/known or flow-qualified durable run log."""
-        flow = _query_value(request, "flow")
+        flow = replay.query_value(request, "flow")
         run = manager.get(run_id)
         if run is not None:
             return run, resolver.run_log(run.identity, run_id)
@@ -1523,7 +660,7 @@ def build_app(workspace: Workspace) -> Application:
                     "state": (
                         tail.get("state", "error")
                         if finished
-                        else _replay_history_state(live, log)
+                        else replay.replay_history_state(live, log)
                     ),
                 }
             )
@@ -1547,10 +684,10 @@ def build_app(workspace: Workspace) -> Application:
         """Return one bounded canonical replay page (D13/D34/D36)."""
         try:
             run_id = resolver.validate_run_id(run_id)
-            after_seq, limit = _parse_replay_page_query(request)
-            selected_frame = _parse_frame_query(request, "frame")
+            after_seq, limit = replay.parse_replay_page_query(request)
+            selected_frame = replay.parse_frame_query(request, "frame")
             target = locate_run_history(run_id, request)
-        except _ReplayQueryError as e:
+        except replay.ReplayQueryError as e:
             return _bad_request(str(e))
         except WorkspaceBoundaryError as e:
             return _workspace_boundary(e)
@@ -1563,11 +700,11 @@ def build_app(workspace: Workspace) -> Application:
         lease = acquired
         try:
             try:
-                snapshot = _capture_replay_snapshot(run, log_path)
-                view_builder: _ReplayViewBuilder | None = None
+                snapshot = replay.capture_replay_snapshot(run, log_path)
+                view_builder: replay.ReplayViewBuilder | None = None
 
                 def matches_selected_frame(
-                    record: dict[str, Any], metadata: _ReplayMetadata
+                    record: dict[str, Any], metadata: replay.ReplayMetadata
                 ) -> bool:
                     return (
                         selected_frame is None
@@ -1575,22 +712,22 @@ def build_app(workspace: Workspace) -> Application:
                         or (
                             selected_frame == metadata.root_frame
                             and record.get("frame") is None
-                            and record.get("event") in _RUN_ENVELOPE_EVENTS
+                            and record.get("event") in replay.RUN_ENVELOPE_EVENTS
                         )
                     )
 
                 def fold_selected_frame(
-                    record: dict[str, Any], metadata: _ReplayMetadata
+                    record: dict[str, Any], metadata: replay.ReplayMetadata
                 ) -> None:
                     nonlocal view_builder
                     if view_builder is None:
-                        view_builder = _ReplayViewBuilder(
+                        view_builder = replay.ReplayViewBuilder(
                             selected_frame or metadata.root_frame
                         )
                     if matches_selected_frame(record, metadata):
                         view_builder.apply(record)
 
-                metadata, records, has_more = _read_replay_page(
+                metadata, records, has_more = replay.read_replay_page(
                     log_path,
                     after_seq=after_seq,
                     limit=limit,
@@ -1609,7 +746,7 @@ def build_app(workspace: Workspace) -> Application:
             )
         next_after_seq = records[-1]["seq"] if records else after_seq
         return json_response(
-            _replay_envelope(
+            replay.replay_envelope(
                 run_id,
                 metadata,
                 snapshot.history_state,
@@ -1624,7 +761,7 @@ def build_app(workspace: Workspace) -> Application:
                 "view_summary": (
                     view_builder.payload()
                     if view_builder is not None
-                    else _ReplayViewBuilder(
+                    else replay.ReplayViewBuilder(
                         selected_frame or metadata.root_frame
                     ).payload()
                 ),
@@ -1636,10 +773,10 @@ def build_app(workspace: Workspace) -> Application:
         """Page direct-child durable frame summaries for one parent."""
         try:
             run_id = resolver.validate_run_id(run_id)
-            after_seq, limit = _parse_replay_page_query(request)
-            requested_parent = _parse_frame_query(request, "parent_frame")
+            after_seq, limit = replay.parse_replay_page_query(request)
+            requested_parent = replay.parse_frame_query(request, "parent_frame")
             target = locate_run_history(run_id, request)
-        except _ReplayQueryError as e:
+        except replay.ReplayQueryError as e:
             return _bad_request(str(e))
         except WorkspaceBoundaryError as e:
             return _workspace_boundary(e)
@@ -1652,8 +789,8 @@ def build_app(workspace: Workspace) -> Application:
         lease = acquired
         try:
             try:
-                snapshot = _capture_replay_snapshot(run, log_path)
-                metadata, frame_records, has_more = _read_replay_page(
+                snapshot = replay.capture_replay_snapshot(run, log_path)
+                metadata, frame_records, has_more = replay.read_replay_page(
                     log_path,
                     after_seq=after_seq,
                     limit=limit,
@@ -1673,11 +810,11 @@ def build_app(workspace: Workspace) -> Application:
                 lease,
                 manifest.defaults.run.history,
             )
-        frames = [_replay_frame_summary(record) for record in frame_records]
+        frames = [replay.replay_frame_summary(record) for record in frame_records]
         parent_frame = requested_parent or metadata.root_frame
         next_after_seq = frames[-1]["seq"] if frames else after_seq
         return json_response(
-            _replay_envelope(
+            replay.replay_envelope(
                 run_id,
                 metadata,
                 snapshot.history_state,
@@ -1697,15 +834,15 @@ def build_app(workspace: Workspace) -> Application:
         """Resolve the content of exactly one canonical event on demand."""
         try:
             run_id = resolver.validate_run_id(run_id)
-            selected_seq = _parse_replay_integer(
+            selected_seq = replay.parse_replay_integer(
                 seq,
                 name="seq",
                 default=None,
                 minimum=1,
-                maximum=_MAX_REPLAY_SEQUENCE,
+                maximum=replay.MAX_REPLAY_SEQUENCE,
             )
             target = locate_run_history(run_id, request)
-        except _ReplayQueryError as e:
+        except replay.ReplayQueryError as e:
             return _bad_request(str(e))
         except WorkspaceBoundaryError as e:
             return _workspace_boundary(e)
@@ -1718,8 +855,8 @@ def build_app(workspace: Workspace) -> Application:
         lease = acquired
         try:
             try:
-                snapshot = _capture_replay_snapshot(run, log_path)
-                metadata, record = _read_replay_event(
+                snapshot = replay.capture_replay_snapshot(run, log_path)
+                metadata, record = replay.read_replay_event(
                     log_path,
                     seq=selected_seq,
                     allow_empty=snapshot.allow_empty,
@@ -1758,7 +895,7 @@ def build_app(workspace: Workspace) -> Application:
                     e, code="history_content_malformed", status=422
                 )
             return json_response(
-                _replay_envelope(
+                replay.replay_envelope(
                     run_id,
                     metadata,
                     snapshot.history_state,
@@ -1804,9 +941,9 @@ def build_app(workspace: Workspace) -> Application:
         await websocket.accept()
         run = manager.get(run_id)
         if run is None:
-            await websocket.close(WS_UNKNOWN_RUN, f"no run {run_id!r}")
+            await websocket.close(ws.WS_UNKNOWN_RUN, f"no run {run_id!r}")
             return
-        await _stream_run_websocket(websocket, run, manager)
+        await ws.stream_run_websocket(websocket, run, manager)
 
     if STATIC_DIR.is_dir():
         # the pre-built UI bundle (S4/M2, NFR-03); SPA fallback for

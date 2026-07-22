@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-import napflow.server.app as server_app
+import napflow.server.replay as replay_module
 from napflow.core.events import HISTORY_FEATURE_CONTENT_BLOBS, HISTORY_FORMAT
 from napflow.core.history_content import RunContentStore
 from test_server import make_scaffold_ws, with_client
@@ -265,8 +265,10 @@ def test_event_page_projects_complete_node_edge_and_port_summary(tmp_path):
         assert summary["nodes"]["a"]["ports"]["out:out"]["lastValue"] == {
             "whole": "value"
         }
+        assert summary["nodes"]["a"]["ports"]["out:out"]["lastSeq"] == 5
         assert summary["nodes"]["a"]["request"]["status"] == 200
         assert summary["nodes"]["b"]["ports"]["in:in"]["count"] == 1
+        assert summary["nodes"]["b"]["ports"]["in:in"]["lastSeq"] == 5
         assert summary["nodes"]["b"]["log"] == {
             "ring": ["full log"],
             "count": 1,
@@ -377,11 +379,13 @@ def test_event_detail_resolves_blob_only_on_demand(tmp_path):
         _header(run_id, features=[HISTORY_FEATURE_CONTENT_BLOBS]),
         _record(
             run_id,
-            "log",
+            "message_emitted",
             2,
             frame="f-0",
-            node="show",
-            level="info",
+            node="source",
+            from_port="source.out",
+            to_node="target",
+            to_port="in",
             value=descriptor,
         ),
         _finished(run_id, 3),
@@ -392,6 +396,15 @@ def test_event_detail_resolves_blob_only_on_demand(tmp_path):
         page_response = await client.get(_url(run_id))
         page = await page_response.json()
         assert page["events"][1]["value"] == descriptor
+        source = page["view_summary"]["nodes"]["source"]["ports"]["out:out"]
+        target = page["view_summary"]["nodes"]["target"]["ports"]["in:in"]
+        assert source == {
+            "count": 1,
+            "lastValue": descriptor,
+            "lastTs": "2026-07-13T00:00:00.000Z",
+            "lastSeq": 2,
+        }
+        assert target == source
 
         detail = await client.get(_url(run_id, "events/2"))
         assert detail.status == 200
@@ -631,7 +644,7 @@ def test_replay_snapshot_does_not_mix_a_new_final_tail_into_an_older_page(
     _write_records(path, prefix)
     active = path.with_name(f"{run_id}.active")
     active.write_text("{}\n", encoding="utf-8")
-    capture = server_app._capture_replay_snapshot
+    capture = replay_module.capture_replay_snapshot
 
     def append_after_capture(run, log_path):
         snapshot = capture(run, log_path)
@@ -639,7 +652,11 @@ def test_replay_snapshot_does_not_mix_a_new_final_tail_into_an_older_page(
         active.unlink()
         return snapshot
 
-    monkeypatch.setattr(server_app, "_capture_replay_snapshot", append_after_capture)
+    monkeypatch.setattr(
+        replay_module,
+        "capture_replay_snapshot",
+        append_after_capture,
+    )
 
     async def scenario(client):
         response = await client.get(_url(run_id))
