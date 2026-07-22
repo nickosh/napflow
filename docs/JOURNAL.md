@@ -6,6 +6,20 @@ progress log — keep it lean; details live in specs, DECISIONS, and git.
 Record project and engineering state, not branch/commit/PR/push/pull/merge
 bookkeeping or hosting-service identifiers.
 
+## 2026-07-22 — F1 pre-audition review queue reconciled
+
+- Planned: unify every run-input entry path and make run-inspector port peeks
+  resolve full blob-backed values lazily with localized failures.
+- Decided: exactly-one Start/End boundaries may be deleted, including through
+  the drag-to-delete area; E006 blocks runs and the picker restores only the
+  missing type. Distinct boundary styling and auto-start cues remain planned.
+- Decided: disconnected islands stay legal without disabled/inert semantics;
+  normal validation still applies, and reachability accounts for auto-fixtures.
+- Reconciled: F8 now permits reviewed built-in semantic adapters while generic
+  presentation stays declarative; the plugin contract itself remains unscheduled.
+- Next: handle the cross-platform focus-shortcut gate separately, then use this
+  queue during the real-work manual audition and scope accepted F1 slices.
+
 ## 2026-07-19 — F1 Slice 2 canvas undo/redo complete
 
 - Done: added a bounded, per-open-flow document history with structural sharing,

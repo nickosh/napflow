@@ -940,12 +940,15 @@ slices named here are the expected shape, not commitments.
 - [ ] Every slice keeps Vitest + Playwright green (snapshot/assertion
       updates are deliberate and named in the change); production build and the
       frontend notices audit stay in the gate.
-- [ ] Every slice keeps per-type UI behavior registry-driven — icon,
-      category, description, quick fields, and card width come from
-      `NODE_META` (`ui/src/catalog.ts`) and field editors from
-      `CONFIG_FORMS` (`ui/src/forms.ts`); no per-type rendering
-      hardcoded in components. This is F8's plugin seam, guarded by
-      `ui/src/catalog.test.ts` registry coverage.
+- [ ] Every slice keeps generalizable presentation metadata registry-driven:
+      icon, category, description, quick fields, and card width come from
+      `NODE_META` (`ui/src/catalog.ts`), and ordinary field editors from
+      `CONFIG_FORMS` (`ui/src/forms.ts`). Bounded built-in semantic adapters
+      may remain explicit — currently Start/End port editors, flow/loop actions,
+      and type-aware summaries — but this does not permit plugin-supplied JS or
+      arbitrary component registration. Registry tests prove catalog/descriptor
+      completeness; consumer tests must separately prove that picker/cards use
+      the registries. F8 must revisit the exact boundary before promotion.
 
 Progress 2026-07-17: the owner supplied a complete visual design as a
 Claude Design handoff (Nocturne design system; owner picked the Soft
@@ -982,6 +985,68 @@ and reset on flow navigation, conflict reload, or an external flow revision.
 Post-save and code-only detail refreshes preserve both history and accepted root
 identity. Focused temporal/canvas/persistence tests plus the full
 Python/frontend/package gate are green.
+
+Pre-audition review queue recorded 2026-07-22 (planned, not landed):
+
+- [ ] **Boundary authoring, execution-source cues, and disconnected islands.**
+      Preserve E006's exactly-one Start/End structural contract, but allow both
+      boundary cards to be deleted through the ordinary canvas deletion paths.
+      In particular, dragging Start or End must reveal and activate the existing
+      dedicated drop-to-delete area just as it does for an ordinary node;
+      dropping there removes the boundary and its incident edges without a
+      confirmation dialog because the whole action is immediately undoable.
+      A missing boundary remains a saveable work-in-progress state: show an
+      immediate canvas-level missing-Start/missing-End callout, surface the
+      canonical E006 returned by save/check, and keep Run check-gated. The picker
+      offers Start or End only while that type is absent (including search,
+      click, and drag paths); the add action itself must also reject a duplicate.
+      Adding or deleting a boundary, together with its incident edges, forms one
+      undo step, and undo/redo updates picker availability.
+
+      Give Start and End visually distinct boundary treatment without borrowing
+      pass/fail run colors: Start is the flow-entry boundary and End the
+      flow-output boundary. Mark every frame-start execution source explicitly:
+      Start always shows an `AUTO`/auto-start cue, and a fixture shows the same
+      cue exactly when its optional `trigger` has no incoming edge. The cue's
+      help text must say "once per flow frame"; a triggered fixture loses it.
+      This is an authoring-time execution hint, distinct from live fired/running
+      state.
+
+      Disconnected islands stay legal authoring structures, with no disabled or
+      inert-node mode. Do not add a blanket Start-to-End path requirement:
+      trigger-less fixtures are valid run seeds and zero-port End nodes cannot
+      participate in such a path. Normal validation still applies everywhere,
+      so incomplete config, missing required inputs (E005), broken references,
+      and required End-port guarantees continue to block a run as they do now;
+      a valid unreachable island simply does not execute. Keep W104 as the
+      visible inactive-island warning, with wording aligned to all execution
+      seeds rather than only Start. A future "remove unused" action remains
+      optional and must share the checker's reachability definition, preserve
+      Start/End and notes, preview its scope, and form one undo step.
+      Acceptance tests cover all four picker cardinality states, inline,
+      keyboard, and dedicated drop-area boundary deletion, add/delete undo/redo,
+      save-and-reopen of missing-boundary flows, the E006 run gate,
+      duplicate-add defense, Start's permanent source cue, and a fixture cue
+      toggling as its trigger edge is connected or removed.
+- [ ] **One run-input opening contract.** The bottom Run control and command
+      palette must call the same owner for popover initialization, configured
+      defaults, edited-blank semantics, validation, close/reset, and flow
+      navigation. Acceptance covers both entry paths, every Start-port type,
+      untouched template defaults, intentional empty overrides, and stale-state
+      prevention.
+- [ ] **Lazy full-value port peek.** A run-inspector port row must retain an
+      event sequence/content locator and resolve that canonical event only when
+      its modal opens, for both live and replay views. Preserve zero eager blob
+      reads; show verified full values, and localize missing/corrupt-content
+      errors to the requested modal without damaging the run view or console.
+- [ ] **Registry boundary follow-up.** Treat bounded built-in semantic branches
+      as the current working direction, not a completed F8 decision. Inventory
+      each exception, keep generic presentation declarative, add consumer-level
+      registry tests, and narrow `catalog.test.ts` comments/assertions so key
+      completeness is not presented as proof that no component bypass exists.
+      The cross-platform focus-shortcut failure is owned by the next dedicated
+      session; selected-card collapse remains part of manual audition rather
+      than this queue.
 
 Exit: the owner completes a real API-testing task in the UI without
 dropping to hand-editing YAML for routine operations; only then do README
@@ -1242,10 +1307,13 @@ Prerequisites, in order, before an implementation slice makes sense:
    small-module seam rather than adding to the former monolith).
 2. **F1 Slice 1** `ui/src/store.ts` split — complete 2026-07-19 (the UI-side
    registry fallback now has separate store/detail seams to thread through).
-3. Keep the F1 invariant that already landed: all per-type UI behavior
-   flows through `NODE_META` + `CONFIG_FORMS` as *data* — no per-type
-   rendering hardcoded in components. This is the plugin seam; guard it
-   during F1 follow-up slices.
+3. Preserve the narrower F1 registry boundary: reusable presentation metadata
+   and ordinary form fields flow through `NODE_META` + `CONFIG_FORMS`, while a
+   reviewed finite set of built-in semantic adapters may stay explicit. Before
+   F8 promotion, decide which of those adapters must become declarative for
+   custom blocks, prove the generic unknown/custom-type consumer path, and keep
+   plugin-supplied browser JS prohibited. Registry completeness alone does not
+   prove that consumers did not bypass it.
 4. Core loader work: block discovery under a configurable root with D42
    containment; checker coverage (new E/W codes: missing/invalid block
    manifest, port-name collisions incl. the reserved `error` name,
